@@ -39,3 +39,25 @@ project/realtek_amebapro_v0_example/GCC-RELEASE/**
 !project/realtek_amebapro_v0_example/GCC-RELEASE/gen_ota_fatfs.py
 !project/realtek_amebapro_v0_example/GCC-RELEASE/gen_ota_all.py
 !project/realtek_amebapro_v0_example/GCC-RELEASE/gen_ota_app.py
+!project/realtek_amebapro_v0_example/GCC-RELEASE/application.is.mk
+
+# CarPlay crypto source maintained locally. Keep the rest of carplay_app,
+# vendor archives, generated objects and build directories ignored.
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/ChaCha20Poly1305.c
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/ChaCha20Poly1305.h
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/ChaCha20Poly1305_rtl8195b.c
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/ChaCha20Poly1305_rtl8195b.h
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/Makefile
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/README.md
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/CUSTOMER_CHACHA_ROLLOUT_TEST_ZH-TW.md
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/tests/
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/tests/host_modes.c
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/tests/rtl_backend_openssl_mock.c
+
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/aes_rtl8195b/
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/aes_rtl8195b/AESUtils.c
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/aes_rtl8195b/AESUtils.h
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/aes_rtl8195b/README.md
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/aes_rtl8195b/CUSTOMER_DIAGNOSTIC_NOTES.md
