@@ -1,0 +1,41 @@
+# macOS Apple Double files (resource fork metadata)
+.DS_Store
+
+# macOS Finder metadata
+._*
+.AppleDouble
+.LSOverride
+
+# CodeWhale internal directory
+.codewhale/
+.deepseek/
+# Build output directory
+build/
+
+# Editor / IDE
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Log files
+log/
+
+# GCC compilation artifacts
+*.o
+*.d
+*.su
+
+# Embedded build output (GCC-RELEASE — entire directory is compiled artifacts)
+project/realtek_amebapro_v0_example/GCC-RELEASE/**
+!project/realtek_amebapro_v0_example/GCC-RELEASE/Makefile
+!project/realtek_amebapro_v0_example/GCC-RELEASE/gen_partition_json.py
+!project/realtek_amebapro_v0_example/GCC-RELEASE/partition.json
+!project/realtek_amebapro_v0_example/GCC-RELEASE/gen_ota_fatfs.py
+!project/realtek_amebapro_v0_example/GCC-RELEASE/gen_ota_all.py
+!project/realtek_amebapro_v0_example/GCC-RELEASE/gen_ota_app.py
