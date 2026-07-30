@@ -45,6 +45,7 @@ project/realtek_amebapro_v0_example/GCC-RELEASE/**
 # CarPlay crypto source maintained locally. Keep the rest of carplay_app,
 # vendor archives, generated objects and build directories ignored.
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/lib_CarPlay.a
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/ChaCha20Poly1305.c
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/ChaCha20Poly1305.h
