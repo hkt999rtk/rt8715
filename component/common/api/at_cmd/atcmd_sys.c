@@ -18,6 +18,7 @@
 #include "main.h"
 #include "atcmd_wifi.h"
 #include "device_lock.h"
+#include "semphr.h"
 
 #if defined(configUSE_WAKELOCK_PMU) && (configUSE_WAKELOCK_PMU == 1)
 #include "freertos_pmu.h"
@@ -38,7 +39,6 @@ extern int uart_ymodem(void);
 #if (configGENERATE_RUN_TIME_STATS == 1)
 static char cBuffer[512];
 
-#define ATSS_SAMPLE_PERIOD_MS	2000U
 #define ATSS_SNAPSHOT_RETRIES	3U
 #define ATSS_TASK_COUNT_MARGIN	2U
 #define ATSS_MONITOR_STACK_SIZE	1024U
@@ -46,6 +46,76 @@ static char cBuffer[512];
 
 static TaskHandle_t atss_monitor_task;
 static volatile BaseType_t atss_monitor_stop_requested;
+static volatile BaseType_t atss_monitor_exiting;
+static volatile BaseType_t atss_internal_enabled;
+static volatile BaseType_t atss_cli_print_enabled;
+static SemaphoreHandle_t atss_control_mutex;
+static SemaphoreHandle_t atss_data_mutex;
+static SemaphoreHandle_t atss_monitor_stopped;
+static atss_task_stat_t *atss_latest_stats;
+static size_t atss_latest_count;
+static uint32_t atss_latest_sequence;
+static int atss_latest_status = ATSS_NOT_RUNNING;
+
+static SemaphoreHandle_t atss_install_semaphore(SemaphoreHandle_t candidate,
+						SemaphoreHandle_t *target)
+{
+	SemaphoreHandle_t installed;
+
+	taskENTER_CRITICAL();
+	if (*target == NULL) {
+		*target = candidate;
+		candidate = NULL;
+	}
+	installed = *target;
+	taskEXIT_CRITICAL();
+
+	if (candidate != NULL) {
+		vSemaphoreDelete(candidate);
+	}
+	return installed;
+}
+
+static int atss_sync_init(void)
+{
+	SemaphoreHandle_t candidate;
+
+	if (atss_control_mutex == NULL) {
+		candidate = xSemaphoreCreateMutex();
+		if (candidate == NULL) {
+			return ATSS_NO_MEMORY;
+		}
+		(void)atss_install_semaphore(candidate, &atss_control_mutex);
+	}
+	if (atss_data_mutex == NULL) {
+		candidate = xSemaphoreCreateMutex();
+		if (candidate == NULL) {
+			return ATSS_NO_MEMORY;
+		}
+		(void)atss_install_semaphore(candidate, &atss_data_mutex);
+	}
+	if (atss_monitor_stopped == NULL) {
+		candidate = xSemaphoreCreateBinary();
+		if (candidate == NULL) {
+			return ATSS_NO_MEMORY;
+		}
+		(void)atss_install_semaphore(candidate, &atss_monitor_stopped);
+	}
+	return ATSS_OK;
+}
+
+static void atss_copy_name(char dst[ATSS_TASK_NAME_LEN], const char *src)
+{
+	size_t index;
+
+	if (src == NULL) {
+		src = "<unknown>";
+	}
+	for (index = 0; index + 1U < ATSS_TASK_NAME_LEN && src[index] != '\0'; index++) {
+		dst[index] = src[index];
+	}
+	dst[index] = '\0';
+}
 
 static TaskStatus_t *atss_take_snapshot(UBaseType_t *task_count, uint32_t *total_runtime)
 {
@@ -73,33 +143,33 @@ static TaskStatus_t *atss_take_snapshot(UBaseType_t *task_count, uint32_t *total
 	return NULL;
 }
 
-static void atss_print_sample(const TaskStatus_t *start_tasks,
-			      UBaseType_t start_count,
-			      uint32_t start_total,
-			      const TaskStatus_t *end_tasks,
-			      UBaseType_t end_count,
-			      uint32_t end_total)
+static int atss_calculate_sample(const TaskStatus_t *start_tasks,
+				 UBaseType_t start_count,
+				 uint32_t start_total,
+				 const TaskStatus_t *end_tasks,
+				 UBaseType_t end_count,
+				 uint32_t end_total,
+				 atss_task_stat_t **out_stats,
+				 size_t *out_count)
 {
 	UBaseType_t start_index;
 	UBaseType_t end_index;
 	uint32_t total_delta;
 	uint32_t task_delta;
-	uint32_t utilization_x10;
 	uint32_t stack_free_min_bytes;
-	uint32_t stack_peak_bytes;
-	uint32_t stack_size_bytes;
-	uint32_t stack_used_bytes;
 	const char *task_name;
 	TaskDebugInfo_t task_debug_info;
+	atss_task_stat_t *stats;
 
 	total_delta = end_total - start_total;
 	if (total_delta == 0U) {
-		AT_PRINTK("[ATSS]: ERROR: runtime counter did not advance");
-		return;
+		return ATSS_NOT_READY;
 	}
 
-	AT_PRINTK("[ATSS]: %-31s %5s %7s %7s %12s %12s %12s",
-		 "Task", "Prio", "CPU", "Ticks", "StackSize(B)", "StackUsed(B)", "StackPeak(B)");
+	stats = pvPortMalloc((size_t)end_count * sizeof(*stats));
+	if (stats == NULL) {
+		return ATSS_NO_MEMORY;
+	}
 
 	for (end_index = 0; end_index < end_count; end_index++) {
 		task_delta = end_tasks[end_index].ulRunTimeCounter;
@@ -112,89 +182,325 @@ static void atss_print_sample(const TaskStatus_t *start_tasks,
 			}
 		}
 
-		utilization_x10 = (task_delta * 1000U + (total_delta / 2U)) / total_delta;
+		stats[end_index].priority =
+			(uint32_t)end_tasks[end_index].uxCurrentPriority;
+		stats[end_index].runtime_ticks = task_delta;
+		stats[end_index].cpu_utilization_x10 =
+			(task_delta * 1000U + (total_delta / 2U)) / total_delta;
+
 		if (xTaskGetDebugInfo(end_tasks[end_index].xHandle, &task_debug_info) == pdPASS) {
 			task_name = task_debug_info.pcTaskName;
-			stack_size_bytes = task_debug_info.ulStackSizeBytes;
-			stack_used_bytes = task_debug_info.ulStackUsedBytes;
+			stats[end_index].stack_size_bytes =
+				task_debug_info.ulStackSizeBytes;
+			stats[end_index].stack_used_bytes =
+				task_debug_info.ulStackUsedBytes;
 		} else {
 			task_name = end_tasks[end_index].pcTaskName;
-			stack_size_bytes = 0U;
-			stack_used_bytes = 0U;
+			stats[end_index].stack_size_bytes = 0U;
+			stats[end_index].stack_used_bytes = 0U;
 		}
+		atss_copy_name(stats[end_index].task_name, task_name);
 
 		stack_free_min_bytes =
 			(uint32_t)end_tasks[end_index].usStackHighWaterMark * (uint32_t)sizeof(StackType_t);
-		if (stack_size_bytes >= stack_free_min_bytes) {
-			stack_peak_bytes = stack_size_bytes - stack_free_min_bytes;
+		if (stats[end_index].stack_size_bytes >= stack_free_min_bytes) {
+			stats[end_index].stack_peak_bytes =
+				stats[end_index].stack_size_bytes - stack_free_min_bytes;
 		} else {
-			stack_peak_bytes = 0U;
+			stats[end_index].stack_peak_bytes = 0U;
 		}
+	}
 
+	*out_stats = stats;
+	*out_count = (size_t)end_count;
+	return ATSS_OK;
+}
+
+static void atss_print_sample(const atss_task_stat_t *stats, size_t count)
+{
+	size_t index;
+	uint32_t utilization_x10;
+
+	AT_PRINTK("[ATSS]: %-31s %5s %7s %7s %12s %12s %12s",
+		 "Task", "Prio", "CPU", "Ticks", "StackSize(B)", "StackUsed(B)", "StackPeak(B)");
+
+	for (index = 0; index < count; index++) {
+		utilization_x10 = stats[index].cpu_utilization_x10;
 		AT_PRINTK("[ATSS]: %-31s %5u %5u.%u%% %7u %12u %12u %12u",
-			 task_name,
-			 (unsigned int)end_tasks[end_index].uxCurrentPriority,
+			 stats[index].task_name,
+			 (unsigned int)stats[index].priority,
 			 (unsigned int)(utilization_x10 / 10U),
 			 (unsigned int)(utilization_x10 % 10U),
-			 (unsigned int)task_delta,
-			 (unsigned int)stack_size_bytes,
-			 (unsigned int)stack_used_bytes,
-			 (unsigned int)stack_peak_bytes);
+			 (unsigned int)stats[index].runtime_ticks,
+			 (unsigned int)stats[index].stack_size_bytes,
+			 (unsigned int)stats[index].stack_used_bytes,
+			 (unsigned int)stats[index].stack_peak_bytes);
 	}
+}
+
+static void atss_set_latest_status(int status)
+{
+	if (atss_data_mutex == NULL) {
+		return;
+	}
+	xSemaphoreTake(atss_data_mutex, portMAX_DELAY);
+	if (atss_latest_stats != NULL) {
+		vPortFree(atss_latest_stats);
+		atss_latest_stats = NULL;
+	}
+	atss_latest_count = 0U;
+	atss_latest_status = status;
+	xSemaphoreGive(atss_data_mutex);
+}
+
+static void atss_publish_sample(atss_task_stat_t *stats, size_t count)
+{
+	xSemaphoreTake(atss_data_mutex, portMAX_DELAY);
+	if (atss_latest_stats != NULL) {
+		vPortFree(atss_latest_stats);
+	}
+	atss_latest_stats = stats;
+	atss_latest_count = count;
+	atss_latest_sequence++;
+	atss_latest_status = ATSS_OK;
+	xSemaphoreGive(atss_data_mutex);
 }
 
 static void atss_monitor(void *param)
 {
 	TaskStatus_t *start_tasks;
 	TaskStatus_t *end_tasks;
+	atss_task_stat_t *sample_stats;
+	size_t sample_count;
 	UBaseType_t start_count;
 	UBaseType_t end_count;
 	uint32_t start_total;
 	uint32_t end_total;
-	TickType_t last_wake_time;
+	int status;
+	BaseType_t normal_stop = pdFALSE;
 
 	(void)param;
 
 	start_tasks = atss_take_snapshot(&start_count, &start_total);
 	if (start_tasks == NULL) {
-		AT_PRINTK("[ATSS]: ERROR: unable to allocate the initial snapshot");
+		atss_set_latest_status(ATSS_NO_MEMORY);
+		if (atss_cli_print_enabled != pdFALSE) {
+			AT_PRINTK("[ATSS]: ERROR: unable to allocate the initial snapshot");
+		}
 		goto exit;
 	}
 
-	last_wake_time = xTaskGetTickCount();
-	while (atss_monitor_stop_requested == pdFALSE) {
-		vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(ATSS_SAMPLE_PERIOD_MS));
+	while (1) {
+		(void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ATSS_SAMPLE_PERIOD_MS));
 		if (atss_monitor_stop_requested != pdFALSE) {
+			normal_stop = pdTRUE;
 			break;
 		}
 
 		end_tasks = atss_take_snapshot(&end_count, &end_total);
 		if (end_tasks == NULL) {
-			AT_PRINTK("[ATSS]: ERROR: unable to allocate a snapshot");
+			atss_set_latest_status(ATSS_NO_MEMORY);
+			if (atss_cli_print_enabled != pdFALSE) {
+				AT_PRINTK("[ATSS]: ERROR: unable to allocate a snapshot");
+			}
 			vPortFree(start_tasks);
 			start_tasks = atss_take_snapshot(&start_count, &start_total);
 			if (start_tasks == NULL) {
 				goto exit;
 			}
-			last_wake_time = xTaskGetTickCount();
 			continue;
 		}
 
-		atss_print_sample(start_tasks, start_count, start_total,
-				  end_tasks, end_count, end_total);
+		sample_stats = NULL;
+		sample_count = 0U;
+		status = atss_calculate_sample(start_tasks, start_count, start_total,
+					       end_tasks, end_count, end_total,
+					       &sample_stats, &sample_count);
 
 		vPortFree(start_tasks);
 		start_tasks = end_tasks;
 		start_count = end_count;
 		start_total = end_total;
+
+		if (atss_monitor_stop_requested != pdFALSE) {
+			if (sample_stats != NULL) {
+				vPortFree(sample_stats);
+			}
+			normal_stop = pdTRUE;
+			break;
+		}
+		if (status == ATSS_OK) {
+			atss_publish_sample(sample_stats, sample_count);
+			if (atss_cli_print_enabled != pdFALSE) {
+				atss_print_sample(sample_stats, sample_count);
+			}
+		} else {
+			atss_set_latest_status(status);
+			if (atss_cli_print_enabled != pdFALSE) {
+				AT_PRINTK("[ATSS]: ERROR: unable to calculate a sample (%d)",
+					 status);
+			}
+		}
 	}
 
 	vPortFree(start_tasks);
 
 exit:
-	AT_PRINTK("[ATSS]: CPU monitor stopped");
+	if (normal_stop != pdFALSE) {
+		atss_set_latest_status(ATSS_NOT_RUNNING);
+	}
+	taskENTER_CRITICAL();
+	atss_monitor_exiting = pdTRUE;
 	atss_monitor_task = NULL;
+	atss_monitor_stop_requested = pdFALSE;
+	taskEXIT_CRITICAL();
+	xSemaphoreGive(atss_monitor_stopped);
 	vTaskDelete(NULL);
+}
+
+static int atss_set_enabled(BaseType_t cli, BaseType_t enable)
+{
+	BaseType_t should_stop;
+	TaskHandle_t task_to_stop;
+	int status;
+
+	status = atss_sync_init();
+	if (status != ATSS_OK) {
+		return status;
+	}
+
+	xSemaphoreTake(atss_control_mutex, portMAX_DELAY);
+	if (cli != pdFALSE) {
+		atss_cli_print_enabled = enable;
+	} else {
+		atss_internal_enabled = enable;
+	}
+
+	if (enable != pdFALSE) {
+		if (atss_monitor_task == NULL) {
+			if (atss_monitor_exiting != pdFALSE) {
+				xSemaphoreTake(atss_monitor_stopped, portMAX_DELAY);
+				atss_monitor_exiting = pdFALSE;
+			}
+			while (xSemaphoreTake(atss_monitor_stopped, 0) == pdTRUE) {
+			}
+			atss_monitor_stop_requested = pdFALSE;
+			atss_set_latest_status(ATSS_NOT_READY);
+			if (xTaskCreate(atss_monitor,
+					(const char *)"atss_monitor",
+					ATSS_MONITOR_STACK_SIZE,
+					NULL,
+					ATSS_MONITOR_PRIORITY,
+					&atss_monitor_task) != pdPASS) {
+				atss_monitor_task = NULL;
+				if (cli != pdFALSE) {
+					atss_cli_print_enabled = pdFALSE;
+				} else {
+					atss_internal_enabled = pdFALSE;
+				}
+				atss_set_latest_status(ATSS_NO_MEMORY);
+				xSemaphoreGive(atss_control_mutex);
+				return ATSS_NO_MEMORY;
+			}
+		}
+		xSemaphoreGive(atss_control_mutex);
+		return ATSS_OK;
+	}
+
+	should_stop = (atss_internal_enabled == pdFALSE) &&
+		      (atss_cli_print_enabled == pdFALSE);
+	task_to_stop = atss_monitor_task;
+	if (should_stop != pdFALSE && task_to_stop != NULL) {
+		atss_monitor_stop_requested = pdTRUE;
+		xTaskNotifyGive(task_to_stop);
+		xSemaphoreTake(atss_monitor_stopped, portMAX_DELAY);
+		atss_monitor_exiting = pdFALSE;
+	} else if (should_stop != pdFALSE &&
+		   atss_monitor_exiting != pdFALSE) {
+		xSemaphoreTake(atss_monitor_stopped, portMAX_DELAY);
+		atss_monitor_exiting = pdFALSE;
+		atss_set_latest_status(ATSS_NOT_RUNNING);
+	} else if (should_stop != pdFALSE) {
+		atss_set_latest_status(ATSS_NOT_RUNNING);
+	}
+	xSemaphoreGive(atss_control_mutex);
+	return ATSS_OK;
+}
+
+int atss_stats_start(void)
+{
+	return atss_set_enabled(pdFALSE, pdTRUE);
+}
+
+int atss_stats_get(atss_task_stat_t *stats,
+		   size_t capacity,
+		   size_t *task_count,
+		   uint32_t *sequence,
+		   uint32_t *sample_period_ms)
+{
+	size_t count;
+	int status;
+
+	if (task_count == NULL || (stats == NULL && capacity != 0U)) {
+		return ATSS_INVALID_ARGUMENT;
+	}
+	status = atss_sync_init();
+	if (status != ATSS_OK) {
+		return status;
+	}
+
+	xSemaphoreTake(atss_data_mutex, portMAX_DELAY);
+	count = atss_latest_count;
+	*task_count = count;
+	if (sequence != NULL) {
+		*sequence = atss_latest_sequence;
+	}
+	if (sample_period_ms != NULL) {
+		*sample_period_ms = ATSS_SAMPLE_PERIOD_MS;
+	}
+	status = atss_latest_status;
+	if (status == ATSS_OK && capacity < count) {
+		status = ATSS_BUFFER_TOO_SMALL;
+	} else if (status == ATSS_OK && count != 0U) {
+		memcpy(stats, atss_latest_stats, count * sizeof(*stats));
+	}
+	xSemaphoreGive(atss_data_mutex);
+	return status;
+}
+
+int atss_stats_stop(void)
+{
+	return atss_set_enabled(pdFALSE, pdFALSE);
+}
+#else
+int atss_stats_start(void)
+{
+	return ATSS_UNAVAILABLE;
+}
+
+int atss_stats_get(atss_task_stat_t *stats,
+		   size_t capacity,
+		   size_t *task_count,
+		   uint32_t *sequence,
+		   uint32_t *sample_period_ms)
+{
+	(void)stats;
+	(void)capacity;
+	if (task_count != NULL) {
+		*task_count = 0U;
+	}
+	if (sequence != NULL) {
+		*sequence = 0U;
+	}
+	if (sample_period_ms != NULL) {
+		*sample_period_ms = ATSS_SAMPLE_PERIOD_MS;
+	}
+	return (task_count == NULL) ? ATSS_INVALID_ARGUMENT : ATSS_UNAVAILABLE;
+}
+
+int atss_stats_stop(void)
+{
+	return ATSS_UNAVAILABLE;
 }
 #endif
 //#endif
@@ -966,8 +1272,10 @@ void fATSB(void *arg)
 void fATSS(void *arg)	// Show CPU stats
 {
 	int argc;
+	int status;
 	char *argv[MAX_ARGC] = {0};
 	BaseType_t stop_monitor = pdFALSE;
+	BaseType_t monitor_was_running;
 
 	if (arg != NULL) {
 		argc = parse_param(arg, argv);
@@ -985,35 +1293,43 @@ void fATSS(void *arg)	// Show CPU stats
 	}
 
 	if (stop_monitor != pdFALSE) {
-		if (atss_monitor_task == NULL) {
+		if (atss_cli_print_enabled == pdFALSE) {
 			AT_PRINTK("[ATSS]: CPU monitor is not running");
 		} else {
-			atss_monitor_stop_requested = pdTRUE;
-			AT_PRINTK("[ATSS]: CPU monitor will stop within %u ms",
-				 (unsigned int)ATSS_SAMPLE_PERIOD_MS);
+			status = atss_set_enabled(pdTRUE, pdFALSE);
+			if (status == ATSS_OK) {
+				if (atss_internal_enabled != pdFALSE) {
+					AT_PRINTK("[ATSS]: CPU monitor printing stopped; internal statistics remain active");
+				} else {
+					AT_PRINTK("[ATSS]: CPU monitor stopped");
+				}
+			} else {
+				AT_PRINTK("[ATSS]: ERROR: unable to stop CPU monitor (%d)",
+					 status);
+			}
 		}
 		return;
 	}
 
-	if (atss_monitor_task != NULL) {
+	if (atss_cli_print_enabled != pdFALSE) {
 		AT_PRINTK("[ATSS]: CPU monitor is already running");
 		return;
 	}
 
-	atss_monitor_stop_requested = pdFALSE;
-	if (xTaskCreate(atss_monitor,
-			(const char *)"atss_monitor",
-			ATSS_MONITOR_STACK_SIZE,
-			NULL,
-			ATSS_MONITOR_PRIORITY,
-			&atss_monitor_task) != pdPASS) {
-		atss_monitor_task = NULL;
-		AT_PRINTK("[ATSS]: ERROR: unable to create CPU monitor task");
+	monitor_was_running = (atss_monitor_task != NULL);
+	status = atss_set_enabled(pdTRUE, pdTRUE);
+	if (status != ATSS_OK) {
+		AT_PRINTK("[ATSS]: ERROR: unable to start CPU monitor (%d)", status);
 		return;
 	}
 
-	AT_PRINTK("[ATSS]: CPU monitor started; reporting every %u ms",
-		 (unsigned int)ATSS_SAMPLE_PERIOD_MS);
+	if (monitor_was_running != pdFALSE) {
+		AT_PRINTK("[ATSS]: CPU monitor printing enabled; reporting every %u ms",
+			 (unsigned int)ATSS_SAMPLE_PERIOD_MS);
+	} else {
+		AT_PRINTK("[ATSS]: CPU monitor started; reporting every %u ms",
+			 (unsigned int)ATSS_SAMPLE_PERIOD_MS);
+	}
 }
 #endif
 
