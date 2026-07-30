@@ -40,6 +40,7 @@ project/realtek_amebapro_v0_example/GCC-RELEASE/**
 !project/realtek_amebapro_v0_example/GCC-RELEASE/gen_ota_all.py
 !project/realtek_amebapro_v0_example/GCC-RELEASE/gen_ota_app.py
 !project/realtek_amebapro_v0_example/GCC-RELEASE/application.is.mk
+!project/realtek_amebapro_v0_example/GCC-RELEASE/rtl8195bhp_ram_is.ld
 
 # CarPlay crypto source maintained locally. Keep the rest of carplay_app,
 # vendor archives, generated objects and build directories ignored.
