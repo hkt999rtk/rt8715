@@ -386,13 +386,15 @@ extern unsigned int sys_now(void);
 // #define LWIP_ERRNO_STDINCLUDE
 
 /*
- * The Cortex-M33 build keeps lwIP's Internet checksum in ITCM.  Algorithm 3
- * aligns the input and accumulates two 32-bit words per loop; it preserves the
- * byte-wise handling needed by odd addresses and lengths.  Algorithm 2, the
- * lwIP default, only consumes one 16-bit word per iteration.
+ * The Cortex-M33 build keeps lwIP's Internet checksum in ITCM. Algorithm 4
+ * retains algorithm 3's byte-exact handling of odd addresses and lengths, but
+ * its aligned hot loop uses inline Thumb-2 LDMIA/ADDS/ADCS instructions to
+ * consume four 32-bit words per iteration without a carry-test branch for
+ * every word. Algorithm 3 remains the portable reference/fallback in
+ * inet_chksum.c; no separate assembly source is required by the build.
  */
 #if defined(CONFIG_VIDEO_APPLICATION)
-#define LWIP_CHKSUM_ALGORITHM            3
+#define LWIP_CHKSUM_ALGORITHM            4
 #endif
 
 /*

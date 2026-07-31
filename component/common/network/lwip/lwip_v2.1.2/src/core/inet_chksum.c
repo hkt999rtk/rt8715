@@ -10,7 +10,7 @@
  * \#define LWIP_CHKSUM your_checksum_routine
  *
  * Or you can select from the implementations below by defining
- * LWIP_CHKSUM_ALGORITHM to 1, 2 or 3.
+ * LWIP_CHKSUM_ALGORITHM to 1, 2, 3 or 4.
  */
 
 /*
@@ -173,11 +173,19 @@ lwip_standard_chksum(const void *dataptr, int len)
 }
 #endif
 
-#if (LWIP_CHKSUM_ALGORITHM == 3) /* Alternative version #3 */
+#if (LWIP_CHKSUM_ALGORITHM == 3) || (LWIP_CHKSUM_ALGORITHM == 4)
 /**
  * An optimized checksum routine. Basically, it uses loop-unrolling on
  * the checksum loop, treating the head and tail bytes specially, whereas
  * the inner loop acts on 8 bytes at a time.
+ *
+ * Algorithm 4 keeps the same alignment, byte-order and tail handling as
+ * algorithm 3, but uses a Cortex-M33/GNU inline-assembly loop for the aligned
+ * body.  LDMIA fetches 16 bytes per iteration and ADDS/ADCS propagate the
+ * Internet checksum's end-around carry without a compare/branch per word.
+ * Keep this code inline: the customer build deliberately has no extra .S/.asm
+ * source to add to its makefiles.  The portable algorithm-3 loop remains the
+ * compile-time fallback for non-GNU/non-Thumb targets.
  *
  * @arg start of buffer to be checksummed. May be an odd byte address.
  * @len number of bytes in the buffer to be checksummed.
@@ -210,6 +218,41 @@ lwip_standard_chksum(const void *dataptr, int len)
 
   pl = (const u32_t *)(const void *)ps;
 
+#if (LWIP_CHKSUM_ALGORITHM == 4) && defined(__GNUC__) && defined(__thumb2__) && \
+    defined(__ARM_ARCH_8M_MAIN__) && (__ARM_ARCH_8M_MAIN__ == 1)
+  {
+    u32_t blocks = ((u32_t)len >> 4);
+
+    if (blocks != 0U) {
+      u32_t zero;
+
+      /*
+       * pl is 32-bit aligned here. Two ADCS-with-zero operations are
+       * intentional: the first folds the final carry and the second handles
+       * the rare 0xffffffff + carry case.  "memory" prevents the compiler
+       * from moving packet-buffer accesses across this load loop.
+       */
+      __asm volatile (
+        "movs %[zero], #0\n"
+        "1:\n"
+        "ldmia %[data]!, {r4-r7}\n"
+        "adds %[acc], %[acc], r4\n"
+        "adcs %[acc], %[acc], r5\n"
+        "adcs %[acc], %[acc], r6\n"
+        "adcs %[acc], %[acc], r7\n"
+        "adcs %[acc], %[acc], %[zero]\n"
+        "adcs %[acc], %[acc], %[zero]\n"
+        "subs %[count], %[count], #1\n"
+        "bne 1b\n"
+        : [data] "+r" (pl), [acc] "+r" (sum),
+          [count] "+r" (blocks), [zero] "=&r" (zero)
+        :
+        : "r4", "r5", "r6", "r7", "cc", "memory");
+
+      len &= 15;
+    }
+  }
+#else
   while (len > 7)  {
     tmp = sum + *pl++;          /* ping */
     if (tmp < sum) {
@@ -223,6 +266,7 @@ lwip_standard_chksum(const void *dataptr, int len)
 
     len -= 8;
   }
+#endif
 
   /* make room in upper bits */
   sum = FOLD_U32T(sum);
