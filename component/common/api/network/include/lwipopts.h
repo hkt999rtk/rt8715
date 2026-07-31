@@ -77,10 +77,13 @@
 #endif
 
 /* ---------- Memory options ---------- */
-/* MEM_ALIGNMENT: should be set to the alignment of the CPU for which
-   lwIP is compiled. 4 byte alignment -> define MEM_ALIGNMENT to 4, 2
-   byte alignment -> define MEM_ALIGNMENT to 2. */
-#define MEM_ALIGNMENT           4
+/*
+ * Keep lwIP pool/heap objects on a cache-line boundary.  The WLAN RX path can
+ * then DMA directly into a PBUF_POOL payload without invalidating a cache line
+ * shared with pbuf metadata or the next pool object.  PBUF_POOL_BUFSIZE is
+ * also a multiple of 32 in the video application configuration below.
+ */
+#define MEM_ALIGNMENT           32
 
 /*
  * MEM_SIZE: lwIP internal heap (ram_heap). Only effective when

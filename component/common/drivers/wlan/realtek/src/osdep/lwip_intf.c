@@ -25,12 +25,389 @@
 #endif
 #include <osdep_service.h>
 #include <wifi/wifi_util.h>
+#if defined(CONFIG_PLATFORM_8195BHP)
+#include <dma_api.h>
+#include <hal_gdma.h>
+#include <stdint.h>
+#include <stdio.h>
+#endif
 //----- ------------------------------------------------------------------
 // External Reference
 //----- ------------------------------------------------------------------
 #if (CONFIG_LWIP_LAYER == 1)
 extern struct netif xnetif[];			//LWIP netif
 #endif
+
+#if (CONFIG_LWIP_LAYER == 1) && defined(CONFIG_PLATFORM_8195BHP)
+
+#ifndef CONFIG_NET_GDMA_COPY
+#define CONFIG_NET_GDMA_COPY 1
+#endif
+
+#ifndef CONFIG_NET_GDMA_SELFTEST
+#define CONFIG_NET_GDMA_SELFTEST 1
+#endif
+
+#ifndef CONFIG_NET_GDMA_STATS
+#define CONFIG_NET_GDMA_STATS 1
+#endif
+
+#ifndef NET_GDMA_COPY_THRESHOLD
+#define NET_GDMA_COPY_THRESHOLD 1024U
+#endif
+
+#ifndef NET_GDMA_TIMEOUT_MS
+#define NET_GDMA_TIMEOUT_MS 10U
+#endif
+
+#define NET_GDMA_CACHE_LINE       32U
+#define NET_GDMA_MAX_COPY_LEN   4095U
+#define NET_GDMA_REPORT_MS      5000U
+#define NET_GDMA_REPORT_PROBE    256U
+#define NET_GDMA_SELFTEST_MAX   1500U
+#define NET_GDMA_SELFTEST_ALLOC (NET_GDMA_SELFTEST_MAX + (3U * NET_GDMA_CACHE_LINE))
+
+typedef struct net_gdma_context_s {
+	gdma_t dma;
+	_sema done;
+	const char *name;
+	u8 initialized;
+	u8 available;
+	u8 tested;
+	volatile u8 in_flight;
+	u32 dma_ops;
+	u32 dma_bytes;
+	u32 cpu_ops;
+	u32 cpu_bytes;
+	u32 alignment_fallbacks;
+	u32 reentry_fallbacks;
+	u32 timeouts;
+	u32 report_probe;
+	u32 last_report_tick;
+} net_gdma_context_t;
+
+static net_gdma_context_t g_net_rx_gdma;
+static net_gdma_context_t g_net_tx_gdma;
+static u8 g_net_gdma_initialized;
+
+static void net_gdma_rx_done(uint32_t id)
+{
+	(void)id;
+	if (g_net_rx_gdma.done != NULL) {
+		rtw_up_sema_from_isr(&g_net_rx_gdma.done);
+	}
+}
+
+static void net_gdma_tx_done(uint32_t id)
+{
+	(void)id;
+	if (g_net_tx_gdma.done != NULL) {
+		rtw_up_sema_from_isr(&g_net_tx_gdma.done);
+	}
+}
+
+static void net_gdma_drain_completion(net_gdma_context_t *ctx)
+{
+	while (rtw_down_timeout_sema(&ctx->done, 0) == _TRUE) {
+	}
+}
+
+static void net_gdma_init_context(net_gdma_context_t *ctx,
+				  const char *name, dma_irq_handler callback)
+{
+	phal_gdma_adaptor_t adaptor;
+
+	ctx->name = name;
+	ctx->initialized = 1;
+	rtw_init_sema(&ctx->done, 0);
+	if (ctx->done == NULL) {
+		printf("[NET_GDMA] %s semaphore allocation failed; CPU copy only\n", name);
+		return;
+	}
+
+	/*
+	 * RTL8195B's dma_api wrapper ignores its id argument and passes the HAL
+	 * adaptor to the callback.  Separate callbacks avoid relying on that bug.
+	 */
+	dma_memcpy_init(&ctx->dma, callback, 0);
+	adaptor = &ctx->dma.hal_gdma_adaptor;
+	if (!adaptor->have_chnl) {
+		printf("[NET_GDMA] %s channel allocation failed; CPU copy only\n", name);
+		rtw_free_sema(&ctx->done);
+		return;
+	}
+
+	ctx->available = 1;
+	ctx->last_report_tick = rtw_get_current_time();
+	printf("[NET_GDMA] %s allocated gdma=%u channel=%u threshold=%u\n",
+	       name, (unsigned int)adaptor->gdma_index,
+	       (unsigned int)adaptor->ch_num,
+	       (unsigned int)NET_GDMA_COPY_THRESHOLD);
+}
+
+static void net_gdma_init_all(void)
+{
+#if CONFIG_NET_GDMA_COPY
+	if (g_net_gdma_initialized) {
+		return;
+	}
+
+	/* WLAN setup is serialized before packet traffic starts. */
+	g_net_gdma_initialized = 1;
+	net_gdma_init_context(&g_net_rx_gdma, "RX", net_gdma_rx_done);
+	net_gdma_init_context(&g_net_tx_gdma, "TX", net_gdma_tx_done);
+#endif
+}
+
+static int net_gdma_destination_safe(const void *dst, u32 len,
+				     const void *allocation_end)
+{
+	uintptr_t start = (uintptr_t)dst;
+	uintptr_t end;
+	uintptr_t rounded_end;
+
+	if ((start & (NET_GDMA_CACHE_LINE - 1U)) != 0U || len == 0U ||
+	    len > NET_GDMA_MAX_COPY_LEN) {
+		return 0;
+	}
+
+	end = start + len;
+	if (end < start) {
+		return 0;
+	}
+
+	if (allocation_end != NULL) {
+		rounded_end = (end + NET_GDMA_CACHE_LINE - 1U) &
+			      ~(uintptr_t)(NET_GDMA_CACHE_LINE - 1U);
+		if (rounded_end < end || rounded_end > (uintptr_t)allocation_end) {
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+static int net_gdma_wait(net_gdma_context_t *ctx)
+{
+	if (rtw_down_timeout_sema(&ctx->done, NET_GDMA_TIMEOUT_MS) == _TRUE) {
+		ctx->in_flight = 0;
+		return 0;
+	}
+
+	ctx->timeouts++;
+	printf("[NET_GDMA][ERROR] %s timeout after %u ms gdma=%u channel=%u\n",
+	       ctx->name, (unsigned int)NET_GDMA_TIMEOUT_MS,
+	       (unsigned int)ctx->dma.hal_gdma_adaptor.gdma_index,
+	       (unsigned int)ctx->dma.hal_gdma_adaptor.ch_num);
+
+	/* Stop DMA before its destination is released or reused. */
+	hal_gdma_abort(&ctx->dma.hal_gdma_adaptor);
+	dma_memcpy_deinit(&ctx->dma);
+	ctx->in_flight = 0;
+	ctx->available = 0;
+	ctx->tested = 0;
+	net_gdma_drain_completion(ctx);
+
+	/* Try to restore this direction for the next packet. */
+	dma_memcpy_init(&ctx->dma,
+		(ctx == &g_net_rx_gdma) ? net_gdma_rx_done : net_gdma_tx_done, 0);
+	if (ctx->dma.hal_gdma_adaptor.have_chnl) {
+		ctx->available = 1;
+		printf("[NET_GDMA] %s channel recovered; self-test required\n", ctx->name);
+	} else {
+		printf("[NET_GDMA] %s recovery failed; CPU copy only\n", ctx->name);
+	}
+
+	return -1;
+}
+
+#if CONFIG_NET_GDMA_SELFTEST
+static int net_gdma_selftest(net_gdma_context_t *ctx)
+{
+	static const u16 lengths[] = { 1024U, 1500U };
+	u8 *src_raw;
+	u8 *dst_raw;
+	u8 *src_base;
+	u8 *dst;
+	u32 case_index;
+	u32 offset;
+	u32 i;
+	int result = -1;
+
+	src_raw = (u8 *)rtw_malloc(NET_GDMA_SELFTEST_ALLOC);
+	dst_raw = (u8 *)rtw_malloc(NET_GDMA_SELFTEST_ALLOC);
+	if (src_raw == NULL || dst_raw == NULL) {
+		printf("[NET_GDMA][SELFTEST] %s allocation failed\n", ctx->name);
+		goto exit;
+	}
+
+	src_base = (u8 *)(((uintptr_t)src_raw + NET_GDMA_CACHE_LINE - 1U) &
+			  ~(uintptr_t)(NET_GDMA_CACHE_LINE - 1U));
+	dst = (u8 *)(((uintptr_t)dst_raw + NET_GDMA_CACHE_LINE - 1U) &
+		     ~(uintptr_t)(NET_GDMA_CACHE_LINE - 1U));
+
+	for (case_index = 0; case_index < sizeof(lengths) / sizeof(lengths[0]);
+	     ++case_index) {
+		for (offset = 0; offset < 4U; ++offset) {
+			u8 *src = src_base + offset;
+			u32 len = lengths[case_index];
+
+			for (i = 0; i < len; ++i) {
+				src[i] = (u8)(i + (offset * 29U) + len);
+			}
+			rtw_memset(dst, 0xA5, len);
+			net_gdma_drain_completion(ctx);
+			ctx->in_flight = 1;
+			dma_memcpy(&ctx->dma, dst, src, len);
+			if (net_gdma_wait(ctx) != 0 ||
+			    rtw_memcmp(dst, src, len) != _TRUE) {
+				printf("[NET_GDMA][SELFTEST] %s FAIL len=%u src_offset=%u\n",
+				       ctx->name, (unsigned int)len,
+				       (unsigned int)offset);
+				goto exit;
+			}
+		}
+	}
+
+	result = 0;
+	printf("[NET_GDMA][SELFTEST] %s PASS cases=%u\n", ctx->name,
+	       (unsigned int)(sizeof(lengths) / sizeof(lengths[0]) * 4U));
+
+exit:
+	if (src_raw != NULL) {
+		rtw_mfree(src_raw, NET_GDMA_SELFTEST_ALLOC);
+	}
+	if (dst_raw != NULL) {
+		rtw_mfree(dst_raw, NET_GDMA_SELFTEST_ALLOC);
+	}
+	return result;
+}
+#endif
+
+static int net_gdma_ensure_tested(net_gdma_context_t *ctx)
+{
+	if (!ctx->available) {
+		return -1;
+	}
+	if (ctx->tested) {
+		return 0;
+	}
+
+#if CONFIG_NET_GDMA_SELFTEST
+	if (net_gdma_selftest(ctx) != 0) {
+		if (ctx->available) {
+			dma_memcpy_deinit(&ctx->dma);
+			ctx->available = 0;
+		}
+		printf("[NET_GDMA] %s disabled after self-test failure\n", ctx->name);
+		return -1;
+	}
+#endif
+	ctx->tested = 1;
+	return 0;
+}
+
+static void net_gdma_account(net_gdma_context_t *ctx, int used_dma, u32 len)
+{
+#if CONFIG_NET_GDMA_STATS
+	u32 now;
+	u32 elapsed_ms;
+
+	if (used_dma) {
+		ctx->dma_ops++;
+		ctx->dma_bytes += len;
+	} else {
+		ctx->cpu_ops++;
+		ctx->cpu_bytes += len;
+	}
+
+	ctx->report_probe++;
+	if ((ctx->report_probe % NET_GDMA_REPORT_PROBE) != 0U) {
+		return;
+	}
+
+	now = rtw_get_current_time();
+	elapsed_ms = rtw_systime_to_ms(now - ctx->last_report_tick);
+	if (elapsed_ms < NET_GDMA_REPORT_MS) {
+		return;
+	}
+
+	printf("[NET_GDMA][%s] window_ms=%u dma=%u/%uB cpu=%u/%uB "
+	       "align_fallback=%u reentry=%u timeout=%u\n",
+	       ctx->name, (unsigned int)elapsed_ms,
+	       (unsigned int)ctx->dma_ops, (unsigned int)ctx->dma_bytes,
+	       (unsigned int)ctx->cpu_ops, (unsigned int)ctx->cpu_bytes,
+	       (unsigned int)ctx->alignment_fallbacks,
+	       (unsigned int)ctx->reentry_fallbacks,
+	       (unsigned int)ctx->timeouts);
+
+	ctx->dma_ops = 0;
+	ctx->dma_bytes = 0;
+	ctx->cpu_ops = 0;
+	ctx->cpu_bytes = 0;
+	ctx->alignment_fallbacks = 0;
+	ctx->reentry_fallbacks = 0;
+	ctx->timeouts = 0;
+	ctx->last_report_tick = now;
+#else
+	(void)ctx;
+	(void)used_dma;
+	(void)len;
+#endif
+}
+
+static int net_gdma_copy(net_gdma_context_t *ctx, void *dst, const void *src,
+			 u32 len, const void *allocation_end)
+{
+	if (!g_net_gdma_initialized) {
+		net_gdma_init_all();
+	}
+
+	if (len < NET_GDMA_COPY_THRESHOLD || !ctx->available) {
+		rtw_memcpy(dst, (void *)src, len);
+		net_gdma_account(ctx, 0, len);
+		return 0;
+	}
+
+	if (!net_gdma_destination_safe(dst, len, allocation_end)) {
+		ctx->alignment_fallbacks++;
+		rtw_memcpy(dst, (void *)src, len);
+		net_gdma_account(ctx, 0, len);
+		return 0;
+	}
+
+	if (ctx->in_flight) {
+		/*
+		 * RX is single-task and TX is serialized by LWIP_TCPIP_CORE_LOCKING.
+		 * Re-entry therefore indicates a future call-path change; use CPU for
+		 * this independent buffer rather than adding a hot-path mutex.
+		 */
+		ctx->reentry_fallbacks++;
+		printf("[NET_GDMA][ERROR] %s re-entry; CPU fallback\n", ctx->name);
+		rtw_memcpy(dst, (void *)src, len);
+		net_gdma_account(ctx, 0, len);
+		return 0;
+	}
+
+	if (net_gdma_ensure_tested(ctx) != 0) {
+		rtw_memcpy(dst, (void *)src, len);
+		net_gdma_account(ctx, 0, len);
+		return 0;
+	}
+
+	net_gdma_drain_completion(ctx);
+	ctx->in_flight = 1;
+	dma_memcpy(&ctx->dma, dst, (void *)src, len);
+	if (net_gdma_wait(ctx) != 0) {
+		/* Destination may be partially written.  Caller must drop the packet. */
+		return -1;
+	}
+
+	net_gdma_account(ctx, 1, len);
+	return 0;
+}
+
+#endif /* CONFIG_LWIP_LAYER && CONFIG_PLATFORM_8195BHP */
 
 /**
  *      rltk_wlan_set_netif_info - set netif hw address and register dev pointer to netif device
@@ -51,6 +428,9 @@ void rltk_wlan_set_netif_info(int idx_wlan, void * dev, unsigned char * dev_addr
 #else
 	rtw_memcpy(xnetif[idx_wlan].hwaddr, dev_addr, 6);
 	xnetif[idx_wlan].state = dev;
+#endif
+#if defined(CONFIG_PLATFORM_8195BHP)
+	net_gdma_init_all();
 #endif
 #endif
 }
@@ -97,6 +477,7 @@ int rltk_wlan_send(int idx, struct eth_drv_sg *sg_list, int sg_len, int total_le
 #if (CONFIG_LWIP_LAYER == 1)
 	struct eth_drv_sg *last_sg;
 	struct sk_buff *skb = NULL;
+	unsigned int skb_alloc_len = (unsigned int)total_len;
 	int ret = 0;
 
 	if(idx == -1){
@@ -115,15 +496,50 @@ int rltk_wlan_send(int idx, struct eth_drv_sg *sg_list, int sg_len, int total_le
 	}
 	restore_flags();
 
-	skb = rltk_wlan_alloc_skb(total_len);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NET_GDMA_COPY
+	/*
+	 * rltk_wlan_alloc_skb() reserves only a 4-byte-aligned WLAN headroom.
+	 * Give large TX packets one extra cache line plus alignment slack so the
+	 * DMA destination can be isolated from adjacent allocator data.  The skb
+	 * payload length is still total_len; this changes capacity only.
+	 */
+	if ((unsigned int)total_len >= NET_GDMA_COPY_THRESHOLD &&
+	    (unsigned int)total_len <= NET_GDMA_MAX_COPY_LEN) {
+		skb_alloc_len += (2U * NET_GDMA_CACHE_LINE) - 1U;
+	}
+#endif
+	skb = rltk_wlan_alloc_skb(skb_alloc_len);
 	if (skb == NULL) {
 		//DBG_ERR("rltk_wlan_alloc_skb() for data len=%d failed!", total_len);
 		ret = -1;
 		goto exit;
 	}
 
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NET_GDMA_COPY
+	if (skb_alloc_len != (unsigned int)total_len) {
+		uintptr_t tail = (uintptr_t)skb->tail;
+		unsigned int alignment = (unsigned int)
+			((-tail) & (NET_GDMA_CACHE_LINE - 1U));
+
+		skb_reserve(skb, alignment);
+	}
+#endif
+
 	for (last_sg = &sg_list[sg_len]; sg_list < last_sg; ++sg_list) {
+#if defined(CONFIG_PLATFORM_8195BHP)
+		if (net_gdma_copy(&g_net_tx_gdma, skb->tail,
+				  (void *)(sg_list->buf), sg_list->len,
+				  skb->end) != 0) {
+			printf("[NET_GDMA][ERROR] TX packet dropped len=%u\n",
+			       (unsigned int)sg_list->len);
+			kfree_skb(skb);
+			skb = NULL;
+			ret = -1;
+			goto exit;
+		}
+#else
 		rtw_memcpy(skb->tail, (void *)(sg_list->buf), sg_list->len);
+#endif
 		skb_put(skb,  sg_list->len);
 	}
 
@@ -143,9 +559,9 @@ exit:
  *      @sg_list: data buffer list
  *      @sg_len: size of each data buffer
  *
- *      Return Value: None
+ *      Return Value: 0 on success, -1 if a DMA timeout made the pbuf unsafe.
  */     
-void rltk_wlan_recv(int idx, struct eth_drv_sg *sg_list, int sg_len)
+int rltk_wlan_recv(int idx, struct eth_drv_sg *sg_list, int sg_len)
 {
 #if (CONFIG_LWIP_LAYER == 1)
 	struct eth_drv_sg *last_sg;
@@ -154,17 +570,33 @@ void rltk_wlan_recv(int idx, struct eth_drv_sg *sg_list, int sg_len)
 	DBG_TRACE("%s is called", __FUNCTION__);
 	if(idx == -1){
 		DBG_ERR("skb is NULL");
-		return;
+		return -1;
 	}
 	skb = rltk_wlan_get_recv_skb(idx);
 	DBG_ASSERT(skb, "No pending rx skb");
 
 	for (last_sg = &sg_list[sg_len]; sg_list < last_sg; ++sg_list) {
 		if (sg_list->buf != 0) {
+#if defined(CONFIG_PLATFORM_8195BHP)
+			if (net_gdma_copy(&g_net_rx_gdma,
+					  (void *)(sg_list->buf), skb->data,
+					  sg_list->len, NULL) != 0) {
+				printf("[NET_GDMA][ERROR] RX packet dropped len=%u\n",
+				       (unsigned int)sg_list->len);
+				return -1;
+			}
+#else
 			rtw_memcpy((void *)(sg_list->buf), skb->data, sg_list->len);
+#endif
 			skb_pull(skb, sg_list->len);
 		}
 	}
+	return 0;
+#else
+	(void)idx;
+	(void)sg_list;
+	(void)sg_len;
+	return -1;
 #endif
 }
 

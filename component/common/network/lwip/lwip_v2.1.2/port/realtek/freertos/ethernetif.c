@@ -484,7 +484,11 @@ void ethernetif_recv(struct netif *netif, int total_len)
 		sg_list[sg_len].buf = (unsigned int) q->payload;
 		sg_list[sg_len++].len = q->len;
 	}
-	rltk_wlan_recv(netif_get_idx(netif), sg_list, sg_len);
+	if (rltk_wlan_recv(netif_get_idx(netif), sg_list, sg_len) != 0) {
+		/* A timed-out GDMA destination may contain only part of the frame. */
+		pbuf_free(p);
+		return;
+	}
 
 	// Pass received packet to the interface
 	if (ERR_OK != netif->input(p, netif)) {
