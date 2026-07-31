@@ -182,31 +182,52 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
 static err_t low_level_output_mii(struct netif *netif, struct pbuf *p)
 {
 	(void) netif;
-	(void) p;
 #if (defined(CONFIG_ETHERNET) && CONFIG_ETHERNET)
 	// printf("[NCM] tx len=%d\n", p->tot_len);
 	struct pbuf *q;
 	u8 *pdata = TX_BUFFER;
+	u8 *tx_data = TX_BUFFER;
 	u32 size = 0;
 	int ret = 0;
 
-	memset(TX_BUFFER, 0, MAX_BUFFER_SIZE);
-	for (q = p; q != NULL; q = q->next) {
-		memcpy((unsigned int *)pdata, (unsigned int *) q->payload, q->len);
-		pdata += q->len;
-		size += q->len;
+	/* ncm_wrap_ntb() consumes the payload synchronously and does not modify it. */
+	if (p->next == NULL) {
+		tx_data = (u8 *)p->payload;
+		size = p->len;
+	} else {
+		for (q = p; q != NULL; q = q->next) {
+			if (q->len > (MAX_BUFFER_SIZE - size)) {
+				printf("%s chained pbuf too large: %u\n", __func__,
+				       (unsigned int)p->tot_len);
+				return ERR_BUF;
+			}
+#if defined(CONFIG_PLATFORM_8195BHP)
+			if (rltk_network_gdma_copy_tx(pdata, q->payload, q->len,
+						 TX_BUFFER + MAX_BUFFER_SIZE) != 0) {
+				printf("[NET_GDMA][ERROR] NCM TX packet dropped len=%u\n",
+				       (unsigned int)p->tot_len);
+				return ERR_BUF;
+			}
+#else
+			memcpy((unsigned int *)pdata, (unsigned int *)q->payload,
+			       q->len);
+#endif
+			pdata += q->len;
+			size += q->len;
+		}
 	}
 
 #if defined(CONFIG_USBH_CDC_ECM)
-	ret = usbh_cdc_ecm_send_data(TX_BUFFER, size);
+	ret = usbh_cdc_ecm_send_data(tx_data, size);
 #elif defined(CONFIG_USBH_CDC_NCM)
-	ret = usbh_cdc_ncm_send_data(TX_BUFFER, size);
+	ret = usbh_cdc_ncm_send_data(tx_data, size);
 #endif
 	if (ret != 0) {
 		printf("%s error = %d\n", __func__, ret);
 		return ERR_BUF;
 	}
 #endif
+	(void) p;
 	return ERR_OK;
 }
 
@@ -313,13 +334,10 @@ void rltk_mii_recv(struct eth_drv_sg *sg_list, int sg_len){
 }
 void ethernetif_mii_recv(u8 *buf, u32 frame_len)
 {
-	(void) buf;
-	(void) frame_len;
 #if (defined(CONFIG_ETHERNET) && CONFIG_ETHERNET)
 	// printf("[NCM] ethernetif_mii_recv len=%d\n", frame_len);
-	struct eth_drv_sg sg_list[MAX_ETH_DRV_SG];
 	struct pbuf *p, *q;
-	int sg_len = 0;
+	u8 *frame_data = buf;
 	u32 total_len = 0;
 
 	struct netif *netif = &eth_netif;
@@ -335,13 +353,13 @@ void ethernetif_mii_recv(u8 *buf, u32 frame_len)
 	if (0 == rltk_mii_recv_data(buf, frame_len, &total_len)) {
 		return;
 	}
+	frame_data = RX_BUFFER;
 #else
 	if (0 == frame_len) {
 		printf("recv data len is 0\n");
 		return;
 	}
 	total_len = frame_len;
-	memcpy((u8 *)RX_BUFFER, buf, frame_len);
 #endif
 	if (0 == rltk_mii_recv_data_check(macstr)) {
 		RTK_LOG_ETHERNET("rltk_mii_recv_data_check fail\n");
@@ -356,16 +374,27 @@ void ethernetif_mii_recv(u8 *buf, u32 frame_len)
 		return;
 	}
 
-	for (q = p; q != NULL && sg_len < MAX_ETH_DRV_SG; q = q->next) {
-		sg_list[sg_len].buf = (unsigned int) q->payload;
-		sg_list[sg_len++].len = q->len;
+	for (q = p; q != NULL; q = q->next) {
+#if defined(CONFIG_PLATFORM_8195BHP)
+		if (rltk_network_gdma_copy_rx(q->payload, frame_data, q->len,
+					      NULL) != 0) {
+			printf("[NET_GDMA][ERROR] NCM RX packet dropped len=%u\n",
+			       (unsigned int)total_len);
+			pbuf_free(p);
+			return;
+		}
+#else
+		memcpy(q->payload, frame_data, q->len);
+#endif
+		frame_data += q->len;
 	}
-	rltk_mii_recv(sg_list, sg_len);
 
 	if (ERR_OK != netif->input(p, netif)) {
 		pbuf_free(p);
 	}
 #endif
+	(void) buf;
+	(void) frame_len;
 }
 
 /**

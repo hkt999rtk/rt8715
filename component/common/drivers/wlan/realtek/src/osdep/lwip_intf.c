@@ -74,6 +74,7 @@ typedef struct net_gdma_context_s {
 	u8 initialized;
 	u8 available;
 	u8 tested;
+	volatile u8 busy;
 	volatile u8 in_flight;
 	u32 dma_ops;
 	u32 dma_bytes;
@@ -376,20 +377,27 @@ static int net_gdma_copy(net_gdma_context_t *ctx, void *dst, const void *src,
 		return 0;
 	}
 
-	if (ctx->in_flight) {
+	/*
+	 * WLAN and NCM share one channel per direction.  Claim it atomically with
+	 * only a few instructions of IRQ masking; no mutex is held while waiting.
+	 */
+	save_and_cli();
+	if (ctx->busy) {
+		restore_flags();
 		/*
-		 * RX is single-task and TX is serialized by LWIP_TCPIP_CORE_LOCKING.
-		 * Re-entry therefore indicates a future call-path change; use CPU for
-		 * this independent buffer rather than adding a hot-path mutex.
+		 * The other producer owns this direction.  Its buffer is independent,
+		 * so CPU fallback is safe and avoids queueing behind the DMA channel.
 		 */
 		ctx->reentry_fallbacks++;
-		printf("[NET_GDMA][ERROR] %s re-entry; CPU fallback\n", ctx->name);
 		rtw_memcpy(dst, (void *)src, len);
 		net_gdma_account(ctx, 0, len);
 		return 0;
 	}
+	ctx->busy = 1;
+	restore_flags();
 
 	if (net_gdma_ensure_tested(ctx) != 0) {
+		ctx->busy = 0;
 		rtw_memcpy(dst, (void *)src, len);
 		net_gdma_account(ctx, 0, len);
 		return 0;
@@ -400,11 +408,77 @@ static int net_gdma_copy(net_gdma_context_t *ctx, void *dst, const void *src,
 	dma_memcpy(&ctx->dma, dst, (void *)src, len);
 	if (net_gdma_wait(ctx) != 0) {
 		/* Destination may be partially written.  Caller must drop the packet. */
+		ctx->busy = 0;
 		return -1;
 	}
 
+	ctx->busy = 0;
 	net_gdma_account(ctx, 1, len);
 	return 0;
+}
+
+/*
+ * A cache invalidate must not discard unrelated dirty bytes sharing the first
+ * or last destination cache line.  WLAN skb/pbuf destinations are normally
+ * aligned, but NCM scatter/gather boundaries are not.  Copy the unaligned
+ * edges on the CPU and use GDMA only for a cache-line-isolated middle region.
+ */
+static int net_gdma_copy_with_edges(net_gdma_context_t *ctx, void *dst,
+				    const void *src, u32 len,
+				    const void *allocation_end)
+{
+	uintptr_t start = (uintptr_t)dst;
+	u32 prefix;
+	u32 body;
+	u32 suffix;
+
+	if (len < NET_GDMA_COPY_THRESHOLD || !ctx->available || ctx->busy ||
+	    (((start & (NET_GDMA_CACHE_LINE - 1U)) == 0U) &&
+	     (allocation_end != NULL ||
+	      (len & (NET_GDMA_CACHE_LINE - 1U)) == 0U))) {
+		return net_gdma_copy(ctx, dst, src, len, allocation_end);
+	}
+
+	prefix = (start & (NET_GDMA_CACHE_LINE - 1U)) != 0U ?
+		 NET_GDMA_CACHE_LINE -
+		 (u32)(start & (NET_GDMA_CACHE_LINE - 1U)) : 0U;
+	if (prefix >= len) {
+		return net_gdma_copy(ctx, dst, src, len, allocation_end);
+	}
+	body = (len - prefix) & ~(NET_GDMA_CACHE_LINE - 1U);
+	if (body < NET_GDMA_COPY_THRESHOLD) {
+		return net_gdma_copy(ctx, dst, src, len, allocation_end);
+	}
+	suffix = len - prefix - body;
+
+	if (prefix != 0U) {
+		rtw_memcpy(dst, (void *)src, prefix);
+		net_gdma_account(ctx, 0, prefix);
+	}
+	if (net_gdma_copy(ctx, (u8 *)dst + prefix, (const u8 *)src + prefix,
+			  body, allocation_end) != 0) {
+		return -1;
+	}
+	if (suffix != 0U) {
+		rtw_memcpy((u8 *)dst + prefix + body,
+			   (void *)((const u8 *)src + prefix + body), suffix);
+		net_gdma_account(ctx, 0, suffix);
+	}
+	return 0;
+}
+
+int rltk_network_gdma_copy_tx(void *dst, const void *src, unsigned int len,
+			      const void *allocation_end)
+{
+	return net_gdma_copy_with_edges(&g_net_tx_gdma, dst, src, len,
+					allocation_end);
+}
+
+int rltk_network_gdma_copy_rx(void *dst, const void *src, unsigned int len,
+			      const void *allocation_end)
+{
+	return net_gdma_copy_with_edges(&g_net_rx_gdma, dst, src, len,
+					allocation_end);
 }
 
 #endif /* CONFIG_LWIP_LAYER && CONFIG_PLATFORM_8195BHP */

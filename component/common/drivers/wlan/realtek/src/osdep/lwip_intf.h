@@ -51,6 +51,12 @@ void rltk_wlan_set_netif_info(int idx_wlan, void * dev, unsigned char * dev_addr
 void rltk_wlan_send_skb(int idx, struct sk_buff *skb);	//struct sk_buff as defined above comment line
 int rltk_wlan_send(int idx, struct eth_drv_sg *sg_list, int sg_len, int total_len);
 int rltk_wlan_recv(int idx, struct eth_drv_sg *sg_list, int sg_len);
+#if defined(CONFIG_PLATFORM_8195BHP)
+int rltk_network_gdma_copy_tx(void *dst, const void *src, unsigned int len,
+			      const void *allocation_end);
+int rltk_network_gdma_copy_rx(void *dst, const void *src, unsigned int len,
+			      const void *allocation_end);
+#endif
 unsigned char rltk_wlan_running(unsigned char idx);		// interface is up. 0: interface is down
 
 #if defined(CONFIG_MBED_ENABLED)
