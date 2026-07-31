@@ -1,4 +1,5 @@
 #include "../ChaCha20Poly1305.h"
+#include "../ChaCha20Poly1305_rtl8195b.h"
 
 #include <openssl/evp.h>
 #include <stdint.h>
@@ -9,8 +10,11 @@
 void mock_rtl_reset_stats(void);
 unsigned int mock_rtl_decrypt_successes(void);
 unsigned int mock_rtl_decrypt_failures(void);
+unsigned int mock_rtl_combined_inplace_decrypts(void);
 unsigned int mock_rtl_combined_encrypts(void);
+unsigned int mock_rtl_combined_inplace_encrypts(void);
 unsigned int mock_rtl_chacha_operations(void);
+unsigned int mock_rtl_chacha_inplace_operations(void);
 unsigned int mock_rtl_poly1305_operations(void);
 void mock_rtl_fail_chacha_on(unsigned int call_index);
 void mock_rtl_fail_poly1305_on(unsigned int call_index);
@@ -20,6 +24,25 @@ void mock_rtl_set_interrupt_context(unsigned int enabled);
 #if CARBOX_CHACHA_MODE != CARBOX_CHACHA_MODE_SOFTWARE_ONLY
 static size_t round_up_16(size_t value) {
   return (value + 15u) & ~(size_t)15u;
+}
+
+static unsigned int expected_chacha_data_ops(size_t len) {
+  unsigned int operations = 0u;
+
+  while (len != 0u) {
+    const size_t chunk_len = (len > 65536u) ? 65536u : len;
+    const size_t prefix_len = chunk_len & ~(size_t)63u;
+    const size_t tail_len = chunk_len - prefix_len;
+
+    if ((chunk_len & 15u) == 0u) {
+      ++operations;
+    } else {
+      if (prefix_len != 0u) ++operations;
+      if (tail_len != 0u) ++operations;
+    }
+    len -= chunk_len;
+  }
+  return operations;
 }
 #endif
 
@@ -85,6 +108,9 @@ static int run_case(size_t len, size_t aad_len) {
         key, nonce, aad, aad_len, plain, len, reference, reference_tag
       )) return 0;
 
+#if CARBOX_CHACHA_MODE != CARBOX_CHACHA_MODE_SOFTWARE_ONLY
+  mock_rtl_reset_stats();
+#endif
   chacha20_poly1305_init_64x64(&state, key, nonce);
   chacha20_poly1305_add_aad(&state, aad, aad_len);
   in_offset = 0;
@@ -107,6 +133,30 @@ static int run_case(size_t len, size_t aad_len) {
             CARBOX_CHACHA_MODE, len, aad_len);
     return 0;
   }
+#if CARBOX_CHACHA_MODE != CARBOX_CHACHA_MODE_SOFTWARE_ONLY
+  if (len >= CARBOX_CHACHA_HW_MIN_LEN) {
+    const int combined_backend =
+      (len <= 65536u) && ((len & 15u) == 0u) && (aad_len <= 496u);
+    if (combined_backend) {
+      if (mock_rtl_combined_inplace_encrypts() != 1u) {
+        fprintf(
+          stderr,
+          "combined hardware encrypt was not in-place: "
+          "mode=%d len=%zu aad=%zu\n",
+          CARBOX_CHACHA_MODE, len, aad_len
+        );
+        return 0;
+      }
+    } else if (mock_rtl_chacha_inplace_operations() == 0u) {
+      fprintf(
+        stderr,
+        "raw hardware encrypt was not in-place: mode=%d len=%zu aad=%zu\n",
+        CARBOX_CHACHA_MODE, len, aad_len
+      );
+      return 0;
+    }
+  }
+#endif
 
   chacha20_poly1305_init_64x64(&state, key, nonce);
   chacha20_poly1305_add_aad(&state, aad, aad_len);
@@ -178,28 +228,68 @@ static int run_case(size_t len, size_t aad_len) {
                 chacha_ops, poly_ops);
         return 0;
       }
+#if CARBOX_CHACHA_NONALIGNED_SW_POLY
+    } else if ((len <= 65536u) && ((len & 15u) != 0u)) {
+      const unsigned int expected_chacha_ops =
+        expected_chacha_data_ops(len);
+      if (combined || failures || (chacha_ops != expected_chacha_ops) ||
+          poly_ops) {
+        fprintf(stderr,
+                "standalone SW Poly path coverage failed: "
+                "mode=%d len=%zu aad=%zu combined=%u fail=%u "
+                "chacha=%u/%u poly=%u\n",
+                CARBOX_CHACHA_MODE, len, aad_len, combined, failures,
+                chacha_ops, expected_chacha_ops, poly_ops);
+        return 0;
+      }
+#endif
     } else if ((len <= 65536u) &&
                (round_up_16(aad_len) + round_up_16(len) + 16u <=
                 65536u)) {
-      if (combined || failures || (chacha_ops != 2u) ||
+      const unsigned int expected_chacha_ops =
+        1u + expected_chacha_data_ops(len);
+      if (combined || failures || (chacha_ops != expected_chacha_ops) ||
           (poly_ops != 1u)) {
         fprintf(stderr,
                 "standalone path coverage failed: mode=%d len=%zu aad=%zu "
-                "combined=%u fail=%u chacha=%u poly=%u\n",
+                "combined=%u fail=%u chacha=%u/%u poly=%u\n",
                 CARBOX_CHACHA_MODE, len, aad_len, combined, failures,
-                chacha_ops, poly_ops);
+                chacha_ops, expected_chacha_ops, poly_ops);
         return 0;
       }
     } else {
-      unsigned int expected_chunks =
-        (unsigned int)((len + 65535u) / 65536u);
-      if (combined || failures || (chacha_ops != expected_chunks) ||
+      const unsigned int expected_chacha_ops =
+        expected_chacha_data_ops(len);
+      if (combined || failures || (chacha_ops != expected_chacha_ops) ||
           poly_ops) {
         fprintf(stderr,
                 "chunked path coverage failed: mode=%d len=%zu aad=%zu "
                 "combined=%u fail=%u chacha=%u/%u poly=%u\n",
                 CARBOX_CHACHA_MODE, len, aad_len, combined, failures,
-                chacha_ops, expected_chunks, poly_ops);
+                chacha_ops, expected_chacha_ops, poly_ops);
+        return 0;
+      }
+    }
+    if (len >= CARBOX_CHACHA_HW_MIN_LEN) {
+      const int combined_backend =
+        (len <= 65536u) && ((len & 15u) == 0u) && (aad_len <= 496u);
+      if (combined_backend) {
+        if (mock_rtl_combined_inplace_decrypts() != 1u) {
+          fprintf(
+            stderr,
+            "combined hardware decrypt was not in-place: "
+            "mode=%d len=%zu aad=%zu\n",
+            CARBOX_CHACHA_MODE, len, aad_len
+          );
+          return 0;
+        }
+      } else if (mock_rtl_chacha_inplace_operations() == 0u) {
+        fprintf(
+          stderr,
+          "raw hardware decrypt was not in-place: "
+          "mode=%d len=%zu aad=%zu\n",
+          CARBOX_CHACHA_MODE, len, aad_len
+        );
         return 0;
       }
     }
@@ -347,6 +437,9 @@ static int run_failure_fallbacks(void) {
   uint8_t *actual = malloc(large_len);
   size_t i;
   int32_t error;
+#if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+  static const uint8_t zero_tag[16] = {0};
+#endif
 
   if (!plain || !expected || !actual) return 0;
   for (i = 0; i < sizeof(key); ++i) key[i] = (uint8_t)(0x53u + i * 5u);
@@ -364,12 +457,19 @@ static int run_failure_fallbacks(void) {
   chacha20_poly1305_encrypt_all_64x64(
     key, nonce, aad, sizeof(aad), plain, large_len, actual, actual_tag
   );
+#if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+  if (memcmp(actual_tag, zero_tag, sizeof(actual_tag)) != 0) {
+    fprintf(stderr, "chunked encrypt HW failure did not clear tag\n");
+    return 0;
+  }
+#else
   if (memcmp(actual, expected, large_len) ||
       memcmp(actual_tag, expected_tag, sizeof(actual_tag))) {
     fprintf(stderr, "chunked encrypt fallback failed: mode=%d\n",
             CARBOX_CHACHA_MODE);
     return 0;
   }
+#endif
 
   mock_rtl_reset_stats();
   mock_rtl_fail_chacha_on(2u);
@@ -377,11 +477,20 @@ static int run_failure_fallbacks(void) {
     key, nonce, aad, sizeof(aad), expected, large_len,
     actual, expected_tag
   );
+#if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+  if (error != CHACHA_RTL_ERROR_OPERATION) {
+    fprintf(stderr,
+            "chunked decrypt HW failure was not returned: err=%d\n",
+            (int)error);
+    return 0;
+  }
+#else
   if (error || memcmp(actual, plain, large_len)) {
     fprintf(stderr, "chunked decrypt fallback failed: mode=%d err=%d\n",
             CARBOX_CHACHA_MODE, (int)error);
     return 0;
   }
+#endif
 
   if (!reference_encrypt(
         key, nonce, aad, sizeof(aad), plain, standalone_len,
@@ -393,12 +502,27 @@ static int run_failure_fallbacks(void) {
     key, nonce, aad, sizeof(aad), plain, standalone_len,
     actual, actual_tag
   );
+#if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+#if CARBOX_CHACHA_NONALIGNED_SW_POLY
+  if (memcmp(actual, expected, standalone_len) ||
+      memcmp(actual_tag, expected_tag, sizeof(actual_tag))) {
+    fprintf(stderr, "software Poly1305 policy result mismatch\n");
+    return 0;
+  }
+#else
+  if (memcmp(actual_tag, zero_tag, sizeof(actual_tag)) != 0) {
+    fprintf(stderr, "Poly1305 HW failure did not clear tag\n");
+    return 0;
+  }
+#endif
+#else
   if (memcmp(actual, expected, standalone_len) ||
       memcmp(actual_tag, expected_tag, sizeof(actual_tag))) {
     fprintf(stderr, "standalone Poly1305 fallback failed: mode=%d\n",
             CARBOX_CHACHA_MODE);
     return 0;
   }
+#endif
 
   free(actual);
   free(expected);

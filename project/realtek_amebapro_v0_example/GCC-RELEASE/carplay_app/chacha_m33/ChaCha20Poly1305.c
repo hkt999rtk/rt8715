@@ -5,6 +5,9 @@
 #include <stdlib.h>
 #include "ChaCha20Poly1305.h"
 #include "ChaCha20Poly1305_rtl8195b.h"
+#if !defined(__arm__) && !defined(__thumb__)
+#include <time.h>
+#endif
 #if defined(__has_include)
 #  if __has_include(<string.h>)
 #    include <string.h>
@@ -932,7 +935,8 @@ enum {
   CHACHA_HW_BACKEND_NONE = 0,
   CHACHA_HW_BACKEND_COMBINED = 1,
   CHACHA_HW_BACKEND_STANDALONE = 2,
-  CHACHA_HW_BACKEND_CHUNKED = 3
+  CHACHA_HW_BACKEND_CHUNKED = 3,
+  CHACHA_HW_BACKEND_STANDALONE_SW_POLY = 4
 };
 
 static volatile int g_chacha_mode_printed;
@@ -942,11 +946,271 @@ static CHACHA_UNUSED uint32_t g_chacha_verify_mismatches;
 static CHACHA_UNUSED uint32_t g_chacha_verify_skipped;
 static CHACHA_UNUSED uint32_t g_chacha_hw_operations;
 static CHACHA_UNUSED uint32_t g_chacha_hw_fallbacks;
+static CHACHA_UNUSED uint32_t g_chacha_hw_failures;
+
+#if CARBOX_CHACHA_STATS_INTERVAL_MS != 0
+typedef struct {
+  uint32_t route_hw_ops;
+  uint32_t route_hw_bytes;
+  uint32_t route_sw_ops;
+  uint32_t route_sw_bytes;
+  uint32_t fallback_ops;
+  uint32_t fallback_bytes;
+  uint32_t shadow_hw_ops;
+  uint32_t shadow_hw_bytes;
+  uint32_t combined_ops;
+  uint32_t combined_bytes;
+  uint32_t standalone_ops;
+  uint32_t standalone_bytes;
+  uint32_t standalone_sw_poly_ops;
+  uint32_t standalone_sw_poly_bytes;
+  uint32_t chunked_ops;
+  uint32_t chunked_bytes;
+  uint32_t software_poly_ops;
+  uint32_t software_poly_bytes;
+} chacha_traffic_stats_t;
+
+static chacha_traffic_stats_t g_chacha_traffic;
+static chacha_traffic_stats_t g_chacha_traffic_reported;
+static volatile uint32_t g_chacha_stats_last_ms;
+
+#if defined(__arm__) || defined(__thumb__)
+extern uint32_t rtw_get_current_time(void);
+#endif
+
+static uint32_t chacha_stats_time_ms(void) {
+#if defined(__arm__) || defined(__thumb__)
+  return rtw_get_current_time();
+#else
+  return (uint32_t)(((uint64_t)clock() * 1000u) / CLOCKS_PER_SEC);
+#endif
+}
+
+static uint32_t chacha_stats_percent_x10(
+  uint32_t part, uint32_t total
+) {
+  if (total == 0u) return 0u;
+  return (uint32_t)(((uint64_t)part * 1000u) / total);
+}
+
+static void chacha_stats_add_u32(uint32_t *value, size_t amount) {
+  __sync_fetch_and_add(value, (uint32_t)amount);
+}
+
+static uint32_t chacha_stats_load_u32(uint32_t *value) {
+  return __sync_fetch_and_add(value, 0u);
+}
+
+static void chacha_stats_record_backend(
+  int backend, size_t len, int shadow
+) {
+  if (shadow) {
+    chacha_stats_add_u32(&g_chacha_traffic.shadow_hw_ops, 1u);
+    chacha_stats_add_u32(&g_chacha_traffic.shadow_hw_bytes, len);
+  }
+  if (backend == CHACHA_HW_BACKEND_COMBINED) {
+    chacha_stats_add_u32(&g_chacha_traffic.combined_ops, 1u);
+    chacha_stats_add_u32(&g_chacha_traffic.combined_bytes, len);
+  } else if (backend == CHACHA_HW_BACKEND_STANDALONE) {
+    chacha_stats_add_u32(&g_chacha_traffic.standalone_ops, 1u);
+    chacha_stats_add_u32(&g_chacha_traffic.standalone_bytes, len);
+  } else if (backend == CHACHA_HW_BACKEND_STANDALONE_SW_POLY) {
+    chacha_stats_add_u32(
+      &g_chacha_traffic.standalone_sw_poly_ops, 1u
+    );
+    chacha_stats_add_u32(
+      &g_chacha_traffic.standalone_sw_poly_bytes, len
+    );
+    chacha_stats_add_u32(&g_chacha_traffic.software_poly_ops, 1u);
+    chacha_stats_add_u32(&g_chacha_traffic.software_poly_bytes, len);
+  } else if (backend == CHACHA_HW_BACKEND_CHUNKED) {
+    chacha_stats_add_u32(&g_chacha_traffic.chunked_ops, 1u);
+    chacha_stats_add_u32(&g_chacha_traffic.chunked_bytes, len);
+    chacha_stats_add_u32(&g_chacha_traffic.software_poly_ops, 1u);
+    chacha_stats_add_u32(&g_chacha_traffic.software_poly_bytes, len);
+  }
+}
+
+static CHACHA_UNUSED void chacha_stats_record_hardware(
+  int backend, size_t len
+) {
+  chacha_stats_add_u32(&g_chacha_traffic.route_hw_ops, 1u);
+  chacha_stats_add_u32(&g_chacha_traffic.route_hw_bytes, len);
+  chacha_stats_record_backend(backend, len, 0);
+}
+
+static void chacha_stats_record_software(size_t len, int fallback) {
+  chacha_stats_add_u32(&g_chacha_traffic.route_sw_ops, 1u);
+  chacha_stats_add_u32(&g_chacha_traffic.route_sw_bytes, len);
+  if (fallback) {
+    chacha_stats_add_u32(&g_chacha_traffic.fallback_ops, 1u);
+    chacha_stats_add_u32(&g_chacha_traffic.fallback_bytes, len);
+  }
+}
+
+#define CHACHA_STATS_DELTA(field) \
+  (current.field - g_chacha_traffic_reported.field)
+
+static void chacha_stats_maybe_report(void) {
+  chacha_traffic_stats_t current;
+  chacha_traffic_stats_t delta;
+  uint32_t now = chacha_stats_time_ms();
+  uint32_t previous = g_chacha_stats_last_ms;
+  uint32_t route_ops;
+  uint32_t route_bytes;
+  uint32_t hw_ops_pct;
+  uint32_t sw_ops_pct;
+  uint32_t hw_bytes_pct;
+  uint32_t sw_bytes_pct;
+
+  if (previous == 0u) {
+    (void)__sync_bool_compare_and_swap(
+      &g_chacha_stats_last_ms, 0u, now
+    );
+    return;
+  }
+  if ((uint32_t)(now - previous) <
+      (uint32_t)CARBOX_CHACHA_STATS_INTERVAL_MS) {
+    return;
+  }
+  if (!__sync_bool_compare_and_swap(
+        &g_chacha_stats_last_ms, previous, now)) {
+    return;
+  }
+
+  current.route_hw_ops =
+    chacha_stats_load_u32(&g_chacha_traffic.route_hw_ops);
+  current.route_hw_bytes =
+    chacha_stats_load_u32(&g_chacha_traffic.route_hw_bytes);
+  current.route_sw_ops =
+    chacha_stats_load_u32(&g_chacha_traffic.route_sw_ops);
+  current.route_sw_bytes =
+    chacha_stats_load_u32(&g_chacha_traffic.route_sw_bytes);
+  current.fallback_ops =
+    chacha_stats_load_u32(&g_chacha_traffic.fallback_ops);
+  current.fallback_bytes =
+    chacha_stats_load_u32(&g_chacha_traffic.fallback_bytes);
+  current.shadow_hw_ops =
+    chacha_stats_load_u32(&g_chacha_traffic.shadow_hw_ops);
+  current.shadow_hw_bytes =
+    chacha_stats_load_u32(&g_chacha_traffic.shadow_hw_bytes);
+  current.combined_ops =
+    chacha_stats_load_u32(&g_chacha_traffic.combined_ops);
+  current.combined_bytes =
+    chacha_stats_load_u32(&g_chacha_traffic.combined_bytes);
+  current.standalone_ops =
+    chacha_stats_load_u32(&g_chacha_traffic.standalone_ops);
+  current.standalone_bytes =
+    chacha_stats_load_u32(&g_chacha_traffic.standalone_bytes);
+  current.standalone_sw_poly_ops =
+    chacha_stats_load_u32(
+      &g_chacha_traffic.standalone_sw_poly_ops
+    );
+  current.standalone_sw_poly_bytes =
+    chacha_stats_load_u32(
+      &g_chacha_traffic.standalone_sw_poly_bytes
+    );
+  current.chunked_ops =
+    chacha_stats_load_u32(&g_chacha_traffic.chunked_ops);
+  current.chunked_bytes =
+    chacha_stats_load_u32(&g_chacha_traffic.chunked_bytes);
+  current.software_poly_ops =
+    chacha_stats_load_u32(&g_chacha_traffic.software_poly_ops);
+  current.software_poly_bytes =
+    chacha_stats_load_u32(&g_chacha_traffic.software_poly_bytes);
+
+  delta.route_hw_ops = CHACHA_STATS_DELTA(route_hw_ops);
+  delta.route_hw_bytes = CHACHA_STATS_DELTA(route_hw_bytes);
+  delta.route_sw_ops = CHACHA_STATS_DELTA(route_sw_ops);
+  delta.route_sw_bytes = CHACHA_STATS_DELTA(route_sw_bytes);
+  delta.fallback_ops = CHACHA_STATS_DELTA(fallback_ops);
+  delta.fallback_bytes = CHACHA_STATS_DELTA(fallback_bytes);
+  delta.shadow_hw_ops = CHACHA_STATS_DELTA(shadow_hw_ops);
+  delta.shadow_hw_bytes = CHACHA_STATS_DELTA(shadow_hw_bytes);
+  delta.combined_ops = CHACHA_STATS_DELTA(combined_ops);
+  delta.combined_bytes = CHACHA_STATS_DELTA(combined_bytes);
+  delta.standalone_ops = CHACHA_STATS_DELTA(standalone_ops);
+  delta.standalone_bytes = CHACHA_STATS_DELTA(standalone_bytes);
+  delta.standalone_sw_poly_ops =
+    CHACHA_STATS_DELTA(standalone_sw_poly_ops);
+  delta.standalone_sw_poly_bytes =
+    CHACHA_STATS_DELTA(standalone_sw_poly_bytes);
+  delta.chunked_ops = CHACHA_STATS_DELTA(chunked_ops);
+  delta.chunked_bytes = CHACHA_STATS_DELTA(chunked_bytes);
+  delta.software_poly_ops = CHACHA_STATS_DELTA(software_poly_ops);
+  delta.software_poly_bytes = CHACHA_STATS_DELTA(software_poly_bytes);
+  g_chacha_traffic_reported = current;
+
+  route_ops = delta.route_hw_ops + delta.route_sw_ops;
+  route_bytes = delta.route_hw_bytes + delta.route_sw_bytes;
+  hw_ops_pct = chacha_stats_percent_x10(delta.route_hw_ops, route_ops);
+  sw_ops_pct = chacha_stats_percent_x10(delta.route_sw_ops, route_ops);
+  hw_bytes_pct =
+    chacha_stats_percent_x10(delta.route_hw_bytes, route_bytes);
+  sw_bytes_pct =
+    chacha_stats_percent_x10(delta.route_sw_bytes, route_bytes);
+
+  printf(
+    "[CHACHA][STATS] window_ms=%lu route ops hw=%lu(%lu.%lu%%) "
+    "sw=%lu(%lu.%lu%%) fallback=%lu; "
+    "bytes hw=%lu(%lu.%lu%%) sw=%lu(%lu.%lu%%) fallback=%lu\n",
+    (unsigned long)CARBOX_CHACHA_STATS_INTERVAL_MS,
+    (unsigned long)delta.route_hw_ops,
+    (unsigned long)(hw_ops_pct / 10u), (unsigned long)(hw_ops_pct % 10u),
+    (unsigned long)delta.route_sw_ops,
+    (unsigned long)(sw_ops_pct / 10u), (unsigned long)(sw_ops_pct % 10u),
+    (unsigned long)delta.fallback_ops,
+    (unsigned long)delta.route_hw_bytes,
+    (unsigned long)(hw_bytes_pct / 10u),
+    (unsigned long)(hw_bytes_pct % 10u),
+    (unsigned long)delta.route_sw_bytes,
+    (unsigned long)(sw_bytes_pct / 10u),
+    (unsigned long)(sw_bytes_pct % 10u),
+    (unsigned long)delta.fallback_bytes
+  );
+  printf(
+    "[CHACHA][STATS] hw_backend "
+    "combined=%lu/%luB standalone_hw_poly=%lu/%luB "
+    "standalone_sw_poly=%lu/%luB chunked_sw_poly=%lu/%luB; "
+    "shadow_hw=%lu/%luB all_sw_poly=%lu/%luB\n",
+    (unsigned long)delta.combined_ops,
+    (unsigned long)delta.combined_bytes,
+    (unsigned long)delta.standalone_ops,
+    (unsigned long)delta.standalone_bytes,
+    (unsigned long)delta.standalone_sw_poly_ops,
+    (unsigned long)delta.standalone_sw_poly_bytes,
+    (unsigned long)delta.chunked_ops,
+    (unsigned long)delta.chunked_bytes,
+    (unsigned long)delta.shadow_hw_ops,
+    (unsigned long)delta.shadow_hw_bytes,
+    (unsigned long)delta.software_poly_ops,
+    (unsigned long)delta.software_poly_bytes
+  );
+}
+#else
+#define chacha_stats_record_backend(backend, len, shadow) \
+  do { (void)(backend); (void)(len); (void)(shadow); } while (0)
+#define chacha_stats_record_hardware(backend, len) \
+  do { (void)(backend); (void)(len); } while (0)
+#define chacha_stats_record_software(len, fallback) \
+  do { (void)(len); (void)(fallback); } while (0)
+#define chacha_stats_maybe_report() do {} while (0)
+#endif
 
 static void chacha_copy_bytes(void *dst_arg, const void *src_arg, size_t len) {
   uint8_t *dst = (uint8_t *)dst_arg;
   const uint8_t *src = (const uint8_t *)src_arg;
   size_t i;
+
+  /*
+   * Mode 2 defers the hardware transaction until final/verify and stages the
+   * streaming input in the caller's output buffer.  CarPlay commonly uses the
+   * API in-place, so copying an already identical range only burns CPU.
+   * Exact aliasing is safe to skip. Partially overlapping ranges caused by a
+   * buffered streaming tail are deliberately still copied.
+   */
+  if ((dst == src) || (len == 0u)) return;
+
   for (i = 0; i < len; ++i) dst[i] = src[i];
 }
 
@@ -976,10 +1240,17 @@ static void chacha_announce_mode(void) {
 #elif CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
     printf(
       "[CHACHA] mode=HARDWARE_ONLY "
-      "(software fallback enabled, hardware not board-validated)\n"
+      "(in-place hardware; runtime HW failure is reported, not retried)\n"
     );
 #else
 #error "Unsupported CARBOX_CHACHA_MODE"
+#endif
+#if CARBOX_CHACHA_MODE != CARBOX_CHACHA_MODE_SOFTWARE_ONLY
+#if CARBOX_CHACHA_NONALIGNED_SW_POLY
+    printf("[CHACHA] nonaligned_poly=software (copy-reduction A/B)\n");
+#else
+    printf("[CHACHA] nonaligned_poly=hardware (baseline)\n");
+#endif
 #endif
   }
 }
@@ -1142,6 +1413,25 @@ static CHACHA_UNUSED void chacha_log_skip(
   }
 }
 
+static CHACHA_UNUSED void chacha_log_hw_failure(
+  const char *operation, int status, int backend,
+  size_t len, size_t aad_len
+) {
+  /*
+   * Do not rate-limit this message. A submitted DMA/HAL transaction failing
+   * is exceptional and Mode 2 deliberately cannot retry it in software:
+   * in-place hardware may already have overwritten part of the only input.
+   */
+  ++g_chacha_hw_failures;
+  printf(
+    "[CHACHA][HW][FAIL] op=%s reason=%s status=%d backend=%d "
+    "len=%lu aad_len=%lu input_may_be_overwritten=1 count=%lu\n",
+    operation, chacha_rtl8195b_status_string(status), status, backend,
+    (unsigned long)len, (unsigned long)aad_len,
+    (unsigned long)g_chacha_hw_failures
+  );
+}
+
 static CHACHA_UNUSED int chacha_hardware_precheck(
   size_t len, size_t aad_len
 ) {
@@ -1202,6 +1492,12 @@ static CHACHA_UNUSED int chacha_select_hardware_backend(
     *backend = CHACHA_HW_BACKEND_COMBINED;
     return CHACHA_RTL_OK;
   }
+#if CARBOX_CHACHA_NONALIGNED_SW_POLY
+  if ((len <= 65536u) && ((len & 15u) != 0u)) {
+    *backend = CHACHA_HW_BACKEND_STANDALONE_SW_POLY;
+    return CHACHA_RTL_OK;
+  }
+#endif
   if (len <= 65536u &&
       chacha_poly_input_size(aad_len, len, &poly_input_len) ==
         CHACHA_RTL_OK) {
@@ -1217,7 +1513,7 @@ static CHACHA_UNUSED void chacha_announce_backend(int backend) {
   const char *name;
 
   if (backend <= CHACHA_HW_BACKEND_NONE ||
-      backend > CHACHA_HW_BACKEND_CHUNKED) return;
+      backend > CHACHA_HW_BACKEND_STANDALONE_SW_POLY) return;
   bit = 1u << (unsigned int)backend;
   if ((__sync_fetch_and_or(&g_chacha_backend_printed, bit) & bit) != 0u) {
     return;
@@ -1225,7 +1521,9 @@ static CHACHA_UNUSED void chacha_announce_backend(int backend) {
   if (backend == CHACHA_HW_BACKEND_COMBINED) {
     name = "combined-chacha-poly1305";
   } else if (backend == CHACHA_HW_BACKEND_STANDALONE) {
-    name = "standalone-chacha+poly1305";
+    name = "standalone-chacha+hardware-poly1305";
+  } else if (backend == CHACHA_HW_BACKEND_STANDALONE_SW_POLY) {
+    name = "standalone-chacha+software-poly1305";
   } else {
     name = "chunked-chacha+software-poly1305";
   }
@@ -1255,9 +1553,10 @@ static CHACHA_UNUSED void chacha_auth_software(
 #if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
 /*
  * Mode 2 defers payload processing so the final record length can select a HW
- * backend. If HW is ineligible or safely recovered from an error, finish from
- * the already-initialized software state. This preserves every AAD update and
- * does not depend on the caller keeping the original AAD buffer alive.
+ * backend. Software is used only when hardware has not been submitted (for
+ * example, below threshold or unsupported layout). Once an in-place hardware
+ * transaction is submitted, a failure must not enter these helpers because
+ * the original plaintext/ciphertext may already be partially overwritten.
  */
 static size_t chacha_mode2_finish_encrypt_software(
   chacha20_poly1305_state *state, uint8_t *buffer, size_t len,
@@ -1310,41 +1609,64 @@ static CHACHA_UNUSED int chacha_hardware_xor_padded(
   const uint8_t key[32], const uint8_t nonce[8], uint32_t counter,
   const uint8_t *input, size_t len, uint8_t *output
 ) {
-  uint8_t *padded_input;
-  uint8_t *padded_output;
+  uint8_t padded_input[64];
+  uint8_t padded_output[64];
+  size_t prefix_len;
+  size_t tail_len;
   size_t padded_len;
+  uint32_t prefix_blocks;
+  uint32_t tail_counter;
   int status;
 
-  status = chacha_round_up_16(len, &padded_len);
-  if (status != CHACHA_RTL_OK || padded_len == 0u ||
-      padded_len > 65536u) {
+  if (len == 0u || len > 65536u) {
     return CHACHA_RTL_SKIP_LENGTH;
   }
-  if (padded_len == len) {
+  if ((len & 15u) == 0u) {
     return chacha_rtl8195b_chacha_xor(
       key, nonce, counter, input, len, output
     );
   }
 
-  padded_input = (uint8_t *)malloc(padded_len);
-  padded_output = (uint8_t *)malloc(padded_len);
-  if (!padded_input || !padded_output) {
-    if (padded_input) free(padded_input);
-    if (padded_output) free(padded_output);
-    return CHACHA_RTL_SKIP_MEMORY;
+  /*
+   * RTL requires each submitted message length to be a multiple of 16, while
+   * the ChaCha counter advances in 64-byte blocks.  Submit the complete
+   * 64-byte prefix directly and stage only the final partial block.  The old
+   * path allocated and copied two buffers as large as the entire packet for a
+   * one-byte tail.
+   */
+  prefix_len = len & ~(size_t)63u;
+  tail_len = len - prefix_len;
+  prefix_blocks = (uint32_t)(prefix_len / 64u);
+  if ((tail_len != 0u) &&
+      (counter > UINT32_MAX - prefix_blocks)) {
+    return CHACHA_RTL_SKIP_LENGTH;
   }
-  chacha_copy_bytes(padded_input, input, len);
-  memset(padded_input + len, 0, padded_len - len);
+  tail_counter = counter + prefix_blocks;
+
+  if (prefix_len != 0u) {
+    status = chacha_rtl8195b_chacha_xor(
+      key, nonce, counter, input, prefix_len, output
+    );
+    if (status != CHACHA_RTL_OK) return status;
+  }
+
+  if (tail_len == 0u) return CHACHA_RTL_OK;
+
+  status = chacha_round_up_16(tail_len, &padded_len);
+  if (status != CHACHA_RTL_OK || padded_len > sizeof(padded_input)) {
+    return CHACHA_RTL_SKIP_LENGTH;
+  }
+  chacha_copy_bytes(padded_input, input + prefix_len, tail_len);
+  memset(padded_input + tail_len, 0, padded_len - tail_len);
   status = chacha_rtl8195b_chacha_xor(
-    key, nonce, counter, padded_input, padded_len, padded_output
+    key, nonce, tail_counter,
+    padded_input, padded_len, padded_output
   );
   if (status == CHACHA_RTL_OK) {
-    chacha_copy_bytes(output, padded_output, len);
+    chacha_copy_bytes(output + prefix_len, padded_output, tail_len);
   }
-  CHACHA_CLEAR(padded_input, padded_len);
-  CHACHA_CLEAR(padded_output, padded_len);
-  free(padded_output);
-  free(padded_input);
+  CHACHA_CLEAR(padded_input, sizeof(padded_input));
+  CHACHA_CLEAR(padded_output, sizeof(padded_output));
   return status;
 }
 
@@ -1355,6 +1677,14 @@ static CHACHA_UNUSED int chacha_hardware_xor_chunks(
   size_t offset = 0u;
   uint32_t counter = 1u;
 
+  /*
+   * RTL8195B board validation on 2026-07-31 passed raw ChaCha in-place at
+   * cache-line offsets 0/1/15/16/31 and passed a 65536+64-byte two-call
+   * in-place case.  input == output is therefore supported here, including
+   * the counter transition at the 64 KiB HAL boundary.  Keep the small tail
+   * staging in chacha_hardware_xor_padded(): the HAL length, not the pointer,
+   * still has a 16-byte granularity requirement.
+   */
   while (offset < len) {
     size_t chunk_len = len - offset;
     uint32_t blocks;
@@ -1416,6 +1746,15 @@ static CHACHA_UNUSED int chacha_hardware_auth_standalone(
   size_t poly_input_len = 0u;
   int status = chacha_hardware_poly_key(key, nonce, poly_key);
 
+  /*
+   * Do not replace this contiguous one-shot input with repeated
+   * rtl_crypto_poly1305_process() calls.  RTL8195B board validation on
+   * 2026-07-31 produced the correct result for one process call, but split
+   * block, AEAD-segment, arbitrary-byte, and cumulative-128-KiB tests all
+   * produced a different tag.  The SDK API is not usable as streaming state.
+   * Records whose complete Poly1305 input exceeds 64 KiB must continue to use
+   * chacha_auth_software().
+   */
   if (status == CHACHA_RTL_OK) {
     status = chacha_build_poly_input(
       aad, aad_len, ciphertext, ciphertext_len,
@@ -1509,7 +1848,6 @@ static void chacha_verify_encrypt_result(
   uint8_t nonce12[12];
   uint8_t hardware_tag[16];
   uint8_t *plaintext;
-  uint8_t *hardware_ciphertext;
   size_t first_diff;
   size_t tag_diff;
   int backend = CHACHA_HW_BACKEND_NONE;
@@ -1540,10 +1878,7 @@ static void chacha_verify_encrypt_result(
   }
 
   plaintext = (uint8_t *)malloc(len);
-  hardware_ciphertext = (uint8_t *)malloc(len);
-  if (!plaintext || !hardware_ciphertext) {
-    if (plaintext) free(plaintext);
-    if (hardware_ciphertext) free(hardware_ciphertext);
+  if (!plaintext) {
     ++g_chacha_verify_skipped;
     chacha_log_skip(
       "VERIFY", CHACHA_RTL_SKIP_MEMORY, len, aad_len,
@@ -1557,13 +1892,22 @@ static void chacha_verify_encrypt_result(
   chacha20_xor(
     plaintext, software_ciphertext, len, key, nonce12, 1u
   );
+
+  /*
+   * The reconstructed plaintext is disposable and software_ciphertext remains
+   * authoritative in Mode 1.  Use the board-validated in-place HAL path here
+   * to remove the second payload-sized verify buffer.  A HAL failure cannot
+   * damage the result returned to CarPlay because only this scratch is
+   * overwritten.
+   */
   status = chacha_hardware_encrypt_auto(
     key, nonce, aad, aad_len, plaintext, len,
-    hardware_ciphertext, hardware_tag, &backend
+    plaintext, hardware_tag, &backend
   );
   if (status == CHACHA_RTL_OK) {
+    chacha_stats_record_backend(backend, len, 1);
     first_diff = chacha_first_difference(
-      software_ciphertext, hardware_ciphertext, len
+      software_ciphertext, plaintext, len
     );
     tag_diff = chacha_first_difference(software_tag, hardware_tag, 16u);
     if ((first_diff != len) || (tag_diff != 16u)) {
@@ -1583,19 +1927,17 @@ static void chacha_verify_encrypt_result(
       "VERIFY", status, len, aad_len, g_chacha_verify_skipped
     );
   }
-  free(hardware_ciphertext);
   free(plaintext);
 }
 
 static void chacha_verify_decrypt_result(
   const uint8_t key[32], const uint8_t nonce[8],
   const void *aad, size_t aad_len,
-  const uint8_t *ciphertext, const uint8_t *software_plaintext,
+  uint8_t *ciphertext_scratch, const uint8_t *software_plaintext,
   size_t len, const uint8_t supplied_tag[16],
   int32_t software_error, int eligible, int ineligible_status
 ) {
   uint8_t hardware_tag[16];
-  uint8_t *hardware_plaintext;
   size_t first_diff;
   int hardware_ok;
   int software_ok;
@@ -1626,23 +1968,21 @@ static void chacha_verify_decrypt_result(
     return;
   }
 
-  hardware_plaintext = (uint8_t *)malloc(len);
-  if (!hardware_plaintext) {
-    ++g_chacha_verify_skipped;
-    chacha_log_skip(
-      "VERIFY", CHACHA_RTL_SKIP_MEMORY, len, aad_len,
-      g_chacha_verify_skipped
-    );
-    return;
-  }
-
+  /*
+   * Mode 1 already owns ciphertext_scratch because software decrypt may have
+   * overwritten the caller's input before final verification.  The 2026-07-31
+   * raw/combined board tests validated in-place decrypt, so reuse that
+   * disposable snapshot as the HW plaintext output instead of allocating a
+   * second payload-sized buffer.  The software plaintext remains authoritative.
+   */
   status = chacha_hardware_decrypt_auto(
-    key, nonce, aad, aad_len, ciphertext, len,
-    hardware_plaintext, hardware_tag, &backend
+    key, nonce, aad, aad_len, ciphertext_scratch, len,
+    ciphertext_scratch, hardware_tag, &backend
   );
   if (status == CHACHA_RTL_OK) {
+    chacha_stats_record_backend(backend, len, 1);
     first_diff = chacha_first_difference(
-      software_plaintext, hardware_plaintext, len
+      software_plaintext, ciphertext_scratch, len
     );
     hardware_ok = chacha20_poly1305_tag_equal(hardware_tag, supplied_tag);
     software_ok = (software_error == 0);
@@ -1663,7 +2003,6 @@ static void chacha_verify_decrypt_result(
       "VERIFY", status, len, aad_len, g_chacha_verify_skipped
     );
   }
-  free(hardware_plaintext);
 }
 #endif
 
@@ -1768,20 +2107,35 @@ size_t chacha20_poly1305_final(
   if (eligible) {
     int backend = CHACHA_HW_BACKEND_NONE;
     int status = chacha_hardware_precheck(total_len, aad_len);
-    uint8_t *hardware_output =
-      (status == CHACHA_RTL_OK) ? (uint8_t *)malloc(total_len) : NULL;
-    if ((status == CHACHA_RTL_OK) && !hardware_output) {
-      status = CHACHA_RTL_SKIP_MEMORY;
-    }
+    int hardware_submitted = 0;
+
     if (status == CHACHA_RTL_OK) {
+      /*
+       * 2026-07-31 board tests passed raw, chunked and combined in-place
+       * operation. Mode 2 is performance-first: avoid a payload-sized commit
+       * buffer and the successful-path copy. If DMA/HAL fails after this
+       * point, output_base may be partially overwritten, so log and fail the
+       * record instead of attempting software fallback with corrupted input.
+       *
+       * The encrypt ABI has no error return. Clear the tag before submission
+       * so a failed transaction cannot accidentally reuse a previous tag;
+       * the mandatory failure log is the available diagnostic channel.
+       */
+      memset(tag, 0, 16u);
+      hardware_submitted = 1;
       status = chacha_hardware_encrypt_auto(
         key, nonce, aad, aad_len,
-        output_base, total_len, hardware_output, tag, &backend
+        output_base, total_len, output_base, tag, &backend
       );
     }
     if (status == CHACHA_RTL_OK) {
-      chacha_copy_bytes(output_base, hardware_output, total_len);
       ++g_chacha_hw_operations;
+      chacha_stats_record_hardware(backend, total_len);
+    } else if (hardware_submitted) {
+      memset(tag, 0, 16u);
+      chacha_log_hw_failure(
+        "encrypt", status, backend, total_len, aad_len
+      );
     } else {
       if (status != CHACHA_RTL_SKIP_THRESHOLD) {
         ++g_chacha_hw_fallbacks;
@@ -1793,8 +2147,10 @@ size_t chacha20_poly1305_final(
       (void)chacha_mode2_finish_encrypt_software(
         state, output_base, total_len, tag
       );
+      chacha_stats_record_software(
+        total_len, status != CHACHA_RTL_SKIP_THRESHOLD
+      );
     }
-    if (hardware_output) free(hardware_output);
   } else {
     if (total_len >= (size_t)CARBOX_CHACHA_HW_MIN_LEN) {
       int fallback_reason = state->rtl_reserved ?
@@ -1808,6 +2164,9 @@ size_t chacha20_poly1305_final(
     (void)chacha_mode2_finish_encrypt_software(
       state, output_base, total_len, tag
     );
+    chacha_stats_record_software(
+      total_len, total_len >= (size_t)CARBOX_CHACHA_HW_MIN_LEN
+    );
   }
   memset(state, 0, sizeof(*state));
 #else
@@ -1820,7 +2179,9 @@ size_t chacha20_poly1305_final(
     output_base, total_len, tag, eligible
   );
 #endif
+  chacha_stats_record_software(total_len, 0);
 #endif
+  chacha_stats_maybe_report();
   chacha_clear_state_key_material(state);
   chacha_secure_clear(key, sizeof(key));
   chacha_secure_clear(nonce, sizeof(nonce));
@@ -1874,23 +2235,31 @@ size_t chacha20_poly1305_verify(
     uint8_t calculated[16];
     int backend = CHACHA_HW_BACKEND_NONE;
     int status = chacha_hardware_precheck(total_len, aad_len);
-    uint8_t *hardware_output =
-      (status == CHACHA_RTL_OK) ? (uint8_t *)malloc(total_len) : NULL;
-    if ((status == CHACHA_RTL_OK) && !hardware_output) {
-      status = CHACHA_RTL_SKIP_MEMORY;
-    }
+    int hardware_submitted = 0;
+
     if (status == CHACHA_RTL_OK) {
+      /*
+       * Mode 2 decrypt also runs directly in output_base. The caller must
+       * ignore plaintext whenever out_error is non-zero: an invalid tag or a
+       * DMA/HAL failure can leave unauthenticated/partial plaintext in place.
+       * This removes the payload commit allocation and copy from the normal
+       * path. Never software-fallback after hardware_submitted becomes true.
+       */
+      hardware_submitted = 1;
       status = chacha_hardware_decrypt_auto(
         key, nonce, aad, aad_len,
-        output_base, total_len, hardware_output, calculated, &backend
+        output_base, total_len, output_base, calculated, &backend
       );
     }
     if (status == CHACHA_RTL_OK) {
       *out_error = chacha20_poly1305_tag_equal(calculated, tag) ? 0 : -1;
-      if (*out_error == 0) {
-        chacha_copy_bytes(output_base, hardware_output, total_len);
-      }
       ++g_chacha_hw_operations;
+      chacha_stats_record_hardware(backend, total_len);
+    } else if (hardware_submitted) {
+      *out_error = (int32_t)status;
+      chacha_log_hw_failure(
+        "decrypt", status, backend, total_len, aad_len
+      );
     } else {
       if (status != CHACHA_RTL_SKIP_THRESHOLD) {
         ++g_chacha_hw_fallbacks;
@@ -1902,8 +2271,10 @@ size_t chacha20_poly1305_verify(
       (void)chacha_mode2_finish_decrypt_software(
         state, output_base, total_len, tag, out_error
       );
+      chacha_stats_record_software(
+        total_len, status != CHACHA_RTL_SKIP_THRESHOLD
+      );
     }
-    if (hardware_output) free(hardware_output);
   } else {
     if (total_len >= (size_t)CARBOX_CHACHA_HW_MIN_LEN) {
       int fallback_reason = state->rtl_reserved ?
@@ -1916,6 +2287,9 @@ size_t chacha20_poly1305_verify(
     }
     (void)chacha_mode2_finish_decrypt_software(
       state, output_base, total_len, tag, out_error
+    );
+    chacha_stats_record_software(
+      total_len, total_len >= (size_t)CARBOX_CHACHA_HW_MIN_LEN
     );
   }
   memset(state, 0, sizeof(*state));
@@ -1935,7 +2309,9 @@ size_t chacha20_poly1305_verify(
     ineligible_status
   );
 #endif
+  chacha_stats_record_software(total_len, 0);
 #endif
+  chacha_stats_maybe_report();
   chacha_clear_state_key_material(state);
   chacha_secure_clear(key, sizeof(key));
   chacha_secure_clear(nonce, sizeof(nonce));

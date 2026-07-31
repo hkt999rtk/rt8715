@@ -45,7 +45,12 @@ the equivalent `CHACHA_MODE` value.
 |---:|---|---|
 | `0` | `SOFTWARE_ONLY` | Software only; production-safe default |
 | `1` | `SOFTWARE_HW_VERIFY` | Software; hardware is run as a shadow comparison |
-| `2` | `HARDWARE_ONLY` | Hardware when eligible; printed software fallback otherwise |
+| `2` | `HARDWARE_ONLY` | Hardware when eligible; software only before HW submission |
+
+While records are flowing, the routing counters print every 5 seconds. The
+`route` line reports the authoritative hardware/software operation and byte
+ratios. Mode 1 shadow-hardware work is listed separately as `shadow_hw`.
+Set `CARBOX_CHACHA_STATS_INTERVAL_MS=0` to disable this diagnostic.
 
 Examples:
 
@@ -58,38 +63,85 @@ make -f application.is.mk all \
 make -f application.is.mk all \
   CARBOX_EXPERIMENTAL_SMART_A_LINK=1 CARBOX_CHACHA_MODE=1
 
-# Hardware preferred, with visible software fallback
+# One-time target HAL capability test (diagnostic image only)
+make -f application.is.mk all \
+  CARBOX_EXPERIMENTAL_SMART_A_LINK=1 CARBOX_CHACHA_MODE=1 \
+  CARBOX_CHACHA_HW_SELFTEST=1
+
+# Hardware preferred; submitted HW failures are logged and not retried
 make -f application.is.mk all \
   CARBOX_EXPERIMENTAL_SMART_A_LINK=1 CARBOX_CHACHA_MODE=2
+
+# A/B copy-reduction policy: non-aligned HW ChaCha + software Poly1305
+make -f application.is.mk all \
+  CARBOX_EXPERIMENTAL_SMART_A_LINK=1 CARBOX_CHACHA_MODE=2 \
+  CARBOX_CHACHA_NONALIGNED_SW_POLY=1
 ```
 
 Messages smaller than `CARBOX_CHACHA_HW_MIN_LEN` (default 4096 bytes) stay in
-software. Larger contiguous CarPlay records use one of three paths:
+software. Larger contiguous CarPlay records use one of four paths:
 
 1. `combined-chacha-poly1305`: payload at most 64 KiB, 16-byte aligned, and
    AAD at most 496 bytes. The ROM combined engine handles ChaCha and Poly1305.
-2. `standalone-chacha+poly1305`: non-combined records whose padded AEAD
+2. `standalone-chacha+hardware-poly1305`: non-combined records whose padded AEAD
    Poly1305 input fits in the standalone ROM Poly1305 64 KiB limit. Standalone
    hardware ChaCha handles a padded tail and standalone hardware Poly1305
    authenticates the true ciphertext length.
-3. `chunked-chacha+software-poly1305`: records outside the standalone
+3. `standalone-chacha+software-poly1305`: when
+   `CARBOX_CHACHA_NONALIGNED_SW_POLY=1`, non-16-byte-aligned records at most
+   64 KiB use hardware ChaCha and streaming software Poly1305. This avoids the
+   payload-sized contiguous Poly1305 input allocation and copy.
+4. `chunked-chacha+software-poly1305`: records outside the standalone
    Poly1305 limit. Hardware ChaCha processes 64 KiB chunks with a continuous
    block counter; software Poly1305 authenticates the complete ciphertext.
 
+`CARBOX_CHACHA_NONALIGNED_SW_POLY` defaults to `0`, preserving the standalone
+hardware Poly1305 baseline. Build otherwise identical Mode 2 images with values
+`0` and `1` to compare CPU, heap, latency, and the periodic backend counters
+before changing the product default.
+
+`CARBOX_CHACHA_HW_SELFTEST=1` adds a one-time board diagnostic immediately
+before the first real hardware transaction. It checks the RFC Poly1305
+one-shot vector, `init/process` single-call behavior, full-block streaming,
+AEAD-segment streaming, arbitrary-byte streaming, cumulative 128 KiB Poly1305
+streaming, raw ChaCha aliasing across a 64 KiB transaction boundary, and
+raw/combined ChaCha input-output aliasing with cache-line offsets and guard
+bytes. The test does not change production routing and defaults to `0`. Use it
+only for a customer diagnostic image because it temporarily allocates about
+200 KiB and delays the first eligible hardware operation while the matrix
+runs. A HAL error or IRQ timeout aborts the current category after recovery;
+an engine recovery failure disables hardware before the real transaction.
+
+RTL8195B board results from 2026-07-31 establish two different boundaries:
+
+- raw and combined ChaCha in-place tests, including cache-line offsets and a
+  64 KiB chunk transition, passed;
+- Poly1305 split `init/process` tests produced incorrect tags even though a
+  single process call passed. Do not treat that SDK API as streaming state.
+
+Mode 1 therefore performs shadow encryption and decryption in-place in its
+disposable scratch buffers. Mode 2 is performance-first and also submits the
+payload in-place, eliminating the payload-sized commit allocation and the
+successful-path copy. Exact `src == dst` staging copies are skipped.
+
 All hardware paths also require the contiguous layout observed in the supplied
 CarPlay libraries, task context, and successful temporary-buffer allocation.
-Mode 2 falls back to the complete software AEAD implementation after any
-hardware error. Hardware output is kept separate until the operation succeeds,
-so a partial chunk failure cannot destroy the software fallback input.
+Mode 2 may select software only before a hardware transaction is submitted
+(for example below threshold, unsupported layout, interrupt context, or
+snapshot allocation failure). A submitted DMA/HAL failure is always printed as
+`[CHACHA][HW][FAIL]` and is not retried because the in-place input may already
+be partially overwritten. Decrypt returns the negative HAL wrapper status via
+`out_error`; the legacy encrypt ABI has no error return, so it prints the
+failure and clears the tag. Callers must never consume decrypt output after an
+authentication or hardware error.
 
 Every hardware transaction is serialized by `RT_DEV_LOCK_CRYPTO`. Completion
 uses the RTL crypto IRQ and an RTOS semaphore with a 1000 ms timeout; timeout
 falls through to the ROM's bounded completion check. Key, nonce, plaintext and
 ciphertext contents are never printed.
 
-This hardware path has been cross-compiled and fully linked, but there was no
-RTL8195B board available for DMA/IRQ/cache validation. Customer rollout must
-start with mode `1`. Do not promote mode `2` until the target log shows no
+The RTL8195B in-place capability has been board-tested, but customer rollout
+must still start with mode `1`. Do not promote mode `2` until the target log shows no
 `[CHACHA][VERIFY][MISMATCH]`, no IRQ timeout, and acceptable fallback coverage.
 The Traditional Chinese customer procedure and acceptance criteria are in
 `CUSTOMER_CHACHA_ROLLOUT_TEST_ZH-TW.md`.

@@ -19,10 +19,13 @@ STANDALONE_LIB := $(OUTPUT_DIR)/libchacha_m33.a
 CHACHA_ENABLE_CLEAR ?= 0
 CHACHA_MODE ?= 0
 CHACHA_HW_MIN_LEN ?= 4096
+CHACHA_NONALIGNED_SW_POLY ?= 0
+CHACHA_STATS_INTERVAL_MS ?= 5000
+CHACHA_HW_SELFTEST ?= 0
 OPT_FLAGS ?= -O3
 
 OPT_TAG := $(patsubst -%,%,$(firstword $(OPT_FLAGS)))
-OBJ_DIR := $(OUTPUT_DIR)/obj-mode$(CHACHA_MODE)-clear$(CHACHA_ENABLE_CLEAR)-min$(CHACHA_HW_MIN_LEN)-$(OPT_TAG)
+OBJ_DIR := $(OUTPUT_DIR)/obj-mode$(CHACHA_MODE)-clear$(CHACHA_ENABLE_CLEAR)-min$(CHACHA_HW_MIN_LEN)-naswp$(CHACHA_NONALIGNED_SW_POLY)-stats$(CHACHA_STATS_INTERVAL_MS)-selftest$(CHACHA_HW_SELFTEST)-$(OPT_TAG)
 OBJS := $(OBJ_DIR)/ChaCha20Poly1305.o \
 	$(OBJ_DIR)/ChaCha20Poly1305_rtl8195b.o
 
@@ -53,6 +56,9 @@ CFLAGS ?=
 CFLAGS += $(COMMON_FLAGS) -DCHACHA_ENABLE_CLEAR=$(CHACHA_ENABLE_CLEAR) \
 	-DCARBOX_CHACHA_MODE=$(CHACHA_MODE) \
 	-DCARBOX_CHACHA_HW_MIN_LEN=$(CHACHA_HW_MIN_LEN) \
+	-DCARBOX_CHACHA_NONALIGNED_SW_POLY=$(CHACHA_NONALIGNED_SW_POLY) \
+	-DCARBOX_CHACHA_STATS_INTERVAL_MS=$(CHACHA_STATS_INTERVAL_MS) \
+	-DCARBOX_CHACHA_HW_SELFTEST=$(CHACHA_HW_SELFTEST) \
 	$(RTL_INCLUDES)
 
 .PHONY: all replacement standalone check clean print-config host-check FORCE
@@ -114,6 +120,9 @@ print-config:
 	@echo "CFLAGS=$(CFLAGS)"
 	@echo "CHACHA_MODE=$(CHACHA_MODE)"
 	@echo "CHACHA_HW_MIN_LEN=$(CHACHA_HW_MIN_LEN)"
+	@echo "CHACHA_NONALIGNED_SW_POLY=$(CHACHA_NONALIGNED_SW_POLY)"
+	@echo "CHACHA_STATS_INTERVAL_MS=$(CHACHA_STATS_INTERVAL_MS)"
+	@echo "CHACHA_HW_SELFTEST=$(CHACHA_HW_SELFTEST)"
 	@echo "VENDOR_CARPLAY_LIB=$(VENDOR_CARPLAY_LIB)"
 	@echo "REPLACEMENT_CARPLAY_LIB=$(REPLACEMENT_CARPLAY_LIB)"
 
@@ -122,12 +131,16 @@ HOST_TEST_FLAGS := -O2 -Wall -Wextra -I.
 
 host-check: | $(OUTPUT_DIR)
 	@set -e; \
-	for mode in 0 1 2; do \
-		echo "HOST TEST CHACHA_MODE=$$mode"; \
+	for swpoly in 0 1; do \
+	  for mode in 0 1 2; do \
+		echo "HOST TEST CHACHA_MODE=$$mode NONALIGNED_SW_POLY=$$swpoly"; \
 		$(HOST_CC) $(HOST_TEST_FLAGS) -DCARBOX_CHACHA_MODE=$$mode \
+			-DCARBOX_CHACHA_NONALIGNED_SW_POLY=$$swpoly \
 			ChaCha20Poly1305.c tests/rtl_backend_openssl_mock.c \
-			tests/host_modes.c -lcrypto -o $(OUTPUT_DIR)/host-mode$$mode; \
-		$(OUTPUT_DIR)/host-mode$$mode; \
+			tests/host_modes.c -lcrypto \
+			-o $(OUTPUT_DIR)/host-mode$$mode-swpoly$$swpoly; \
+		$(OUTPUT_DIR)/host-mode$$mode-swpoly$$swpoly; \
+	  done; \
 	done
 
 clean:

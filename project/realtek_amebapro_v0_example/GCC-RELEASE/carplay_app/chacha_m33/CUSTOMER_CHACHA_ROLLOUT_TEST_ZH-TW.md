@@ -18,10 +18,10 @@ M33 ASM 優化已移除，不需要、也不再支援
 |---:|---|---|---|
 | `CARBOX_CHACHA_MODE=0` | Software only | Software | 基準測試及安全回退 |
 | `CARBOX_CHACHA_MODE=1` | Software + hardware verify | Software | 同時計算 hardware，和 software 結果比較 |
-| `CARBOX_CHACHA_MODE=2` | Hardware preferred | Hardware；不適用或失敗時 fallback software | 硬體正式導入 |
+| `CARBOX_CHACHA_MODE=2` | Hardware preferred | 符合條件時 Hardware；送出 HW 前不適用才走 Software | 硬體正式導入 |
 
-Mode 2 保留 software fallback，因此即使打印名稱為 `HARDWARE_ONLY`，
-也不代表所有封包都強制使用 hardware。
+Mode 2 在 hardware 尚未送出前仍可選擇 software；一旦 DMA/HAL transaction
+已送出，失敗只打印並回報，不再 software 重算。
 
 ## 3. 編譯方法
 
@@ -40,11 +40,45 @@ make -f application.is.mk all \
   CARBOX_CHACHA_M33=1 \
   CARBOX_CHACHA_MODE=1
 
-# Mode 2：hardware preferred + software fallback
+# Mode 2：hardware preferred；HW 已送出後失敗不 retry
 make -f application.is.mk all \
   CARBOX_EXPERIMENTAL_SMART_A_LINK=1 \
   CARBOX_CHACHA_M33=1 \
   CARBOX_CHACHA_MODE=2
+```
+
+Mode 2 的非 16-byte aligned 封包可另外做 Poly1305 A/B 測試：
+
+```bash
+# Baseline：standalone hardware Poly1305，保留完整 Poly input copy
+make -f application.is.mk all \
+  CARBOX_EXPERIMENTAL_SMART_A_LINK=1 \
+  CARBOX_CHACHA_M33=1 \
+  CARBOX_CHACHA_MODE=2 \
+  CARBOX_CHACHA_NONALIGNED_SW_POLY=0
+
+# Copy-reduction：hardware ChaCha + software Poly1305
+make -f application.is.mk all \
+  CARBOX_EXPERIMENTAL_SMART_A_LINK=1 \
+  CARBOX_CHACHA_M33=1 \
+  CARBOX_CHACHA_MODE=2 \
+  CARBOX_CHACHA_NONALIGNED_SW_POLY=1
+```
+
+此選項預設為 `0`，不會改變原 Mode 2 baseline。設為 `1` 時只改變
+4 KiB～64 KiB 且 payload 長度不是 16 bytes 倍數的 backend；aligned
+combined hardware 路徑及超過 64 KiB 的 chunked 路徑維持不變。
+
+啟動後應看到對應 policy：
+
+```text
+[CHACHA] nonaligned_poly=hardware (baseline)
+```
+
+或：
+
+```text
+[CHACHA] nonaligned_poly=software (copy-reduction A/B)
 ```
 
 如工具鏈不在專案預設位置，可另外傳入：
@@ -55,6 +89,67 @@ CROSS_COMPILE=/absolute/path/to/newlib/bin/arm-none-eabi-
 
 每次燒錄前請確認使用的是本次 mode 產生的最新 image，並保存完整 build
 command、image checksum、測試機板版本及完整 UART log，避免混用不同 mode。
+
+### HAL 能力診斷版本
+
+第一次調查硬體 Poly1305 streaming 與 ChaCha in-place 能力時，請使用 Mode 1
+並另外加入：
+
+```bash
+make -f application.is.mk all \
+  CARBOX_EXPERIMENTAL_SMART_A_LINK=1 \
+  CARBOX_CHACHA_M33=1 \
+  CARBOX_CHACHA_MODE=1 \
+  CARBOX_CHACHA_HW_SELFTEST=1
+```
+
+Self-test 會在第一筆真正進入 crypto hardware 的 transaction 前執行一次。
+測試期間仍持有共用 crypto mutex，不會和 AES／其他 crypto operation 並行。
+它是診斷功能，預設為 `0`；測試結束後正式版本必須恢復為 `0`。
+
+正常會出現：
+
+```text
+[CHACHA][SELFTEST] BEGIN diagnostic-only; production routing unchanged
+[POLY1305][SELFTEST] oneshot-known PASS
+[POLY1305][SELFTEST] init-process-single PASS
+[POLY1305][SELFTEST] block-stream PASS
+[POLY1305][SELFTEST] aead-segments PASS
+[POLY1305][SELFTEST] byte-stream PASS
+[POLY1305][SELFTEST] cumulative-128k PASS
+[CHACHA][SELFTEST][INPLACE-RAW] PASS cases=20 failures=0
+[CHACHA][SELFTEST][INPLACE-CHUNKED] PASS cases=3 failures=0 len=65600
+[CHACHA][SELFTEST][INPLACE-COMBINED] PASS cases=9 failures=0 (capability-only)
+[CHACHA][SELFTEST] END poly_failures=0 raw_inplace_failures=0 chunked_inplace_failures=0 combined_inplace_failures=0
+```
+
+判讀方式：
+
+- `aead-segments PASS`：可以用完整 16-byte block 分段送入硬體 Poly1305，
+  有機會移除 payload-sized `poly_input`，只保留 16-byte staging buffer；
+- `byte-stream PASS`：HAL 也能跨 process 保存不足 16 bytes 的 partial block；
+- `cumulative-128k PASS`：兩次 65536-byte `process()` 可以累積同一個
+  Poly1305 狀態，總長度可超過單次 HAL 的 64 KiB 限制；
+- `INPLACE-RAW PASS`：standalone ChaCha input/output 相同地址，包含
+  `0、1、15、16、31` cache-line offset，結果與 guard bytes 都正確；
+- `INPLACE-CHUNKED PASS`：跨越 64 KiB HAL transaction 後，in-place
+  input/output、ChaCha counter 銜接和 guard bytes 都正確；
+- `INPLACE-COMBINED PASS` 只表示 HAL 能力可行。正式 decrypt 仍須考慮 tag
+  失敗時 ciphertext 已被覆蓋的 API 語意，不能只因本測試通過就直接啟用。
+
+如果某個 streaming 或 in-place 測試顯示 `FAIL`，請保留完整 log；正常
+CarPlay Mode 1 路由不會因此自動改變。診斷測試會暫時配置約 200 KiB，並讓
+第一筆符合條件的硬體 operation 延後到測試矩陣完成。任何 HAL error 或
+IRQ timeout 會立即停止該測試類別，不會把每一個 size／offset 都等待一次。
+
+2026-07-31 RTL8195B 實機結果：ChaCha raw／chunked／combined in-place 通過，
+但 Poly1305 只有 single process 正確，所有 split process tag 都不一致。因此
+本版本將 Mode 1 disposable shadow buffer 與 Mode 2 正式硬體路徑改為
+in-place；完全相同的 `src == dst` staging copy 也會跳過。仍不會用
+`rtl_crypto_poly1305_process()` 組成 streaming Poly1305。Mode 2 不再配置
+payload commit buffer；DMA/HAL 送出後若失敗，input 可能已部分被覆寫，因此
+只打印 `[CHACHA][HW][FAIL]`，不得 software fallback。Decrypt 呼叫者在
+`out_error != 0` 時不得使用 output。
 
 ## 4. 第一階段：Mode 0 software baseline
 
@@ -96,9 +191,14 @@ Mode 1 對外仍使用 software 結果；hardware 只做 shadow calculation 及�
 
 ```text
 [CHACHA][HW] backend=combined-chacha-poly1305 min_len=4096
-[CHACHA][HW] backend=standalone-chacha+poly1305 min_len=4096
+[CHACHA][HW] backend=standalone-chacha+hardware-poly1305 min_len=4096
+[CHACHA][HW] backend=standalone-chacha+software-poly1305 min_len=4096
 [CHACHA][HW] backend=chunked-chacha+software-poly1305 min_len=4096
 ```
+
+其中兩個 standalone Poly1305 backend 由
+`CARBOX_CHACHA_NONALIGNED_SW_POLY` 及實際封包條件決定，不要求每次
+測試都必然同時出現。
 
 請重做 Mode 0 的全部測試，並增加：
 
@@ -199,11 +299,11 @@ AAD 長度，並先回退 Mode 0。
 只有 Mode 1 完整通過後才可測試 Mode 2。開機後應看到：
 
 ```text
-[CHACHA] mode=HARDWARE_ONLY (software fallback enabled, hardware not board-validated)
+[CHACHA] mode=HARDWARE_ONLY (in-place hardware; runtime HW failure is reported, not retried)
 ```
 
-符合條件的 operation 採用 hardware 結果；不符合條件或 hardware 發生錯誤時
-會自動使用 software，並打印：
+符合條件的 operation 採用 hardware 結果。Hardware 尚未送出前若不符合條件，
+會安全使用 software，並可能打印：
 
 ```text
 [CHACHA][HW] software fallback: reason=... len=... aad_len=... count=...
@@ -211,8 +311,14 @@ AAD 長度，並先回退 Mode 0。
 
 因 `unsupported-length`、`unsupported-aad-length`、
 `unsupported-buffer-layout` 或 `interrupt-context` 而 fallback 是設計行為。
-若 reason 為 `hardware-init-failed` 或 `hardware-operation-failed`，則是硬體
-異常，不應視為正常 fallback。
+若送出後發生 `hardware-init-failed` 或 `hardware-operation-failed`，會打印：
+
+```text
+[CHACHA][HW][FAIL] op=decrypt reason=hardware-operation-failed status=-2 backend=... len=... aad_len=... input_may_be_overwritten=1 count=...
+```
+
+這是硬體異常，不會 fallback；decrypt 以 `out_error` 回傳負值，encrypt 因
+既有 ABI 沒有 error return，會清除 tag 並依靠此 log 診斷。
 
 Mode 2 必須重做 Mode 0、Mode 1 的功能、重連、並行 crypto、壓力及長時間
 測試。通過標準為：
@@ -220,7 +326,8 @@ Mode 2 必須重做 Mode 0、Mode 1 的功能、重連、並行 crypto、壓力�
 - 所有 CarPlay 功能正常，沒有認證、解密或 tag verify 問題；
 - 沒有 IRQ timeout、hardware operation error、recovery error；
 - 沒有 crash、deadlock、cache/DMA corruption；
-- software fallback 只出現在預期的不支援條件；
+- software fallback 只出現在 hardware 尚未送出的預期條件；
+- `[CHACHA][HW][FAIL]` 必須為 0；
 - CPU utilization／latency 相對 Mode 0 有合理改善，且沒有其他 task starvation。
 
 ## 7. 問題處理與回退

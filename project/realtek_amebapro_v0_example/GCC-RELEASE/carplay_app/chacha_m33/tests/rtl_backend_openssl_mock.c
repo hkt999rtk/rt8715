@@ -7,8 +7,11 @@
 
 static unsigned int g_mock_decrypt_successes;
 static unsigned int g_mock_decrypt_failures;
+static unsigned int g_mock_combined_inplace_decrypts;
 static unsigned int g_mock_combined_encrypts;
+static unsigned int g_mock_combined_inplace_encrypts;
 static unsigned int g_mock_chacha_operations;
+static unsigned int g_mock_chacha_inplace_operations;
 static unsigned int g_mock_poly1305_operations;
 static unsigned int g_mock_fail_chacha_call;
 static unsigned int g_mock_fail_poly1305_call;
@@ -18,8 +21,11 @@ static unsigned int g_mock_interrupt_context;
 void mock_rtl_reset_stats(void) {
   g_mock_decrypt_successes = 0;
   g_mock_decrypt_failures = 0;
+  g_mock_combined_inplace_decrypts = 0;
   g_mock_combined_encrypts = 0;
+  g_mock_combined_inplace_encrypts = 0;
   g_mock_chacha_operations = 0;
+  g_mock_chacha_inplace_operations = 0;
   g_mock_poly1305_operations = 0;
   g_mock_fail_chacha_call = 0;
   g_mock_fail_poly1305_call = 0;
@@ -35,12 +41,24 @@ unsigned int mock_rtl_decrypt_failures(void) {
   return g_mock_decrypt_failures;
 }
 
+unsigned int mock_rtl_combined_inplace_decrypts(void) {
+  return g_mock_combined_inplace_decrypts;
+}
+
 unsigned int mock_rtl_combined_encrypts(void) {
   return g_mock_combined_encrypts;
 }
 
+unsigned int mock_rtl_combined_inplace_encrypts(void) {
+  return g_mock_combined_inplace_encrypts;
+}
+
 unsigned int mock_rtl_chacha_operations(void) {
   return g_mock_chacha_operations;
+}
+
+unsigned int mock_rtl_chacha_inplace_operations(void) {
+  return g_mock_chacha_inplace_operations;
 }
 
 unsigned int mock_rtl_poly1305_operations(void) {
@@ -128,6 +146,7 @@ int chacha_rtl8195b_encrypt(
       ((plaintext_len & 15u) != 0u)) return CHACHA_RTL_SKIP_LENGTH;
   if (aad_len > 496u) return CHACHA_RTL_SKIP_AAD_LENGTH;
   ++g_mock_combined_encrypts;
+  if (plaintext == ciphertext) ++g_mock_combined_inplace_encrypts;
   return mock_encrypt(
     key, nonce, aad, aad_len, plaintext, plaintext_len, ciphertext, tag
   );
@@ -142,6 +161,8 @@ int chacha_rtl8195b_decrypt(
   EVP_CIPHER_CTX *ctx;
   uint8_t iv[16];
   uint8_t *check_ciphertext;
+  uint8_t *ciphertext_snapshot = NULL;
+  const uint8_t *ciphertext_input = (const uint8_t *)ciphertext;
   uint8_t check_tag[16];
   int out_len;
   int status;
@@ -149,33 +170,48 @@ int chacha_rtl8195b_decrypt(
   if ((ciphertext_len == 0u) || (ciphertext_len > 65536u) ||
       ((ciphertext_len & 15u) != 0u)) return CHACHA_RTL_SKIP_LENGTH;
   if (aad_len > 496u) return CHACHA_RTL_SKIP_AAD_LENGTH;
+  if (ciphertext == plaintext) {
+    ciphertext_snapshot = (uint8_t *)malloc(ciphertext_len);
+    if (!ciphertext_snapshot) return CHACHA_RTL_SKIP_MEMORY;
+    memcpy(ciphertext_snapshot, ciphertext, ciphertext_len);
+    ciphertext_input = ciphertext_snapshot;
+    ++g_mock_combined_inplace_decrypts;
+  }
 
   memset(iv, 0, sizeof(iv));
   iv[0] = 1u;
   memcpy(iv + 8, nonce, 8);
   ctx = EVP_CIPHER_CTX_new();
-  if (!ctx) return CHACHA_RTL_ERROR_INIT;
+  if (!ctx) {
+    free(ciphertext_snapshot);
+    return CHACHA_RTL_ERROR_INIT;
+  }
   if (EVP_DecryptInit_ex(ctx, EVP_chacha20(), NULL, key, iv) != 1) {
     EVP_CIPHER_CTX_free(ctx);
+    free(ciphertext_snapshot);
     return CHACHA_RTL_ERROR_OPERATION;
   }
   if (EVP_DecryptUpdate(
         ctx, (uint8_t *)plaintext, &out_len,
-        (const uint8_t *)ciphertext, (int)ciphertext_len
+        ciphertext_input, (int)ciphertext_len
       ) != 1) {
     EVP_CIPHER_CTX_free(ctx);
+    free(ciphertext_snapshot);
     return CHACHA_RTL_ERROR_OPERATION;
   }
   EVP_CIPHER_CTX_free(ctx);
 
   check_ciphertext = (uint8_t *)malloc(ciphertext_len);
-  if (!check_ciphertext) return CHACHA_RTL_SKIP_MEMORY;
+  if (!check_ciphertext) {
+    free(ciphertext_snapshot);
+    return CHACHA_RTL_SKIP_MEMORY;
+  }
   status = mock_encrypt(
     key, nonce, aad, aad_len, plaintext, ciphertext_len,
     check_ciphertext, check_tag
   );
   if ((status == CHACHA_RTL_OK) &&
-      (memcmp(check_ciphertext, ciphertext, ciphertext_len) == 0)) {
+      (memcmp(check_ciphertext, ciphertext_input, ciphertext_len) == 0)) {
     memcpy(calculated_tag, check_tag, 16);
     ++g_mock_decrypt_successes;
   } else if (status == CHACHA_RTL_OK) {
@@ -183,6 +219,7 @@ int chacha_rtl8195b_decrypt(
     status = CHACHA_RTL_ERROR_OPERATION;
   }
   free(check_ciphertext);
+  free(ciphertext_snapshot);
   return status;
 }
 
@@ -198,6 +235,7 @@ int chacha_rtl8195b_chacha_xor(
   if ((input_len == 0u) || (input_len > 65536u) ||
       ((input_len & 15u) != 0u)) return CHACHA_RTL_SKIP_LENGTH;
   ++g_mock_chacha_operations;
+  if (input == output) ++g_mock_chacha_inplace_operations;
   if (g_mock_fail_chacha_call == g_mock_chacha_operations) {
     return CHACHA_RTL_ERROR_OPERATION;
   }

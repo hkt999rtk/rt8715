@@ -32,6 +32,36 @@ void chacha20_xor(
 #define CARBOX_CHACHA_HW_MIN_LEN 4096u
 #endif
 
+/*
+ * Keep 0 for the existing standalone hardware Poly1305 baseline. Set to 1
+ * to authenticate non-16-byte-aligned records with streaming software
+ * Poly1305, avoiding construction of a payload-sized contiguous Poly input.
+ */
+#ifndef CARBOX_CHACHA_NONALIGNED_SW_POLY
+#define CARBOX_CHACHA_NONALIGNED_SW_POLY 0
+#endif
+#if (CARBOX_CHACHA_NONALIGNED_SW_POLY != 0) && \
+    (CARBOX_CHACHA_NONALIGNED_SW_POLY != 1)
+#error "CARBOX_CHACHA_NONALIGNED_SW_POLY must be 0 or 1"
+#endif
+
+/* Set to 0 to disable periodic HW/SW traffic statistics. */
+#ifndef CARBOX_CHACHA_STATS_INTERVAL_MS
+#define CARBOX_CHACHA_STATS_INTERVAL_MS 5000u
+#endif
+
+/*
+ * Diagnostic customer build only. Run the RTL8195B Poly1305 streaming and
+ * ChaCha in-place capability tests once, immediately before the first real
+ * hardware transaction. Keep disabled in production builds.
+ */
+#ifndef CARBOX_CHACHA_HW_SELFTEST
+#define CARBOX_CHACHA_HW_SELFTEST 0
+#endif
+#if (CARBOX_CHACHA_HW_SELFTEST != 0) && (CARBOX_CHACHA_HW_SELFTEST != 1)
+#error "CARBOX_CHACHA_HW_SELFTEST must be 0 or 1"
+#endif
+
 typedef struct {
   uint32_t chacha_key[8];
   uint32_t chacha_nonce[2];
