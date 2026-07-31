@@ -320,11 +320,18 @@ extern unsigned int sys_now(void);
 #define MEM_SIZE (32*1024)
 
 /*
- * PBUF_POOL_SIZE: total RX pbufs. Ethernet MTU=1500, PBUF_POOL_BUFSIZE=500,
- * so each frame consumes 3 chained pbufs. NCM USB dumps 16KB NTBs in bursts
- * (~11 frames, ~33 pbufs per burst). With WIFI AP + NAT + mDNS + HTTP
- * concurrent, 500 pbufs (~166 frames) is too tight.
- * Raised to 1000 (~333 frames) to absorb NCM USB bursts without drops.
+ * Keep a normal Ethernet/VLAN frame in one DRAM-backed pool pbuf.  The old
+ * 500-byte setting chained a 1500-byte frame across 3-4 pbufs, adding extra
+ * allocation/free, scatter-copy and checksum traversal on every RX packet.
+ * 1600 is cache-line aligned and leaves headroom above a tagged frame.
+ */
+#undef PBUF_POOL_BUFSIZE
+#define PBUF_POOL_BUFSIZE 1600
+
+/*
+ * PBUF_POOL_SIZE: total RX frames.  Keep the existing 1000-entry burst
+ * capacity; unlike the previous 500-byte buffers, one entry now normally
+ * represents one complete frame.  The pool is allocated from DRAM.
  */
 #undef PBUF_POOL_SIZE
 #define PBUF_POOL_SIZE 1000
@@ -377,6 +384,16 @@ extern unsigned int sys_now(void);
 #define LWIP_STATS 0
 #define LWIP_PROVIDE_ERRNO 1
 // #define LWIP_ERRNO_STDINCLUDE
+
+/*
+ * The Cortex-M33 build keeps lwIP's Internet checksum in ITCM.  Algorithm 3
+ * aligns the input and accumulates two 32-bit words per loop; it preserves the
+ * byte-wise handling needed by odd addresses and lengths.  Algorithm 2, the
+ * lwIP default, only consumes one 16-bit word per iteration.
+ */
+#if defined(CONFIG_VIDEO_APPLICATION)
+#define LWIP_CHKSUM_ALGORITHM            3
+#endif
 
 /*
    --------------------------------------
