@@ -160,6 +160,29 @@ SECTIONS
 	{
 		__itcm_ram_code_rodata_start__ = .;
 
+		/*
+		 * WLAN receive processing is a sustained hot path.  The prebuilt WLAN
+		 * library marks it as .wlan.text.*, which would normally execute from
+		 * external LPDDR.  Keep only the packet receive/validate/reorder/
+		 * indicate functions in ITCM; the selected set is about 4.5 KiB and
+		 * leaves ample ITCM headroom for the existing codec/network code.
+		 */
+		*(.wlan.text.rtl8195b_recv_tasklet)
+		*(.wlan.text.rtw_recv_tasklet)
+		*(.wlan.text.rtw_recv_entry)
+		*(.wlan.text.recv_func)
+		*(.wlan.text.recv_func_prehandle)
+		*(.wlan.text.recv_func_posthandle)
+		*(.wlan.text.validate_recv_frame)
+		*(.wlan.text.check_indicate_seq)
+		*(.wlan.text.enqueue_reorder_recvframe)
+		*(.wlan.text.recv_indicatepkts_in_order)
+		*(.wlan.text.recv_indicatepkt_reorder)
+		*(.wlan.text.process_recv_indicatepkts)
+		*(.wlan.text.amsdu_to_msdu)
+		*(.wlan.text.rtw_recv_indicatepkt)
+		*(.wlan.text.rltk_netif_rx)
+
 		*(.itcm.text*)
 		*(.haac.text*)
 		*(.faac.text*)
