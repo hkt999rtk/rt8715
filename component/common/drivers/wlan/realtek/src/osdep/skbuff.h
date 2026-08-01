@@ -66,6 +66,7 @@ struct sk_buff *dev_alloc_rx_skb(unsigned int length, unsigned int reserve_len);
 #define dev_alloc_skb	dev_alloc_tx_skb
 #endif
 void kfree_skb(struct sk_buff *skb);
+struct sk_buff *skb_clone(struct sk_buff *skb, int gfp_mask);
 
 
 #endif //__SKBUFF_H__

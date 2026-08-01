@@ -78,6 +78,368 @@
 
 struct netif eth_netif;
 
+#if CONFIG_WLAN && CONFIG_WLAN_RX_ZERO_COPY && LWIP_SUPPORT_CUSTOM_PBUF
+
+#define WLAN_RX_ZC_MAGIC       0x5A435250UL
+#define WLAN_RX_ZC_REPORT_MS   5000U
+#define WLAN_RX_ZC_REPORT_PROBE 256U
+#define WLAN_RX_ZC_WORD_BITS   32U
+#define WLAN_RX_ZC_WORDS       \
+	((WLAN_RX_ZERO_COPY_POOL_SIZE + WLAN_RX_ZC_WORD_BITS - 1U) / \
+	 WLAN_RX_ZC_WORD_BITS)
+
+struct wlan_rx_custom_pbuf {
+	struct pbuf_custom custom;
+	void *rx_ref;
+	u32_t magic;
+};
+
+struct wlan_rx_zc_stats {
+	u32_t ops;
+	u32_t bytes;
+	u32_t fallback_small;
+	u32_t fallback_pool;
+	u32_t fallback_clone;
+	u32_t fallback_invalid;
+	u32_t outstanding;
+	u32_t peak;
+	u32_t report_probe;
+	u32_t last_report_ms;
+};
+
+static struct wlan_rx_zc_stats g_wlan_rx_zc_stats;
+static u8_t g_wlan_rx_zc_pool_initialized;
+static u8_t g_wlan_rx_zc_selftest_state;
+static u8_t g_wlan_rx_zc_quiesced;
+static u32_t g_wlan_rx_zc_used[WLAN_RX_ZC_WORDS];
+/* Allocated once from the DRAM-backed system heap; do not spend scarce ITCM. */
+static struct wlan_rx_custom_pbuf *g_wlan_rx_zc_pool;
+
+static void wlan_rx_zc_wrapper_free(struct wlan_rx_custom_pbuf *wrapper);
+
+static void wlan_rx_zc_pool_init(void)
+{
+	if (g_wlan_rx_zc_pool_initialized) {
+		return;
+	}
+
+	/* ethernetif_init() is serialized during network bring-up. */
+	g_wlan_rx_zc_pool_initialized = 1;
+	g_wlan_rx_zc_pool = (struct wlan_rx_custom_pbuf *)
+		rtw_zmalloc(sizeof(*g_wlan_rx_zc_pool) *
+			    WLAN_RX_ZERO_COPY_POOL_SIZE);
+	g_wlan_rx_zc_stats.last_report_ms = sys_now();
+	if (g_wlan_rx_zc_pool == NULL) {
+		printf("[WLAN_RX_ZC] wrapper pool allocation failed; copy fallback only\n");
+	} else {
+		printf("[WLAN_RX_ZC] enabled min_len=%u pool=%u\n",
+		       (unsigned int)WLAN_RX_ZERO_COPY_MIN_LEN,
+		       (unsigned int)WLAN_RX_ZERO_COPY_POOL_SIZE);
+	}
+}
+
+static void wlan_rx_zc_free(struct pbuf *p)
+{
+	struct wlan_rx_custom_pbuf *wrapper =
+		(struct wlan_rx_custom_pbuf *)p;
+	void *rx_ref;
+
+	if (wrapper->magic != WLAN_RX_ZC_MAGIC || wrapper->rx_ref == NULL) {
+		printf("[WLAN_RX_ZC][ERROR] invalid custom pbuf release\n");
+		return;
+	}
+
+	rx_ref = wrapper->rx_ref;
+	wrapper->rx_ref = NULL;
+	wrapper->magic = 0;
+	rltk_wlan_rx_ref_release(rx_ref);
+	wlan_rx_zc_wrapper_free(wrapper);
+}
+
+static struct wlan_rx_custom_pbuf *wlan_rx_zc_wrapper_alloc(void)
+{
+	struct wlan_rx_custom_pbuf *wrapper = NULL;
+	u32_t word;
+	u32_t bit;
+	u32_t slot;
+	SYS_ARCH_DECL_PROTECT(old_level);
+
+	SYS_ARCH_PROTECT(old_level);
+	if (g_wlan_rx_zc_pool == NULL || g_wlan_rx_zc_quiesced) {
+		SYS_ARCH_UNPROTECT(old_level);
+		return NULL;
+	}
+	for (word = 0; word < WLAN_RX_ZC_WORDS && wrapper == NULL; word++) {
+		if (g_wlan_rx_zc_used[word] == 0xFFFFFFFFUL) {
+			continue;
+		}
+		for (bit = 0; bit < WLAN_RX_ZC_WORD_BITS; bit++) {
+			u32_t mask = 1UL << bit;
+
+			slot = word * WLAN_RX_ZC_WORD_BITS + bit;
+			if (slot >= WLAN_RX_ZERO_COPY_POOL_SIZE) {
+				break;
+			}
+			if ((g_wlan_rx_zc_used[word] & mask) == 0U) {
+				g_wlan_rx_zc_used[word] |= mask;
+				wrapper = &g_wlan_rx_zc_pool[slot];
+				break;
+			}
+		}
+	}
+	if (wrapper != NULL) {
+		g_wlan_rx_zc_stats.outstanding++;
+		if (g_wlan_rx_zc_stats.outstanding > g_wlan_rx_zc_stats.peak) {
+			g_wlan_rx_zc_stats.peak = g_wlan_rx_zc_stats.outstanding;
+		}
+	}
+	SYS_ARCH_UNPROTECT(old_level);
+	return wrapper;
+}
+
+static void wlan_rx_zc_wrapper_free(struct wlan_rx_custom_pbuf *wrapper)
+{
+	unsigned int slot = (unsigned int)(wrapper - g_wlan_rx_zc_pool);
+	u32_t word = slot / WLAN_RX_ZC_WORD_BITS;
+	u32_t mask = 1UL << (slot % WLAN_RX_ZC_WORD_BITS);
+	SYS_ARCH_DECL_PROTECT(old_level);
+
+	SYS_ARCH_PROTECT(old_level);
+	if (slot >= WLAN_RX_ZERO_COPY_POOL_SIZE ||
+	    (g_wlan_rx_zc_used[word] & mask) == 0U) {
+		SYS_ARCH_UNPROTECT(old_level);
+		printf("[WLAN_RX_ZC][ERROR] invalid wrapper release\n");
+		return;
+	}
+	g_wlan_rx_zc_used[word] &= ~mask;
+	if (g_wlan_rx_zc_stats.outstanding > 0U) {
+		g_wlan_rx_zc_stats.outstanding--;
+	}
+	SYS_ARCH_UNPROTECT(old_level);
+}
+
+static void wlan_rx_zc_report(void)
+{
+#if WLAN_RX_ZERO_COPY_STATS
+	u32_t now;
+	u32_t elapsed;
+
+	/* Avoid a timer read for every RX packet on this hot path. */
+	if (++g_wlan_rx_zc_stats.report_probe < WLAN_RX_ZC_REPORT_PROBE) {
+		return;
+	}
+	g_wlan_rx_zc_stats.report_probe = 0;
+	now = sys_now();
+	elapsed = now - g_wlan_rx_zc_stats.last_report_ms;
+
+	if (elapsed >= WLAN_RX_ZC_REPORT_MS) {
+		printf("[WLAN_RX_ZC] window_ms=%u zero_copy=%u/%uB "
+		       "outstanding=%u peak=%u fallback small=%u pool=%u "
+		       "clone=%u invalid=%u\n",
+		       (unsigned int)elapsed,
+		       (unsigned int)g_wlan_rx_zc_stats.ops,
+		       (unsigned int)g_wlan_rx_zc_stats.bytes,
+		       (unsigned int)g_wlan_rx_zc_stats.outstanding,
+		       (unsigned int)g_wlan_rx_zc_stats.peak,
+		       (unsigned int)g_wlan_rx_zc_stats.fallback_small,
+		       (unsigned int)g_wlan_rx_zc_stats.fallback_pool,
+		       (unsigned int)g_wlan_rx_zc_stats.fallback_clone,
+		       (unsigned int)g_wlan_rx_zc_stats.fallback_invalid);
+		g_wlan_rx_zc_stats.ops = 0;
+		g_wlan_rx_zc_stats.bytes = 0;
+		g_wlan_rx_zc_stats.fallback_small = 0;
+		g_wlan_rx_zc_stats.fallback_pool = 0;
+		g_wlan_rx_zc_stats.fallback_clone = 0;
+		g_wlan_rx_zc_stats.fallback_invalid = 0;
+		g_wlan_rx_zc_stats.peak = g_wlan_rx_zc_stats.outstanding;
+		g_wlan_rx_zc_stats.last_report_ms = now;
+	}
+#endif
+}
+
+static struct pbuf *wlan_rx_zc_try(int idx, int total_len)
+{
+	struct wlan_rx_custom_pbuf *wrapper;
+	struct pbuf *p;
+	void *rx_ref;
+	void *payload;
+	int ret;
+#if WLAN_RX_ZERO_COPY_SELFTEST
+	u8_t selftest_state;
+	int run_selftest = 0;
+	SYS_ARCH_DECL_PROTECT(selftest_level);
+#endif
+
+	if ((unsigned int)total_len < WLAN_RX_ZERO_COPY_MIN_LEN) {
+		g_wlan_rx_zc_stats.fallback_small++;
+		return NULL;
+	}
+
+#if WLAN_RX_ZERO_COPY_SELFTEST
+	SYS_ARCH_PROTECT(selftest_level);
+	selftest_state = g_wlan_rx_zc_selftest_state;
+	SYS_ARCH_UNPROTECT(selftest_level);
+	if (selftest_state == 2U) {
+		g_wlan_rx_zc_stats.fallback_invalid++;
+		return NULL;
+	}
+#endif
+
+	/*
+	 * Reserve/count before the clone self-test as well as real acquisition.
+	 * This makes wifi_off() wait for every skb-pool user that raced with its
+	 * quiesce gate, including the very first diagnostic packet.
+	 */
+	wrapper = wlan_rx_zc_wrapper_alloc();
+	if (wrapper == NULL) {
+		g_wlan_rx_zc_stats.fallback_pool++;
+		return NULL;
+	}
+
+#if WLAN_RX_ZERO_COPY_SELFTEST
+	/* Only one WLAN interface may operate on the shared skb-pool test. */
+	SYS_ARCH_PROTECT(selftest_level);
+	if (g_wlan_rx_zc_selftest_state == 0U) {
+		g_wlan_rx_zc_selftest_state = 3U; /* test in progress */
+		run_selftest = 1;
+	}
+	selftest_state = g_wlan_rx_zc_selftest_state;
+	SYS_ARCH_UNPROTECT(selftest_level);
+
+	if (run_selftest) {
+		ret = rltk_wlan_rx_ref_selftest();
+		SYS_ARCH_PROTECT(selftest_level);
+		if (ret == 0) {
+			g_wlan_rx_zc_selftest_state = 1U;
+		} else if (ret == -1) {
+			g_wlan_rx_zc_selftest_state = 2U;
+		} else {
+			g_wlan_rx_zc_selftest_state = 0U; /* transient; retry later */
+		}
+		SYS_ARCH_UNPROTECT(selftest_level);
+
+		if (ret == 0) {
+			printf("[WLAN_RX_ZC][SELFTEST] clone lifetime PASS\n");
+		} else if (ret == -1) {
+			printf("[WLAN_RX_ZC][SELFTEST] clone lifetime FAIL; "
+			       "copy fallback only\n");
+			g_wlan_rx_zc_stats.fallback_invalid++;
+			wlan_rx_zc_wrapper_free(wrapper);
+			return NULL;
+		} else {
+			g_wlan_rx_zc_stats.fallback_clone++;
+			wlan_rx_zc_wrapper_free(wrapper);
+			return NULL;
+		}
+	} else if (selftest_state == 3U) {
+		/* Another interface is testing; copy this packet without waiting. */
+		g_wlan_rx_zc_stats.fallback_clone++;
+		wlan_rx_zc_wrapper_free(wrapper);
+		return NULL;
+	}
+	if (selftest_state == 2U) {
+		g_wlan_rx_zc_stats.fallback_invalid++;
+		wlan_rx_zc_wrapper_free(wrapper);
+		return NULL;
+	}
+#endif
+
+	ret = rltk_wlan_rx_ref_acquire(idx, (unsigned int)total_len,
+				       &rx_ref, &payload);
+	if (ret != 0) {
+		if (ret == -2) {
+			g_wlan_rx_zc_stats.fallback_clone++;
+		} else {
+			g_wlan_rx_zc_stats.fallback_invalid++;
+		}
+		wlan_rx_zc_wrapper_free(wrapper);
+		return NULL;
+	}
+
+	wrapper->custom.custom_free_function = wlan_rx_zc_free;
+	wrapper->rx_ref = rx_ref;
+	wrapper->magic = WLAN_RX_ZC_MAGIC;
+	p = pbuf_alloced_custom(PBUF_RAW, (u16_t)total_len, PBUF_REF,
+				&wrapper->custom, payload, (u16_t)total_len);
+	if (p == NULL) {
+		rltk_wlan_rx_ref_release(rx_ref);
+		wrapper->rx_ref = NULL;
+		wrapper->magic = 0;
+		g_wlan_rx_zc_stats.fallback_invalid++;
+		wlan_rx_zc_wrapper_free(wrapper);
+		return NULL;
+	}
+
+	g_wlan_rx_zc_stats.ops++;
+	g_wlan_rx_zc_stats.bytes += (u32_t)total_len;
+	return p;
+}
+
+#endif /* CONFIG_WLAN && CONFIG_WLAN_RX_ZERO_COPY && LWIP_SUPPORT_CUSTOM_PBUF */
+
+int ethernetif_wlan_rx_zc_quiesce(unsigned int timeout_ms)
+{
+#if CONFIG_WLAN && CONFIG_WLAN_RX_ZERO_COPY && LWIP_SUPPORT_CUSTOM_PBUF
+	u32_t start_ms = sys_now();
+	u32_t outstanding;
+	SYS_ARCH_DECL_PROTECT(old_level);
+
+	/*
+	 * Serialize the route gate with wrapper allocation.  Once this flag is
+	 * visible, new large frames use the normal copy path, while existing TCP
+	 * consumers can continue releasing their retained skb clones.  The wait
+	 * sleeps, so Wi-Fi shutdown does not burn CPU while TCP drains.
+	 */
+	SYS_ARCH_PROTECT(old_level);
+	g_wlan_rx_zc_quiesced = 1U;
+	outstanding = g_wlan_rx_zc_stats.outstanding;
+	SYS_ARCH_UNPROTECT(old_level);
+
+	while (outstanding != 0U) {
+		if ((u32_t)(sys_now() - start_ms) >= (u32_t)timeout_ms) {
+			SYS_ARCH_PROTECT(old_level);
+			outstanding = g_wlan_rx_zc_stats.outstanding;
+			if (outstanding == 0U) {
+				SYS_ARCH_UNPROTECT(old_level);
+				break;
+			}
+			g_wlan_rx_zc_quiesced = 0U;
+			SYS_ARCH_UNPROTECT(old_level);
+			printf("[WLAN_RX_ZC][ERROR] drain timeout outstanding=%u; "
+			       "Wi-Fi shutdown aborted\n",
+			       (unsigned int)outstanding);
+			return -1;
+		}
+
+		rtw_msleep_os(10U);
+		SYS_ARCH_PROTECT(old_level);
+		outstanding = g_wlan_rx_zc_stats.outstanding;
+		SYS_ARCH_UNPROTECT(old_level);
+	}
+
+	printf("[WLAN_RX_ZC] quiesced; outstanding=0\n");
+#else
+	(void)timeout_ms;
+#endif
+	return 0;
+}
+
+void ethernetif_wlan_rx_zc_resume(void)
+{
+#if CONFIG_WLAN && CONFIG_WLAN_RX_ZERO_COPY && LWIP_SUPPORT_CUSTOM_PBUF
+	u8_t was_quiesced;
+	SYS_ARCH_DECL_PROTECT(old_level);
+
+	SYS_ARCH_PROTECT(old_level);
+	was_quiesced = g_wlan_rx_zc_quiesced;
+	g_wlan_rx_zc_quiesced = 0U;
+	SYS_ARCH_UNPROTECT(old_level);
+	if (was_quiesced) {
+		printf("[WLAN_RX_ZC] resumed\n");
+	}
+#endif
+}
+
 
 static void arp_timer(void *arg);
 
@@ -413,6 +775,10 @@ err_t ethernetif_init(struct netif *netif)
 {
 	LWIP_ASSERT("netif != NULL", (netif != NULL));
 
+#if CONFIG_WLAN && CONFIG_WLAN_RX_ZERO_COPY && LWIP_SUPPORT_CUSTOM_PBUF
+	wlan_rx_zc_pool_init();
+#endif
+
 #if LWIP_NETIF_HOSTNAME
 	if (netif->name[1] == '0') {
 		netif->hostname = "lwip0";
@@ -501,6 +867,18 @@ void ethernetif_recv(struct netif *netif, int total_len)
 	struct eth_drv_sg sg_list[MAX_ETH_DRV_SG];
 	struct pbuf *p, *q;
 	int sg_len = 0;
+	int idx = netif_get_idx(netif);
+
+#if CONFIG_WLAN && CONFIG_WLAN_RX_ZERO_COPY && LWIP_SUPPORT_CUSTOM_PBUF
+	wlan_rx_zc_report();
+	p = wlan_rx_zc_try(idx, total_len);
+	if (p != NULL) {
+		if (ERR_OK != netif->input(p, netif)) {
+			pbuf_free(p);
+		}
+		return;
+	}
+#endif
 
 	// Allocate buffer to store received packet
 	p = pbuf_alloc(PBUF_RAW, total_len, PBUF_POOL);
@@ -513,7 +891,7 @@ void ethernetif_recv(struct netif *netif, int total_len)
 		sg_list[sg_len].buf = (unsigned int) q->payload;
 		sg_list[sg_len++].len = q->len;
 	}
-	if (rltk_wlan_recv(netif_get_idx(netif), sg_list, sg_len) != 0) {
+	if (rltk_wlan_recv(idx, sg_list, sg_len) != 0) {
 		/* A timed-out GDMA destination may contain only part of the frame. */
 		pbuf_free(p);
 		return;

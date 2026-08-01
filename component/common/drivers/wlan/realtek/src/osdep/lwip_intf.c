@@ -674,6 +674,119 @@ int rltk_wlan_recv(int idx, struct eth_drv_sg *sg_list, int sg_len)
 #endif
 }
 
+int rltk_wlan_rx_ref_acquire(int idx, unsigned int expected_len,
+			     void **handle, void **payload)
+{
+#if (CONFIG_LWIP_LAYER == 1)
+	struct sk_buff *skb;
+	struct sk_buff *clone;
+
+	if (handle == NULL || payload == NULL || idx < 0 || expected_len == 0U) {
+		return -1;
+	}
+	*handle = NULL;
+	*payload = NULL;
+
+	skb = rltk_wlan_get_recv_skb(idx);
+	if (skb == NULL || skb->head == NULL || skb->data == NULL ||
+	    skb->tail == NULL || skb->end == NULL || skb->data < skb->head ||
+	    skb->tail < skb->data || skb->end < skb->tail ||
+	    expected_len > skb->len ||
+	    expected_len > (unsigned int)(skb->tail - skb->data)) {
+		return -1;
+	}
+
+	/*
+	 * rtl8195b_recv_tasklet() frees its skb after netif_rx() returns.  A
+	 * shallow skb_clone() increments the closed driver's data-buffer
+	 * reference count, so a custom lwIP pbuf can retain the payload without
+	 * copying it.  Never expose the original skb: its descriptor is owned by
+	 * the receive tasklet and is invalid as soon as this callback returns.
+	 */
+	clone = skb_clone(skb, 0);
+	if (clone == NULL) {
+		return -2;
+	}
+	if (clone->data == NULL || clone->len < expected_len ||
+	    clone->tail < clone->data ||
+	    expected_len > (unsigned int)(clone->tail - clone->data)) {
+		kfree_skb(clone);
+		return -1;
+	}
+
+	*handle = clone;
+	*payload = clone->data;
+	return 0;
+#else
+	(void)idx;
+	(void)expected_len;
+	(void)handle;
+	(void)payload;
+	return -1;
+#endif
+}
+
+void rltk_wlan_rx_ref_release(void *handle)
+{
+#if (CONFIG_LWIP_LAYER == 1)
+	if (handle != NULL) {
+		/* kfree_skb() drops the shared data reference under its own lock. */
+		kfree_skb((struct sk_buff *)handle);
+	}
+#else
+	(void)handle;
+#endif
+}
+
+int rltk_wlan_rx_ref_selftest(void)
+{
+#if (CONFIG_LWIP_LAYER == 1)
+	struct sk_buff *original;
+	struct sk_buff *clone;
+	unsigned char *data;
+	unsigned int i;
+	int ret = 0;
+
+	/*
+	 * Run only after real RX traffic starts, when the WLAN skb pools are known
+	 * to be initialized.  Freeing the original before checking the clone is
+	 * the essential ownership test: it proves the backing data, not merely the
+	 * descriptor, remains referenced.  Allocation failure is transient and
+	 * asks the caller to retry later rather than disabling zero-copy.
+	 */
+	original = rltk_wlan_alloc_skb(64U);
+	if (original == NULL) {
+		return -2;
+	}
+	data = skb_put(original, 64U);
+	for (i = 0; i < 64U; i++) {
+		data[i] = (unsigned char)(0xA5U ^ i);
+	}
+
+	clone = skb_clone(original, 0);
+	if (clone == NULL) {
+		kfree_skb(original);
+		return -2;
+	}
+	kfree_skb(original);
+
+	if (clone->data == NULL || clone->len != 64U) {
+		ret = -1;
+	} else {
+		for (i = 0; i < 64U; i++) {
+			if (clone->data[i] != (unsigned char)(0xA5U ^ i)) {
+				ret = -1;
+				break;
+			}
+		}
+	}
+	kfree_skb(clone);
+	return ret;
+#else
+	return -1;
+#endif
+}
+
 int netif_is_valid_IP(int idx, unsigned char *ip_dest)
 {
 #if defined(CONFIG_MBED_ENABLED)

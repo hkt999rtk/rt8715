@@ -5,6 +5,10 @@
 #include "lwip/err.h"
 #include "lwip/netif.h"
 
+#ifndef WLAN_RX_ZERO_COPY_DRAIN_TIMEOUT_MS
+#define WLAN_RX_ZERO_COPY_DRAIN_TIMEOUT_MS 5000U
+#endif
+
 //----- ------------------------------------------------------------------
 // Ethernet Buffer
 //----- ------------------------------------------------------------------
@@ -18,6 +22,13 @@ struct eth_drv_sg {
 
 void ethernetif_recv(struct netif *netif, int total_len);
 void ethernetif_mii_recv(u8 *buf, u32 total_len);
+/*
+ * Stop issuing WLAN RX zero-copy references and wait for all references held
+ * by lwIP to drain before the closed WLAN driver reinitializes its skb pools.
+ * A failed quiesce automatically resumes normal zero-copy routing.
+ */
+int ethernetif_wlan_rx_zc_quiesce(unsigned int timeout_ms);
+void ethernetif_wlan_rx_zc_resume(void);
 extern struct netif eth_netif;
 err_t ethernetif_init(struct netif *netif);
 err_t ethernetif_mii_init(struct netif *netif);

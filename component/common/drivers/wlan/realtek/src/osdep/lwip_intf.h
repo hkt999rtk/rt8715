@@ -51,6 +51,15 @@ void rltk_wlan_set_netif_info(int idx_wlan, void * dev, unsigned char * dev_addr
 void rltk_wlan_send_skb(int idx, struct sk_buff *skb);	//struct sk_buff as defined above comment line
 int rltk_wlan_send(int idx, struct eth_drv_sg *sg_list, int sg_len, int total_len);
 int rltk_wlan_recv(int idx, struct eth_drv_sg *sg_list, int sg_len);
+/*
+ * Hold the closed WLAN driver's current RX skb after its receive callback
+ * returns.  The handle is deliberately opaque to keep skb ownership rules out
+ * of lwIP.  A successful acquire must be paired with exactly one release.
+ */
+int rltk_wlan_rx_ref_acquire(int idx, unsigned int expected_len,
+			     void **handle, void **payload);
+void rltk_wlan_rx_ref_release(void *handle);
+int rltk_wlan_rx_ref_selftest(void);
 #if defined(CONFIG_PLATFORM_8195BHP)
 int rltk_network_gdma_copy_tx(void *dst, const void *src, unsigned int len,
 			      const void *allocation_end);

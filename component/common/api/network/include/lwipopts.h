@@ -338,6 +338,19 @@ extern unsigned int sys_now(void);
 #undef PBUF_POOL_SIZE
 #define PBUF_POOL_SIZE 1000
 
+/*
+ * Keep large WLAN RX frames in the driver's skb storage until lwIP releases
+ * them.  This removes the skb-to-pbuf payload copy.  The fixed wrapper limit
+ * prevents delayed TCP consumers from exhausting the WLAN skb data pool;
+ * allocation/clone failures transparently use the existing copy path.
+ */
+#define CONFIG_WLAN_RX_ZERO_COPY       1
+#define WLAN_RX_ZERO_COPY_MIN_LEN      1024
+#define WLAN_RX_ZERO_COPY_POOL_SIZE    256
+#define WLAN_RX_ZERO_COPY_STATS        1
+#define WLAN_RX_ZERO_COPY_SELFTEST     1
+#define WLAN_RX_ZERO_COPY_DRAIN_TIMEOUT_MS 5000
+
 #undef MEMP_NUM_NETBUF
 #define MEMP_NUM_NETBUF 80
 

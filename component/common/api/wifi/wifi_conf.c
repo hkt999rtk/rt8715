@@ -13,6 +13,9 @@
 #include <wifi/wifi_ind.h>
 #include <osdep_service.h>
 #include <device_lock.h>
+#if CONFIG_LWIP_LAYER && !defined(CONFIG_MBED_ENABLED) && !defined(CONFIG_PLATFOMR_CUSTOMER_RTOS)
+#include "ethernetif.h"
+#endif
 
 #if CONFIG_EXAMPLE_WLAN_FAST_CONNECT || CONFIG_JD_SMART
 #include "wlan_fast_connect/example_wlan_fast_connect.h"
@@ -1434,6 +1437,7 @@ int wifi_on(rtw_mode_t mode)
 	#endif
 
 	#if CONFIG_LWIP_LAYER && !defined(CONFIG_MBED_ENABLED) && !defined(CONFIG_PLATFOMR_CUSTOMER_RTOS)
+	ethernetif_wlan_rx_zc_resume();
 	wifi_diag_dump_all("wifi_on exit");
 	#endif
 	
@@ -1454,6 +1458,16 @@ int wifi_off(void)
 		RTW_API_INFO("\n\rWIFI is not running");
 		return 0;
 	}
+#if CONFIG_LWIP_LAYER && !defined(CONFIG_MBED_ENABLED) && !defined(CONFIG_PLATFOMR_CUSTOMER_RTOS)
+	/*
+	 * The WLAN skb pools are rebuilt by the next wifi_on().  Do not deinit
+	 * while lwIP still owns cloned RX buffers from the current pool.
+	 */
+	if (ethernetif_wlan_rx_zc_quiesce(
+		WLAN_RX_ZERO_COPY_DRAIN_TIMEOUT_MS) != 0) {
+		return RTW_ERROR;
+	}
+#endif
 #if CONFIG_LWIP_LAYER
 #if defined(CONFIG_MBED_ENABLED) || defined(CONFIG_PLATFOMR_CUSTOMER_RTOS)
 	//TODO
@@ -1506,6 +1520,13 @@ int wifi_off(void)
 
 int wifi_off_fastly(void)
 {
+#if CONFIG_LWIP_LAYER && !defined(CONFIG_MBED_ENABLED) && !defined(CONFIG_PLATFOMR_CUSTOMER_RTOS)
+	/* Fast deinit must obey the same skb ownership rule as normal deinit. */
+	if (ethernetif_wlan_rx_zc_quiesce(
+		WLAN_RX_ZERO_COPY_DRAIN_TIMEOUT_MS) != 0) {
+		return RTW_ERROR;
+	}
+#endif
 #if CONFIG_LWIP_LAYER
 #if defined(CONFIG_MBED_ENABLED) || defined(CONFIG_PLATFOMR_CUSTOMER_RTOS)
 	//TODO
