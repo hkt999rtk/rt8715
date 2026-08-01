@@ -53,7 +53,7 @@ extern struct netif xnetif[];			//LWIP netif
 #endif
 
 #ifndef CONFIG_WLAN_RX_RING_GDMA_VERIFY
-#define CONFIG_WLAN_RX_RING_GDMA_VERIFY 1
+#define CONFIG_WLAN_RX_RING_GDMA_VERIFY 0
 #endif
 
 #ifndef NET_GDMA_COPY_THRESHOLD
