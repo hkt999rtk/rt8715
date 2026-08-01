@@ -81,6 +81,10 @@ typedef struct net_gdma_context_s {
 	u8 tested;
 	volatile u8 busy;
 	volatile u8 in_flight;
+	volatile u8 irq_error;
+	volatile u32 irq_raw_error;
+	u32 dma_errors;
+	volatile u32 spurious_irqs;
 	u32 dma_ops;
 	u32 dma_bytes;
 	u32 cpu_ops;
@@ -97,34 +101,73 @@ static net_gdma_context_t g_net_tx_gdma;
 static net_gdma_context_t g_net_socket_rx_gdma;
 static u8 g_net_gdma_initialized;
 
+static void net_gdma_done_from_isr(net_gdma_context_t *ctx)
+{
+	phal_gdma_adaptor_t adaptor = &ctx->dma.hal_gdma_adaptor;
+	u32 channel_mask;
+
+	/*
+	 * The SDK memcpy HAL originally enables TransferType and ErrType with one
+	 * callback, so a caller cannot tell success from an error interrupt.  The
+	 * network setup masks ErrType (an error-only transfer is handled by timeout)
+	 * and this callback also samples the raw error bit for the case where the
+	 * controller reports transfer-complete and error together.
+	 *
+	 * Ignore callbacks outside the active wait.  In particular, this prevents a
+	 * completion left over from an aborted transfer from creating a semaphore
+	 * token that could satisfy the next transfer.
+	 */
+	if (!ctx->in_flight || ctx->done == NULL || adaptor->gdma_dev == NULL) {
+		ctx->spurious_irqs++;
+		return;
+	}
+
+	channel_mask = 1U << adaptor->ch_num;
+	ctx->irq_raw_error = adaptor->gdma_dev->raw_err & channel_mask;
+	if (ctx->irq_raw_error != 0U) {
+		ctx->irq_error = 1;
+	}
+	ctx->in_flight = 0;
+	rtw_up_sema_from_isr(&ctx->done);
+}
+
 static void net_gdma_rx_done(uint32_t id)
 {
 	(void)id;
-	if (g_net_rx_gdma.done != NULL) {
-		rtw_up_sema_from_isr(&g_net_rx_gdma.done);
-	}
+	net_gdma_done_from_isr(&g_net_rx_gdma);
 }
 
 static void net_gdma_tx_done(uint32_t id)
 {
 	(void)id;
-	if (g_net_tx_gdma.done != NULL) {
-		rtw_up_sema_from_isr(&g_net_tx_gdma.done);
-	}
+	net_gdma_done_from_isr(&g_net_tx_gdma);
 }
 
 static void net_gdma_socket_rx_done(uint32_t id)
 {
 	(void)id;
-	if (g_net_socket_rx_gdma.done != NULL) {
-		rtw_up_sema_from_isr(&g_net_socket_rx_gdma.done);
-	}
+	net_gdma_done_from_isr(&g_net_socket_rx_gdma);
 }
 
 static void net_gdma_drain_completion(net_gdma_context_t *ctx)
 {
 	while (rtw_down_timeout_sema(&ctx->done, 0) == _TRUE) {
 	}
+}
+
+static void net_gdma_configure_completion_irq(net_gdma_context_t *ctx)
+{
+	phal_gdma_adaptor_t adaptor = &ctx->dma.hal_gdma_adaptor;
+
+	/*
+	 * Never let the ROM memcpy handler deliver an indistinguishable error IRQ
+	 * through the completion callback.  Error-only transfers remain pending and
+	 * are diagnosed from raw_err by the bounded timeout path below.
+	 */
+	hal_gdma_isr_dis(adaptor);
+	hal_gdma_clean_pending_isr(adaptor);
+	adaptor->gdma_isr_type = TransferType;
+	hal_gdma_isr_en(adaptor);
 }
 
 static void net_gdma_init_context(net_gdma_context_t *ctx,
@@ -152,6 +195,7 @@ static void net_gdma_init_context(net_gdma_context_t *ctx,
 		rtw_free_sema(&ctx->done);
 		return;
 	}
+	net_gdma_configure_completion_irq(ctx);
 
 	ctx->available = 1;
 	ctx->last_report_tick = rtw_get_current_time();
@@ -213,27 +257,49 @@ static int net_gdma_destination_safe(const void *dst, u32 len,
 static int net_gdma_wait(net_gdma_context_t *ctx)
 {
 	if (rtw_down_timeout_sema(&ctx->done, NET_GDMA_TIMEOUT_MS) == _TRUE) {
-		ctx->in_flight = 0;
-		return 0;
+		if (!ctx->irq_error) {
+			return 0;
+		}
+		ctx->dma_errors++;
+		printf("[NET_GDMA][ERROR] %s DMA error gdma=%u channel=%u raw_err=0x%02x\n",
+		       ctx->name,
+		       (unsigned int)ctx->dma.hal_gdma_adaptor.gdma_index,
+		       (unsigned int)ctx->dma.hal_gdma_adaptor.ch_num,
+		       (unsigned int)ctx->irq_raw_error);
+	} else {
+		u32 channel_mask = 1U << ctx->dma.hal_gdma_adaptor.ch_num;
+		u32 raw_error = ctx->dma.hal_gdma_adaptor.gdma_dev->raw_err & channel_mask;
+
+		ctx->timeouts++;
+		printf("[NET_GDMA][ERROR] %s %s after %u ms gdma=%u channel=%u "
+		       "raw_err=0x%02x\n",
+		       ctx->name, raw_error ? "DMA error timeout" : "timeout",
+		       (unsigned int)NET_GDMA_TIMEOUT_MS,
+		       (unsigned int)ctx->dma.hal_gdma_adaptor.gdma_index,
+		       (unsigned int)ctx->dma.hal_gdma_adaptor.ch_num,
+		       (unsigned int)raw_error);
 	}
 
-	ctx->timeouts++;
-	printf("[NET_GDMA][ERROR] %s timeout after %u ms gdma=%u channel=%u\n",
-	       ctx->name, (unsigned int)NET_GDMA_TIMEOUT_MS,
-	       (unsigned int)ctx->dma.hal_gdma_adaptor.gdma_index,
-	       (unsigned int)ctx->dma.hal_gdma_adaptor.ch_num);
-
-	/* Stop DMA before its destination is released or reused. */
-	hal_gdma_abort(&ctx->dma.hal_gdma_adaptor);
-	dma_memcpy_deinit(&ctx->dma);
+	/*
+	 * Mask and invalidate the active generation before aborting.  Together with
+	 * the callback's in_flight check, this prevents a late IRQ from satisfying
+	 * the semaphore wait of a later transfer.
+	 */
+	hal_gdma_isr_dis(&ctx->dma.hal_gdma_adaptor);
 	ctx->in_flight = 0;
+	hal_gdma_abort(&ctx->dma.hal_gdma_adaptor);
+	hal_gdma_clean_pending_isr(&ctx->dma.hal_gdma_adaptor);
+	dma_memcpy_deinit(&ctx->dma);
 	ctx->available = 0;
 	ctx->tested = 0;
+	ctx->irq_error = 0;
+	ctx->irq_raw_error = 0;
 	net_gdma_drain_completion(ctx);
 
 	/* Try to restore this direction for the next packet. */
 	dma_memcpy_init(&ctx->dma, ctx->callback, 0);
 	if (ctx->dma.hal_gdma_adaptor.have_chnl) {
+		net_gdma_configure_completion_irq(ctx);
 		ctx->available = 1;
 		printf("[NET_GDMA] %s channel recovered; self-test required\n", ctx->name);
 	} else {
@@ -355,13 +421,15 @@ static void net_gdma_account(net_gdma_context_t *ctx, int used_dma, u32 len)
 	}
 
 	printf("[NET_GDMA][%s] window_ms=%u dma=%u/%uB cpu=%u/%uB "
-	       "align_fallback=%u reentry=%u timeout=%u\n",
+	       "align_fallback=%u reentry=%u timeout=%u dma_error=%u late_irq=%u\n",
 	       ctx->name, (unsigned int)elapsed_ms,
 	       (unsigned int)ctx->dma_ops, (unsigned int)ctx->dma_bytes,
 	       (unsigned int)ctx->cpu_ops, (unsigned int)ctx->cpu_bytes,
 	       (unsigned int)ctx->alignment_fallbacks,
 	       (unsigned int)ctx->reentry_fallbacks,
-	       (unsigned int)ctx->timeouts);
+	       (unsigned int)ctx->timeouts,
+	       (unsigned int)ctx->dma_errors,
+	       (unsigned int)ctx->spurious_irqs);
 
 	ctx->dma_ops = 0;
 	ctx->dma_bytes = 0;
@@ -370,6 +438,8 @@ static void net_gdma_account(net_gdma_context_t *ctx, int used_dma, u32 len)
 	ctx->alignment_fallbacks = 0;
 	ctx->reentry_fallbacks = 0;
 	ctx->timeouts = 0;
+	ctx->dma_errors = 0;
+	ctx->spurious_irqs = 0;
 	ctx->last_report_tick = now;
 #else
 	(void)ctx;
@@ -429,6 +499,9 @@ static int net_gdma_copy(net_gdma_context_t *ctx, void *dst, const void *src,
 	}
 
 	net_gdma_drain_completion(ctx);
+	hal_gdma_clean_pending_isr(&ctx->dma.hal_gdma_adaptor);
+	ctx->irq_error = 0;
+	ctx->irq_raw_error = 0;
 	ctx->in_flight = 1;
 	dma_memcpy(&ctx->dma, dst, (void *)src, len);
 	if (net_gdma_wait(ctx) != 0) {
