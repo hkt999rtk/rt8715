@@ -774,6 +774,8 @@ GCCFLAGS += -nostartfiles -nodefaultlibs -nostdlib -fstack-usage -fdata-sections
 GCCFLAGS += -D__thumb2__ -DCONFIG_PLATFORM_8195B -DCONFIG_PLATFORM_8195BHP -D__FPU_PRESENT -D__ARM_ARCH_7M__=0 -D__ARM_ARCH_7EM__=0 -D__ARM_ARCH_8M_MAIN__=1 -D__ARM_ARCH_8M_BASE__=0 
 GCCFLAGS += -DCONFIG_BUILD_RAM=1 -DCONFIG_BUILD_LIB=1
 GCCFLAGS += -DV8M_STKOVF -DARM_MATH_CM7 -DCONFIG_FATFS_WRAPPER=1
+WLAN_RX_GDMA_VERIFY ?= 1
+GCCFLAGS += -DCONFIG_WLAN_RX_RING_GDMA_VERIFY=$(WLAN_RX_GDMA_VERIFY)
 # Avoid FreeRTOS-Plus-POSIX vs newlib type conflicts (mode_t, clockid_t, timer_t)
 GCCFLAGS += -DposixconfigENABLE_MODE_T=0
 GCCFLAGS += -DposixconfigENABLE_CLOCKID_T=0
@@ -858,7 +860,10 @@ LFLAGS += -Wl,-wrap,usb_os_sema_give
 LIBFLAGS =
 LIBFLAGS += ../../../component/soc/realtek/8195b/fwlib/hal-rtl8195b-hp/lib/lib/hal_pmc_hs.a
 LIBFLAGS += -L../../../component/soc/realtek/8195b/misc/bsp/lib/common/GCC/
-all: LIBFLAGS += -l_codec -l_dct -l_h264 -l_haac -l_hmp3 -l_http -l_mmf -l_muxer -l_p2p -l_rtsp -l_sdcard -l_soc_is -l_speex  -l_websocket -l_wlan -l_wps -l_qr_code -l_tftp -l_opusenc -l_opusfile -l_opus
+WLAN_RX_GDMA_DIR := ../../../component/common/drivers/wlan/realtek/wlan_rx_gdma
+WLAN_RX_GDMA_ARCHIVE := $(WLAN_RX_GDMA_DIR)/build/lib_wlan_rx_gdma.a
+WLAN_RX_GDMA_ORIGINAL := ../../../component/soc/realtek/8195b/misc/bsp/lib/common/GCC/lib_wlan.a
+all: LIBFLAGS += -l_codec -l_dct -l_h264 -l_haac -l_hmp3 -l_http -l_mmf -l_muxer -l_p2p -l_rtsp -l_sdcard -l_soc_is -l_speex  -l_websocket $(WLAN_RX_GDMA_ARCHIVE) -l_wps -l_qr_code -l_tftp -l_opusenc -l_opusfile -l_opus
 mp: LIBFLAGS += -l_codec -l_dct -l_h264 -l_haac -l_hmp3 -l_http -l_mmf -l_muxer -l_p2p -l_rtsp -l_sdcard -l_soc_is -l_speex  -l_websocket -l_wlan_mp -l_wps -l_qr_code -l_tftp -l_opusenc -l_opusfile -l_opus
 ifneq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK),1)
 all mp: LIBFLAGS += -l_mdns
@@ -967,7 +972,13 @@ endif
 # -------------------------------------------------------------------
 
 .PHONY: application
-application: prerequirement $(SRC_O) $(ERAM_O) $(SRAM_O) $(CINIT_O) $(ASM_O) $(ITCM_O) $(CPP_O)
+.PHONY: wlan_rx_gdma
+wlan_rx_gdma:
+	@$(MAKE) -C $(WLAN_RX_GDMA_DIR) \
+		CROSS_COMPILE=$(abspath $(CROSS_COMPILE)) \
+		ORIGINAL_ARCHIVE=$(abspath $(WLAN_RX_GDMA_ORIGINAL))
+
+application: wlan_rx_gdma prerequirement $(SRC_O) $(ERAM_O) $(SRAM_O) $(CINIT_O) $(ASM_O) $(ITCM_O) $(CPP_O)
 # Fixup: when ram_lp runs first and creates .o in source tree, make skips
 # our compile step but then cp to OBJ_DIR never happens.  Copy any
 # orphaned .o into OBJ_DIR before linking.

@@ -52,6 +52,10 @@ extern struct netif xnetif[];			//LWIP netif
 #define CONFIG_NET_GDMA_STATS 1
 #endif
 
+#ifndef CONFIG_WLAN_RX_RING_GDMA_VERIFY
+#define CONFIG_WLAN_RX_RING_GDMA_VERIFY 1
+#endif
+
 #ifndef NET_GDMA_COPY_THRESHOLD
 #define NET_GDMA_COPY_THRESHOLD 1024U
 #endif
@@ -479,6 +483,97 @@ int rltk_network_gdma_copy_rx(void *dst, const void *src, unsigned int len,
 {
 	return net_gdma_copy_with_edges(&g_net_rx_gdma, dst, src, len,
 					allocation_end);
+}
+
+/*
+ * This symbol is referenced only by a build-local copy of rtl8195b_recv.o.
+ * The original closed WLAN archive remains untouched.  That object has two
+ * rtw_memcpy calls: a variable-length RX-ring-to-skb frame copy and a fixed
+ * 132-byte metadata copy.  The size gate below keeps the metadata and small
+ * packets on the CPU, while frames large enough to amortize setup use RX GDMA.
+ *
+ * CONFIG_WLAN_RX_RING_GDMA_VERIFY intentionally scans source and destination
+ * during board qualification.  Besides detecting a bad transfer, reading the
+ * device-written ring before dma_memcpy() makes the HAL's source-cache clean
+ * operate on current data.  Disable the verification macro only after the
+ * board test has shown no mismatch/recovery and NET_GDMA RX statistics show
+ * that the intended traffic is actually using DMA.
+ *
+ * rtw_memcpy has no error return.  If DMA times out or verification fails, the
+ * destination may be partially written, so a complete CPU copy is mandatory
+ * before returning it to the closed driver.
+ */
+#define WLAN_RX_RING_GDMA_MAX_LEN NET_GDMA_MAX_COPY_LEN
+
+static u32 wlan_rx_ring_hash(const void *buffer, u32 len)
+{
+	const volatile u8 *bytes = (const volatile u8 *)buffer;
+	u32 hash = 2166136261U;
+	u32 i;
+
+	for (i = 0; i < len; ++i) {
+		hash ^= bytes[i];
+		hash *= 16777619U;
+	}
+	return hash;
+}
+
+void rtw_rx_ring_memcpy(void *dst, void *src, u32 len)
+{
+	static u8 first_call = 1;
+	static u32 attempts;
+	static u32 recoveries;
+	static u32 last_report_tick;
+	u32 source_hash = 0;
+	u32 now;
+	int result;
+
+	if (first_call) {
+		first_call = 0;
+		last_report_tick = rtw_get_current_time();
+		printf("[WLAN_RX_GDMA] ring-to-skb redirect active threshold=%u "
+		       "max_len=%u verify=%u\n",
+		       (unsigned int)NET_GDMA_COPY_THRESHOLD,
+		       (unsigned int)WLAN_RX_RING_GDMA_MAX_LEN,
+		       (unsigned int)CONFIG_WLAN_RX_RING_GDMA_VERIFY);
+	}
+
+	if (len < NET_GDMA_COPY_THRESHOLD ||
+	    len > WLAN_RX_RING_GDMA_MAX_LEN) {
+		rtw_memcpy(dst, src, len);
+		return;
+	}
+
+#if CONFIG_WLAN_RX_RING_GDMA_VERIFY
+	source_hash = wlan_rx_ring_hash(src, len);
+#endif
+	attempts++;
+	result = rltk_network_gdma_copy_rx(dst, src, len, NULL);
+
+#if CONFIG_WLAN_RX_RING_GDMA_VERIFY
+	if (result == 0 && source_hash != wlan_rx_ring_hash(dst, len)) {
+		printf("[WLAN_RX_GDMA][MISMATCH] len=%u attempt=%u; CPU recovery\n",
+		       (unsigned int)len, (unsigned int)attempts);
+		result = -1;
+	}
+#endif
+
+	if (result != 0) {
+		recoveries++;
+		printf("[WLAN_RX_GDMA][RECOVERY] len=%u result=%d count=%u\n",
+		       (unsigned int)len, result, (unsigned int)recoveries);
+		rtw_memcpy(dst, src, len);
+	}
+
+	now = rtw_get_current_time();
+	if (rtw_systime_to_ms(now - last_report_tick) >= NET_GDMA_REPORT_MS) {
+		printf("[WLAN_RX_GDMA][STATS] attempts=%u recoveries=%u verify=%u\n",
+		       (unsigned int)attempts, (unsigned int)recoveries,
+		       (unsigned int)CONFIG_WLAN_RX_RING_GDMA_VERIFY);
+		attempts = 0;
+		recoveries = 0;
+		last_report_tick = now;
+	}
 }
 
 #endif /* CONFIG_LWIP_LAYER && CONFIG_PLATFORM_8195BHP */
