@@ -75,6 +75,7 @@ typedef struct net_gdma_context_s {
 	gdma_t dma;
 	_sema done;
 	const char *name;
+	dma_irq_handler callback;
 	u8 initialized;
 	u8 available;
 	u8 tested;
@@ -93,6 +94,7 @@ typedef struct net_gdma_context_s {
 
 static net_gdma_context_t g_net_rx_gdma;
 static net_gdma_context_t g_net_tx_gdma;
+static net_gdma_context_t g_net_socket_rx_gdma;
 static u8 g_net_gdma_initialized;
 
 static void net_gdma_rx_done(uint32_t id)
@@ -111,6 +113,14 @@ static void net_gdma_tx_done(uint32_t id)
 	}
 }
 
+static void net_gdma_socket_rx_done(uint32_t id)
+{
+	(void)id;
+	if (g_net_socket_rx_gdma.done != NULL) {
+		rtw_up_sema_from_isr(&g_net_socket_rx_gdma.done);
+	}
+}
+
 static void net_gdma_drain_completion(net_gdma_context_t *ctx)
 {
 	while (rtw_down_timeout_sema(&ctx->done, 0) == _TRUE) {
@@ -123,6 +133,7 @@ static void net_gdma_init_context(net_gdma_context_t *ctx,
 	phal_gdma_adaptor_t adaptor;
 
 	ctx->name = name;
+	ctx->callback = callback;
 	ctx->initialized = 1;
 	rtw_init_sema(&ctx->done, 0);
 	if (ctx->done == NULL) {
@@ -159,8 +170,15 @@ static void net_gdma_init_all(void)
 
 	/* WLAN setup is serialized before packet traffic starts. */
 	g_net_gdma_initialized = 1;
+	/*
+	 * Reserve all three channels once during serialized WLAN setup and retain
+	 * them for the lifetime of the network stack.  Socket RX is deliberately
+	 * separate: a blocking recv() copy must not contend with driver RX ingress.
+	 */
 	net_gdma_init_context(&g_net_rx_gdma, "RX", net_gdma_rx_done);
 	net_gdma_init_context(&g_net_tx_gdma, "TX", net_gdma_tx_done);
+	net_gdma_init_context(&g_net_socket_rx_gdma, "SOCKET_RX",
+			       net_gdma_socket_rx_done);
 #endif
 }
 
@@ -214,8 +232,7 @@ static int net_gdma_wait(net_gdma_context_t *ctx)
 	net_gdma_drain_completion(ctx);
 
 	/* Try to restore this direction for the next packet. */
-	dma_memcpy_init(&ctx->dma,
-		(ctx == &g_net_rx_gdma) ? net_gdma_rx_done : net_gdma_tx_done, 0);
+	dma_memcpy_init(&ctx->dma, ctx->callback, 0);
 	if (ctx->dma.hal_gdma_adaptor.have_chnl) {
 		ctx->available = 1;
 		printf("[NET_GDMA] %s channel recovered; self-test required\n", ctx->name);
@@ -362,8 +379,12 @@ static void net_gdma_account(net_gdma_context_t *ctx, int used_dma, u32 len)
 }
 
 static int net_gdma_copy(net_gdma_context_t *ctx, void *dst, const void *src,
-			 u32 len, const void *allocation_end)
+			 u32 len, const void *allocation_end, u32 *dma_len)
 {
+	if (dma_len != NULL) {
+		*dma_len = 0;
+	}
+
 	if (!g_net_gdma_initialized) {
 		net_gdma_init_all();
 	}
@@ -382,7 +403,7 @@ static int net_gdma_copy(net_gdma_context_t *ctx, void *dst, const void *src,
 	}
 
 	/*
-	 * WLAN and NCM share one channel per direction.  Claim it atomically with
+	 * Each network data path owns a fixed channel. Claim it atomically with
 	 * only a few instructions of IRQ masking; no mutex is held while waiting.
 	 */
 	save_and_cli();
@@ -418,6 +439,9 @@ static int net_gdma_copy(net_gdma_context_t *ctx, void *dst, const void *src,
 
 	ctx->busy = 0;
 	net_gdma_account(ctx, 1, len);
+	if (dma_len != NULL) {
+		*dma_len = len;
+	}
 	return 0;
 }
 
@@ -429,29 +453,42 @@ static int net_gdma_copy(net_gdma_context_t *ctx, void *dst, const void *src,
  */
 static int net_gdma_copy_with_edges(net_gdma_context_t *ctx, void *dst,
 				    const void *src, u32 len,
-				    const void *allocation_end)
+				    const void *allocation_end,
+				    u32 *dma_len)
 {
 	uintptr_t start = (uintptr_t)dst;
 	u32 prefix;
 	u32 body;
 	u32 suffix;
 
-	if (len < NET_GDMA_COPY_THRESHOLD || !ctx->available || ctx->busy ||
+	/*
+	 * Initialize before inspecting ctx->available.  Otherwise the very first
+	 * request can enter net_gdma_copy(), allocate a channel there, and submit
+	 * the entire unaligned destination without the cache-line edge split.
+	 */
+	if (!g_net_gdma_initialized) {
+		net_gdma_init_all();
+	}
+
+	if (len < NET_GDMA_COPY_THRESHOLD ||
 	    (((start & (NET_GDMA_CACHE_LINE - 1U)) == 0U) &&
 	     (allocation_end != NULL ||
 	      (len & (NET_GDMA_CACHE_LINE - 1U)) == 0U))) {
-		return net_gdma_copy(ctx, dst, src, len, allocation_end);
+		return net_gdma_copy(ctx, dst, src, len, allocation_end,
+				      dma_len);
 	}
 
 	prefix = (start & (NET_GDMA_CACHE_LINE - 1U)) != 0U ?
 		 NET_GDMA_CACHE_LINE -
 		 (u32)(start & (NET_GDMA_CACHE_LINE - 1U)) : 0U;
 	if (prefix >= len) {
-		return net_gdma_copy(ctx, dst, src, len, allocation_end);
+		return net_gdma_copy(ctx, dst, src, len, allocation_end,
+				      dma_len);
 	}
 	body = (len - prefix) & ~(NET_GDMA_CACHE_LINE - 1U);
 	if (body < NET_GDMA_COPY_THRESHOLD) {
-		return net_gdma_copy(ctx, dst, src, len, allocation_end);
+		return net_gdma_copy(ctx, dst, src, len, allocation_end,
+				      dma_len);
 	}
 	suffix = len - prefix - body;
 
@@ -460,7 +497,7 @@ static int net_gdma_copy_with_edges(net_gdma_context_t *ctx, void *dst,
 		net_gdma_account(ctx, 0, prefix);
 	}
 	if (net_gdma_copy(ctx, (u8 *)dst + prefix, (const u8 *)src + prefix,
-			  body, allocation_end) != 0) {
+			  body, allocation_end, dma_len) != 0) {
 		return -1;
 	}
 	if (suffix != 0U) {
@@ -475,14 +512,115 @@ int rltk_network_gdma_copy_tx(void *dst, const void *src, unsigned int len,
 			      const void *allocation_end)
 {
 	return net_gdma_copy_with_edges(&g_net_tx_gdma, dst, src, len,
-					allocation_end);
+					allocation_end, NULL);
 }
 
 int rltk_network_gdma_copy_rx(void *dst, const void *src, unsigned int len,
 			      const void *allocation_end)
 {
 	return net_gdma_copy_with_edges(&g_net_rx_gdma, dst, src, len,
-					allocation_end);
+					allocation_end, NULL);
+}
+
+/*
+ * Socket recv owns both the source pbuf and the caller's destination buffer
+ * until this blocking copy returns. That makes timeout recovery different
+ * from the driver RX path: net_gdma_wait() has already aborted the channel,
+ * so the still-valid pbuf can be copied again by the CPU without changing the
+ * BSD recv() success/error contract.
+ *
+ * A TCP pbuf chain is scatter/gather. AmebaPro exposes multi-block GDMA, but
+ * its SDK cache maintenance treats all source blocks as one continuous range.
+ * Non-contiguous pbuf payloads violate that assumption, so socket RX submits
+ * segments sequentially on the dedicated socket RX channel instead of using
+ * the unsafe list wrapper.
+ */
+int rltk_network_gdma_copy_socket_rx(void *dst, const void *src,
+				     unsigned int len)
+{
+	static u32 dma_ops;
+	static u32 dma_bytes;
+	static u32 cpu_ops;
+	static u32 cpu_bytes;
+	static u32 recoveries;
+	static u32 report_probe;
+	static u32 last_report_tick;
+	u32 dma_len = 0;
+	u32 now;
+	int result;
+	uintptr_t dst_start = (uintptr_t)dst;
+	uintptr_t src_start = (uintptr_t)src;
+	uintptr_t dst_end = dst_start + len;
+	uintptr_t src_end = src_start + len;
+	int dma_accessible;
+
+	/*
+	 * GDMA is a bus master and cannot access M33 DTCM.  BSD recv() is generic,
+	 * so its caller may legally pass a stack/DTCM buffer even though CarPlay's
+	 * high-throughput buffers normally live in LPDDR.  Restrict DMA to the bus
+	 * visible SRAM, PSRAM and LPDDR windows; all other buffers use CPU copy.
+	 */
+	dma_accessible = dst_end >= dst_start && src_end >= src_start &&
+		(((dst_start >= 0x20100000U) && (dst_end <= 0x2017A000U)) ||
+		 ((dst_start >= 0x60000000U) && (dst_end <= 0x60800000U)) ||
+		 ((dst_start >= 0x70000000U) && (dst_end <= 0x72000000U))) &&
+		(((src_start >= 0x20100000U) && (src_end <= 0x2017A000U)) ||
+		 ((src_start >= 0x60000000U) && (src_end <= 0x60800000U)) ||
+		 ((src_start >= 0x70000000U) && (src_end <= 0x72000000U)));
+
+	/*
+	 * recv() may return fewer bytes than the caller requested. Do not treat
+	 * the unused caller capacity as disposable cache padding: preserving it
+	 * requires CPU-copying both unaligned edges around a cache-line body.
+	 */
+	if (dma_accessible) {
+		result = net_gdma_copy_with_edges(&g_net_socket_rx_gdma, dst, src,
+						  len, NULL, &dma_len);
+	} else {
+		rtw_memcpy(dst, (void *)src, len);
+		result = 0;
+	}
+	if (result != 0) {
+		/* The timeout path aborts/deinitializes DMA before returning. */
+		recoveries++;
+		printf("[LWIP_RECV_GDMA][RECOVERY] len=%u result=%d count=%u\n",
+		       len, result, (unsigned int)recoveries);
+		rtw_memcpy(dst, (void *)src, len);
+		dma_len = 0;
+	}
+
+	if (dma_len != 0U) {
+		dma_ops++;
+		dma_bytes += dma_len;
+	}
+	if (dma_len < len) {
+		cpu_ops++;
+		cpu_bytes += len - dma_len;
+	}
+
+	if (last_report_tick == 0U) {
+		last_report_tick = rtw_get_current_time();
+	}
+	report_probe++;
+	if ((report_probe % NET_GDMA_REPORT_PROBE) == 0U) {
+		now = rtw_get_current_time();
+		if (rtw_systime_to_ms(now - last_report_tick) >=
+		    NET_GDMA_REPORT_MS) {
+			printf("[LWIP_RECV_GDMA][STATS] dma=%u/%uB cpu=%u/%uB "
+			       "recoveries=%u\n",
+			       (unsigned int)dma_ops, (unsigned int)dma_bytes,
+			       (unsigned int)cpu_ops, (unsigned int)cpu_bytes,
+			       (unsigned int)recoveries);
+			dma_ops = 0;
+			dma_bytes = 0;
+			cpu_ops = 0;
+			cpu_bytes = 0;
+			recoveries = 0;
+			last_report_tick = now;
+		}
+	}
+
+	return 0;
 }
 
 /*
@@ -698,7 +836,7 @@ int rltk_wlan_send(int idx, struct eth_drv_sg *sg_list, int sg_len, int total_le
 #if defined(CONFIG_PLATFORM_8195BHP)
 		if (net_gdma_copy(&g_net_tx_gdma, skb->tail,
 				  (void *)(sg_list->buf), sg_list->len,
-				  skb->end) != 0) {
+				  skb->end, NULL) != 0) {
 			printf("[NET_GDMA][ERROR] TX packet dropped len=%u\n",
 			       (unsigned int)sg_list->len);
 			kfree_skb(skb);
@@ -747,9 +885,10 @@ int rltk_wlan_recv(int idx, struct eth_drv_sg *sg_list, int sg_len)
 	for (last_sg = &sg_list[sg_len]; sg_list < last_sg; ++sg_list) {
 		if (sg_list->buf != 0) {
 #if defined(CONFIG_PLATFORM_8195BHP)
-			if (net_gdma_copy(&g_net_rx_gdma,
-					  (void *)(sg_list->buf), skb->data,
-					  sg_list->len, NULL) != 0) {
+			if (net_gdma_copy_with_edges(&g_net_rx_gdma,
+						     (void *)(sg_list->buf),
+						     skb->data, sg_list->len,
+						     NULL, NULL) != 0) {
 				printf("[NET_GDMA][ERROR] RX packet dropped len=%u\n",
 				       (unsigned int)sg_list->len);
 				return -1;

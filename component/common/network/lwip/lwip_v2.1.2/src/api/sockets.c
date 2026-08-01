@@ -54,6 +54,9 @@
 #include "lwip/netif.h"
 #include "lwip/priv/tcpip_priv.h"
 #include "lwip/mld6.h"
+#if defined(CONFIG_PLATFORM_8195BHP)
+#include <lwip_intf.h>
+#endif
 #if LWIP_CHECKSUM_ON_COPY
 #include "lwip/inet_chksum.h"
 #endif
@@ -912,6 +915,37 @@ lwip_listen(int s, int backlog)
 }
 
 #if LWIP_TCP
+#if defined(CONFIG_PLATFORM_8195BHP)
+/*
+ * Copy only TCP socket payloads through GDMA. pbuf_copy_partial() is also
+ * used by small DNS/DHCP headers and TCP output, where global DMA routing
+ * would add overhead and could run in unsuitable contexts. The pbuf remains
+ * owned by this socket until the helper returns. Unaligned destination edges
+ * stay on the CPU so D-cache invalidation cannot alter bytes outside recv()'s
+ * actual return range.
+ */
+static u16_t
+lwip_recv_tcp_copy(const struct pbuf *p, void *dst, u16_t len)
+{
+  u16_t copied = 0;
+
+  while ((p != NULL) && (copied < len)) {
+    u16_t copylen = p->len;
+
+    if (copylen > (u16_t)(len - copied)) {
+      copylen = (u16_t)(len - copied);
+    }
+    if (rltk_network_gdma_copy_socket_rx((u8_t *)dst + copied,
+                                         p->payload, copylen) != 0) {
+      return copied;
+    }
+    copied = (u16_t)(copied + copylen);
+    p = p->next;
+  }
+  return copied;
+}
+#endif
+
 /* Helper function to loop over receiving pbufs from netconn
  * until "len" bytes are received or we're otherwise done.
  * Keeps sock->lastdata for peeking or partly copying.
@@ -934,6 +968,9 @@ lwip_recv_tcp(struct lwip_sock *sock, void *mem, size_t len, int flags)
     struct pbuf *p;
     err_t err;
     u16_t copylen;
+#if defined(CONFIG_PLATFORM_8195BHP)
+    u16_t copied;
+#endif
 
     LWIP_DEBUGF(SOCKETS_DEBUG, ("lwip_recv_tcp: top while sock->lastdata=%p\n", (void *)sock->lastdata.pbuf));
     /* Check if there is data left from the last recv operation. */
@@ -981,7 +1018,12 @@ lwip_recv_tcp(struct lwip_sock *sock, void *mem, size_t len, int flags)
 
     /* copy the contents of the received buffer into
     the supplied memory pointer mem */
+#if defined(CONFIG_PLATFORM_8195BHP)
+    copied = lwip_recv_tcp_copy(p, (u8_t *)mem + recvd, copylen);
+    LWIP_ASSERT("lwip_recv_tcp: short GDMA copy", copied == copylen);
+#else
     pbuf_copy_partial(p, (u8_t *)mem + recvd, copylen, 0);
+#endif
 
     recvd += copylen;
 
