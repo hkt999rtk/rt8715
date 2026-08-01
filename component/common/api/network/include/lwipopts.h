@@ -57,7 +57,7 @@
 #define IP_FRAG                 1
 #define ARP_QUEUEING            0
 #define IP_FORWARD              1
-#define IP_NAT                  1
+#define IP_NAT                  0
 #define LWIP_NETIF_API          1
 
 #if 1   //by lzh
@@ -90,7 +90,6 @@
  * MEM_LIBC_MALLOC == 0. CarPlay box scenario needs:
  *   - WIFI AP dual-stack (IPv4+IPv6)
  *   - NCM USB forwarding
- *   - IP NAT
  *   - HTTP Server + mDNS + Bonjour
  *   - DHCP Server + DNS
  * Conservative estimate: 24-32KB dynamic allocation.
@@ -102,7 +101,7 @@
     #define MEM_SIZE                (360*TCP_MSS)
 #elif CONFIG_ETHERNET
     /* Ethernet device, originally 6KB for iperf. CarPlay box real workload
-     * (NAT+mDNS+HTTP+DHCP) needs more. */
+     * (mDNS+HTTP+DHCP) needs more. */
     #define MEM_SIZE                (24*1024)
 #elif defined(CONFIG_WLAN) && !defined(CONFIG_HIGH_TP_TEST)
     /* WIFI device (non-CarPlay): AP mode + DHCP + DNS + mDNS */
@@ -127,7 +126,7 @@
    per active UDP "connection". */
 #define MEMP_NUM_UDP_PCB        50
 /* MEMP_NUM_TCP_PCB: the number of simultaneously active TCP
-   connections. CarPlay box: HTTP + mDNS + Bonjour + NAT = ~6-8 concurrent */
+   connections. CarPlay box: HTTP + mDNS + Bonjour = ~6-8 concurrent */
 #define MEMP_NUM_TCP_PCB        50
 /* MEMP_NUM_TCP_PCB_LISTEN: the number of listening TCP
    connections. */

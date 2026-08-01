@@ -108,16 +108,6 @@ uint16_t ip_nat_max_entry = 0;
 uint32_t ip_nat_tcp_max_timeout = IP_NAT_MAX_TIMEOUT_MS_TCP;
 uint32_t ip_nat_udp_max_timeout = IP_NAT_MAX_TIMEOUT_MS_UDP;
 
-/*
- * Packets sent by a host on the input interface's own subnet to that
- * interface cannot be replies from the external side of a NAT mapping.
- * Count these separately so the fast path can be validated on a target.
- * These counters are diagnostic only and deliberately avoid per-packet log
- * output on the TCP/IP hot path.
- */
-static uint32_t ip_nat_local_bypass_count;
-static uint32_t ip_nat_reverse_lookup_count;
-
 static inline uint32_t GET_NAT_ENTRY_TIME_ELAPSED(uint32_t now_ts, uint32_t e_ts)
 {
 	if (now_ts >= e_ts) {
@@ -1024,21 +1014,6 @@ err_t ip_nat_enqueue(struct pbuf *p, struct netif *inp)
 		return ERR_OK;
 	}
 	if (ip4_addr_cmp(&iphdr->dest, ip_2_ip4(&(inp->ip_addr)))) {
-		/*
-		 * Avoid taking nat_entry_lock and linearly walking the NAT table for
-		 * local LAN traffic such as a phone talking directly to the AP.  A
-		 * reverse-NAT reply arrives from outside the input interface's subnet.
-		 * Do not apply the shortcut until the netmask has been configured: a
-		 * zero mask would otherwise classify every source as local.
-		 */
-		if ((netif_ip4_netmask(inp)->addr != 0U) &&
-		    ip4_addr_netcmp(&iphdr->src, netif_ip4_addr(inp),
-		                     netif_ip4_netmask(inp))) {
-			ip_nat_local_bypass_count++;
-			return ERR_OK;
-		}
-
-		ip_nat_reverse_lookup_count++;
 		ip_nat_rx_packet(p, iphdr);
 	}
 	return ERR_OK;
@@ -1053,8 +1028,6 @@ void ipnat_dump(void)
 		nat_debug_print();
 	}
 	printf("\n\r total %d :%lu %lu %lu", total_session, tcp_entry_count, udp_entry_count, icmp_entry_count);
-	printf("\n\r NAT RX fastpath: local_bypass=%lu reverse_lookup=%lu",
-	       ip_nat_local_bypass_count, ip_nat_reverse_lookup_count);
 
 	sys_mutex_unlock(&nat_entry_lock);
 
