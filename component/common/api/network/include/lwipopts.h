@@ -584,7 +584,7 @@ Certain platform allows computing and verifying the IP, UDP, TCP and ICMP checks
  * Keep these overrides last because the production video profiles above
  * deliberately enlarge several pools. A full Ethernet frame still fits in
  * each pbuf, while the reduced object counts avoid embedding MiB-sized pools
- * in the 512 KiB FW1 image.
+ * in the size-constrained FW1 image.
  */
 #if defined(CARBOX_RECOVERY_BUILD) && CARBOX_RECOVERY_BUILD
 #undef MEM_SIZE
@@ -631,6 +631,16 @@ Certain platform allows computing and verifying the IP, UDP, TCP and ICMP checks
 #define CONFIG_WLAN_RX_ZERO_COPY       0
 #undef LWIP_MDNS_RESPONDER
 #define LWIP_MDNS_RESPONDER            0
+#undef LWIP_IPV6
+#define LWIP_IPV6                      0
+#undef LWIP_IPV6_MLD
+#define LWIP_IPV6_MLD                  0
+#undef LWIP_IPV6_AUTOCONFIG
+#define LWIP_IPV6_AUTOCONFIG           0
+#undef LWIP_ICMP6
+#define LWIP_ICMP6                     0
+#undef LWIP_IPV6_DHCP6
+#define LWIP_IPV6_DHCP6                0
 #undef IP_FORWARD
 #define IP_FORWARD                     0
 #endif

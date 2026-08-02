@@ -52,6 +52,7 @@ def main():
         "CARBOX_FATFS_SIZE",
         "CARBOX_LITTLEFS_BASE",
         "CARBOX_LITTLEFS_SIZE",
+        "CARBOX_NOR_FLASH_SIZE",
     )
     for k in required:
         if k not in macros:
@@ -118,6 +119,18 @@ def main():
         sys.exit(1)
     if int(macros["CARBOX_FATFS_BASE"], 16) != firmware_end:
         print("ERROR: FATFS must immediately follow the firmware region", file=sys.stderr)
+        sys.exit(1)
+    fatfs_end = int(macros["CARBOX_FATFS_BASE"], 16) + int(
+        macros["CARBOX_FATFS_SIZE"], 16
+    )
+    if int(macros["CARBOX_LITTLEFS_BASE"], 16) != fatfs_end:
+        print("ERROR: LittleFS must immediately follow FATFS", file=sys.stderr)
+        sys.exit(1)
+    littlefs_end = int(macros["CARBOX_LITTLEFS_BASE"], 16) + int(
+        macros["CARBOX_LITTLEFS_SIZE"], 16
+    )
+    if littlefs_end != int(macros["CARBOX_NOR_FLASH_SIZE"], 16):
+        print("ERROR: partition layout must end at the NOR flash boundary", file=sys.stderr)
         sys.exit(1)
     for name in ("CARBOX_RECOVERY_FW_BASE", "CARBOX_MAIN_FW_BASE"):
         if int(macros[name], 16) % 0x40000:

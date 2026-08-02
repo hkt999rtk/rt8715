@@ -104,8 +104,8 @@ uint32_t LwIP_GetRENEWTIME(struct netif *pnetif);
 uint8_t* LwIP_GetMASK(struct netif *pnetif);
 uint8_t* LwIP_GetBC(struct netif *pnetif);
 #if LWIP_DNS
-void LwIP_GetDNS(struct ip_addr* dns);
-void LwIP_SetDNS(struct ip_addr* dns);
+void LwIP_GetDNS(ip_addr_t *dns);
+void LwIP_SetDNS(ip_addr_t *dns);
 #endif
 void LwIP_SetIP(uint8_t idx, u32_t addr, u32_t netmask, u32_t gw);
 void LwIP_UseStaticIP(struct netif *pnetif);

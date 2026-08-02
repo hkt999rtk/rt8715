@@ -145,9 +145,9 @@ void user_use_config_ip(void)
 }
 void LwIP_Init(void)
 {
-	struct ip_addr ipaddr;
-	struct ip_addr netmask;
-	struct ip_addr gw;
+	ip_addr_t ipaddr;
+	ip_addr_t netmask;
+	ip_addr_t gw;
 	int8_t idx = 0;
 	int8_t xnetif_count = NET_IF_NUM;
 
@@ -300,9 +300,9 @@ extern u8 is_the_same_ap;
   */
 uint8_t LwIP_DHCP(uint8_t idx, uint8_t dhcp_state)
 {
-	struct ip_addr ipaddr;
-	struct ip_addr netmask;
-	struct ip_addr gw;
+	ip_addr_t ipaddr;
+	ip_addr_t netmask;
+	ip_addr_t gw;
 	uint32_t IPaddress;
 	uint8_t iptab[4];
 	uint8_t DHCP_state;
@@ -558,9 +558,9 @@ uint8_t LwIP_DHCP(uint8_t idx, uint8_t dhcp_state)
 
 void LwIP_ReleaseIP(uint8_t idx)
 {
-	struct ip_addr ipaddr;
-	struct ip_addr netmask;
-	struct ip_addr gw;
+	ip_addr_t ipaddr;
+	ip_addr_t netmask;
+	ip_addr_t gw;
 	struct netif *pnetif = &xnetif[idx];
 #if LWIP_VERSION_MAJOR >= 2
 	IP4_ADDR(ip_2_ip4(&ipaddr), 0, 0, 0, 0);
@@ -794,17 +794,17 @@ uint8_t* LwIP_GetBC(struct netif *pnetif)
 }
 
 #if LWIP_DNS
-void LwIP_GetDNS(struct ip_addr* dns)
+void LwIP_GetDNS(ip_addr_t *dns)
 {
 #if LWIP_VERSION_MAJOR >= 2
-	struct ip_addr *tmp = (struct ip_addr *)dns_getserver(0);
+	const ip_addr_t *tmp = dns_getserver(0);
 	*dns = *tmp;        
 #else
 	*dns = dns_getserver(0);
 #endif
 }
 
-void LwIP_SetDNS(struct ip_addr* dns)
+void LwIP_SetDNS(ip_addr_t *dns)
 {
 	dns_setserver(0, dns);
 }
@@ -813,9 +813,9 @@ void LwIP_SetDNS(struct ip_addr* dns)
 void LwIP_SetIP(uint8_t idx, u32_t addr, u32_t netmask_addr, u32_t gw_addr)
 {
 	struct netif *pnetif = &xnetif[idx];
-	struct ip_addr ipaddr;
-	struct ip_addr netmask;
-	struct ip_addr gw;
+	ip_addr_t ipaddr;
+	ip_addr_t netmask;
+	ip_addr_t gw;
 
 	ip_2_ip4(&ipaddr)->addr = lwip_htonl(addr);
 	ip_2_ip4(&netmask)->addr = lwip_htonl(netmask_addr);
@@ -825,9 +825,9 @@ void LwIP_SetIP(uint8_t idx, u32_t addr, u32_t netmask_addr, u32_t gw_addr)
 
 void LwIP_UseStaticIP(struct netif *pnetif)
 {
-	struct ip_addr ipaddr;
-	struct ip_addr netmask;
-	struct ip_addr gw;
+	ip_addr_t ipaddr;
+	ip_addr_t netmask;
+	ip_addr_t gw;
 
 	/* Static address used */
 	if(pnetif->name[1] == '0'){
@@ -896,9 +896,9 @@ void LwIP_AUTOIP(struct netif *pnetif)
 	}
 
 	if(*((uint32_t *) ip) == 0) {
-		struct ip_addr ipaddr;
-		struct ip_addr netmask;
-		struct ip_addr gw;
+		ip_addr_t ipaddr;
+		ip_addr_t netmask;
+		ip_addr_t gw;
 
 		printf("AUTOIP timeout\n");
 

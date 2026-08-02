@@ -1215,8 +1215,17 @@ factory_image: partition.json
 		CARBOX_MAIN_FW_SIZE $(CARBOX_MAIN_BIN)
 	@echo "  ELF2BIN  combine factory image (immutable FW1 + Main FW2)"
 	@$(ELF2BIN) combine application_is/flash_factory.bin \
-		PTAB=partition.bin,BOOT=application_is/boot.bin,\
-		FW1=$(CARBOX_RECOVERY_BIN),FW2=$(CARBOX_MAIN_BIN) >/dev/null 2>&1
+		PTAB=partition.bin,BOOT=application_is/boot.bin,FW1=$(CARBOX_RECOVERY_BIN),FW2=$(CARBOX_MAIN_BIN) >/dev/null 2>&1
+	@if [ -f "$(CARBOX_FATFS_BIN)" ]; then \
+		size=$$(stat -c %s "$(CARBOX_FATFS_BIN)"); \
+		max=$$(( $(CARBOX_FATFS_SIZE) )); \
+		if [ $$size -gt $$max ]; then \
+			echo "ERROR: $(CARBOX_FATFS_BIN) size $$size exceeds FATFS partition size $$max"; \
+			exit 1; \
+		fi; \
+		echo "Pack $(CARBOX_FATFS_BIN) -> application_is/flash_factory.bin @$(CARBOX_FATFS_BASE) ($$size bytes)"; \
+		dd if="$(CARBOX_FATFS_BIN)" of=application_is/flash_factory.bin bs=4096 seek=$$(( $(CARBOX_FATFS_BASE) / 0x1000 )) conv=notrunc status=none; \
+	fi
 	
 
 # Generate build info

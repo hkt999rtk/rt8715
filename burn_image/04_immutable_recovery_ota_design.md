@@ -1,4 +1,4 @@
-# 6 MiB Firmware 區域的 Immutable Recovery OTA 架構調查
+# 8 MiB NOR 的 Immutable Recovery OTA 架構與實作結果
 
 調查日期：2026-08-02
 
@@ -14,8 +14,8 @@
 - 第二份 firmware 是正常運作的 Main firmware，可持續 OTA 升級。
 - Main 升級中斷或內容損壞時，仍可啟動 Recovery 重新升級。
 
-本次只做靜態調查與架構分析，尚未修改 partition、linker script 或 source
-code，也尚未使用實體板驗證。
+本文件前半保留最初的靜態調查；文末記錄已完成的實作與容量驗證。實體板上的
+斷電復原、升級失敗回復與 boot selection 仍需驗證。
 
 ## 結論
 
@@ -37,7 +37,7 @@ RTL8195B 現有格式與 SDK 已具備這個方案所需的大部分基礎能力
 7. Partition table 還定義了 `ota_trap` GPIO，可在開機時要求載入 OTA
    firmware；其實際 slot 對應及板級使用方式仍需實機確認。
 
-## 現有 Flash 配置
+## 調查時的原始 Flash 配置
 
 目前 partition 設定：
 
@@ -64,7 +64,7 @@ Firmware 區域是：
 `ota_app.bin` 比 firmware 多 32 bytes OTA wrapper；partition 容量主要應以
 實際寫入 flash 的 firmware payload 與 OTA parser 行為共同檢查。
 
-## 建議的非對稱分區
+## 最初評估的非對稱分區（已被實作配置取代）
 
 建議先以下列配置做容量 PoC：
 
@@ -396,44 +396,45 @@ Recovery 一旦量產後永不升級，必須避免依賴容易過期或改變�
 
 ## 最終判斷
 
-在目前 6 MiB firmware 空間內，保留兩份完整 Main firmware 不可行；保留一份
-512 KiB immutable Recovery，加上一份 5.5 MiB upgradeable Main，從 boot 與
-OTA 機制上可行，現有 Main 大小也勉強容納得下。
-
-真正的 go/no-go 條件是：最小 Wi-Fi OTA Recovery 能否在保留安全 margin 的
-情況下放入 512 KiB。
+保留兩份完整 Main firmware 不可行，但 8 MiB NOR 可容納一份精簡的 Wi-Fi
+Recovery、一份完整 Main、1 MiB FATFS 及較小的 LittleFS。最初提出的 512 KiB
+Recovery 不足，因此最後改用非對稱的 1.25 MiB / 5.375 MiB 配置。
 
 ## 2026-08-02 實作／容量 PoC 結果
 
-已在 `feature/immutable-recovery-ota` 建立第一版實作：
+已在 `feature/immutable-recovery-ota` 建立並完成容量 build 驗證：
 
-- FW1 Recovery 固定為 `0x40000 + 0x80000`。
-- FW2 Main 固定為 `0xC0000 + 0x580000`。
+- FW1 Recovery 固定為 `0x40000 + 0x140000`（1.25 MiB）。
+- FW2 Main 固定為 `0x180000 + 0x560000`（5.375 MiB）。
+- FATFS 固定為 `0x6E0000 + 0x100000`（1 MiB）。
+- LittleFS 固定為 `0x7E0000 + 0x20000`（128 KiB），結尾正好為
+  8 MiB NOR 邊界 `0x800000`。
 - Main 預設以 FW2 link target build。
 - Recovery OTA 的每一次 erase/write 都會檢查 FW2 邊界，從 FW2 執行 writer
   也會被拒絕。
+- Recovery 關閉 IPv6/MLD/DHCPv6，保留 IPv4 DHCP 與 OTA TCP 所需功能。
 - `make recovery_image` 與 Main packaging 都會在 checksum 後執行 hard size
   check；超界時不會產生 factory image。
-- `make factory_image` 只有在 FW1、FW2 都通過容量檢查後才會 combine。
+- `make factory_image` 只有在 FW1、FW2 都通過容量檢查後才會 combine，並將
+  FATFS image 寫入新的 `0x6E0000` offset。
 
 實際 build 結果：
 
 | Image | Signed/checksummed size | Partition | 結果 |
 |---|---:|---:|---|
-| Main FW2 | 5,565,124 bytes | 5,767,168 bytes | PASS，餘 202,044 bytes |
-| Recovery FW1 | 1,315,076 bytes | 524,288 bytes | FAIL，超出 790,788 bytes |
+| Main FW2 | 5,565,060 bytes | 5,636,096 bytes | PASS，餘 71,036 bytes |
+| Recovery FW1 | 1,287,364 bytes | 1,310,720 bytes | PASS，餘 23,356 bytes |
+| FATFS payload | 172,032 bytes | 1,048,576 bytes | PASS，餘 876,544 bytes |
 
-Recovery profile 已移除 ISP、WoWLAN 與 FWLS image，並把 skb/lwIP pool 縮到
-只支援 DHCP 與單一 OTA TCP connection 的規模。剩餘差距主要來自封閉的
-`lib_wlan.a` Wi-Fi driver/PHY code、driver 內建 WLAN firmware，以及必須同時
-支援 B/C cut 的兩份外部 WLAN firmware。這不是小幅裁 command 或調 compiler
-flag 就能縮進 512 KiB 的差距。
+Recovery profile 已移除 ISP、WoWLAN 與 FWLS image，關閉 IPv6，並把 skb/lwIP
+pool 縮到只支援 DHCP 與單一 OTA TCP connection 的規模。完整 factory image
+為 7,380,992 bytes（`0x70A000`）；FW1、FW2 與 FATFS 的內容已逐 byte 比對其
+指定 offset。
 
 因此目前的精確結論是：
 
-- 非對稱 FW1/FW2、FW2-only OTA 與 Main 5.5 MiB 都已驗證可 build。
-- 以現有 WLAN binary 組合，`512 KiB network Recovery` 容量 PoC **不通過**。
-- size gate 正確阻止產生會覆蓋 FW2 的錯誤 factory image。
-- 下一個架構決策必須在「取得更小的 Realtek Recovery WLAN library」、
-  「縮小 Main 後擴大 Recovery」，或「Recovery 改用 UART/USB 而非 Wi-Fi」之間
-  選擇；在決策前不可把目前 partition 當成可量產配置。
+- 非對稱 FW1/FW2、FW2-only OTA、1 MiB FATFS 與完整 factory image 均已
+  驗證可 build。
+- build-time size gate 會阻止 FW1/FW2 超界。
+- 尚未完成的 go/no-go 項目是實體板上的 FW1 開機連網、FW2 升級、升級中斷及
+  FW2 損壞後回到 FW1 的測試。
