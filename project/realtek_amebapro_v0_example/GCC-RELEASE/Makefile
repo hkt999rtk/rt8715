@@ -33,6 +33,10 @@ endif
 ram_is: toolchain
 	@$(MAKE) -f application.is.mk all
 
+.PHONY: carbox_rtk264
+carbox_rtk264: toolchain
+	@$(MAKE) -f application.is.mk carbox_rtk264
+
 .PHONY: ram_mp
 ram_mp: toolchain
 	@$(MAKE) -f application.is.mk mp

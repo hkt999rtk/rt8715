@@ -863,6 +863,14 @@ LIBFLAGS += -L../../../component/soc/realtek/8195b/misc/bsp/lib/common/GCC/
 WLAN_RX_GDMA_DIR := ../../../component/common/drivers/wlan/realtek/wlan_rx_gdma
 WLAN_RX_GDMA_ARCHIVE := $(WLAN_RX_GDMA_DIR)/build/lib_wlan_rx_gdma.a
 WLAN_RX_GDMA_ORIGINAL := ../../../component/soc/realtek/8195b/misc/bsp/lib/common/GCC/lib_wlan.a
+CARBOX_BUILD_RTK264 ?= 1
+CARBOX_RTK264_OPT_FLAGS ?= -O3
+CARBOX_RTK264_DIR := ../src/carbox/rtk264
+CARBOX_RTK264_BUILD_DIR := $(CARBOX_RTK264_DIR)/build
+CARBOX_RTK264_SOURCE := $(CARBOX_RTK264_DIR)/lib_rtk264.c
+CARBOX_RTK264_HEADER := $(CARBOX_RTK264_DIR)/lib_rtk264.h
+CARBOX_RTK264_OBJECT := $(CARBOX_RTK264_BUILD_DIR)/lib_rtk264.o
+CARBOX_RTK264_ARCHIVE := $(CARBOX_RTK264_BUILD_DIR)/lib_rtk264.a
 all: LIBFLAGS += -l_codec -l_dct -l_h264 -l_haac -l_hmp3 -l_http -l_mmf -l_muxer -l_p2p -l_rtsp -l_sdcard -l_soc_is -l_speex  -l_websocket $(WLAN_RX_GDMA_ARCHIVE) -l_wps -l_qr_code -l_tftp -l_opusenc -l_opusfile -l_opus
 mp: LIBFLAGS += -l_codec -l_dct -l_h264 -l_haac -l_hmp3 -l_http -l_mmf -l_muxer -l_p2p -l_rtsp -l_sdcard -l_soc_is -l_speex  -l_websocket -l_wlan_mp -l_wps -l_qr_code -l_tftp -l_opusenc -l_opusfile -l_opus
 ifneq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK),1)
@@ -978,6 +986,25 @@ wlan_rx_gdma:
 		CROSS_COMPILE=$(abspath $(CROSS_COMPILE)) \
 		ORIGINAL_ARCHIVE=$(abspath $(WLAN_RX_GDMA_ORIGINAL))
 
+$(CARBOX_RTK264_OBJECT): $(CARBOX_RTK264_SOURCE) $(CARBOX_RTK264_HEADER)
+	@mkdir -p $(CARBOX_RTK264_BUILD_DIR)
+	@echo "  CC   $<"
+	@$(CC) $(filter-out -Os,$(CFLAGS)) $(CARBOX_RTK264_OPT_FLAGS) \
+		$(INCLUDES) -I$(CARBOX_RTK264_DIR) -c $< -o $@
+
+$(CARBOX_RTK264_ARCHIVE): $(CARBOX_RTK264_OBJECT)
+	@echo "  AR   $@"
+	@$(AR) rcs $@ $<
+
+.PHONY: carbox_rtk264
+carbox_rtk264: $(CARBOX_RTK264_ARCHIVE)
+	@$(NM) --defined-only $(CARBOX_RTK264_ARCHIVE) | \
+		grep -q ' lib_rtk264_encode$$' || \
+		{ echo "ERROR: lib_rtk264_encode missing from $@"; exit 1; }
+
+ifeq ($(CARBOX_BUILD_RTK264),1)
+application: carbox_rtk264
+endif
 application: wlan_rx_gdma prerequirement $(SRC_O) $(ERAM_O) $(SRAM_O) $(CINIT_O) $(ASM_O) $(ITCM_O) $(CPP_O)
 # Fixup: when ram_lp runs first and creates .o in source tree, make skips
 # our compile step but then cp to OBJ_DIR never happens.  Copy any
@@ -1255,6 +1282,7 @@ debug:
 .PHONY: clean
 clean:
 	@rm -rf $(TARGET)
+	@rm -rf $(CARBOX_RTK264_BUILD_DIR)
 	@rm -f $(patsubst %.o,%.d,$(SRC_O)) $(patsubst %.o,%.d,$(ERAM_O)) $(patsubst %.o,%.d,$(SRAM_O))
 	@rm -f $(patsubst %.o,%.d,$(CINIT_O)) $(patsubst %.o,%.d,$(ITCM_O)) $(patsubst %.o,%.d,$(DTCM_O))
 	@rm -f $(patsubst %.o,%.d,$(ASM_O)) $(patsubst %.o,%.d,$(CPP_O))
