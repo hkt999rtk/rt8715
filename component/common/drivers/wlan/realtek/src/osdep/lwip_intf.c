@@ -28,6 +28,7 @@
 #if defined(CONFIG_PLATFORM_8195BHP)
 #include <dma_api.h>
 #include <hal_gdma.h>
+#include <hal_timer.h>
 #include <stdint.h>
 #include <stdio.h>
 #endif
@@ -49,7 +50,11 @@ extern struct netif xnetif[];			//LWIP netif
 #endif
 
 #ifndef CONFIG_NET_GDMA_STATS
-#define CONFIG_NET_GDMA_STATS 1
+#define CONFIG_NET_GDMA_STATS 0
+#endif
+
+#ifndef CONFIG_TCP_PHASE_PROFILE
+#define CONFIG_TCP_PHASE_PROFILE 1
 #endif
 
 #ifndef CONFIG_WLAN_RX_RING_GDMA_VERIFY
@@ -99,6 +104,7 @@ typedef struct net_gdma_context_s {
 static net_gdma_context_t g_net_rx_gdma;
 static net_gdma_context_t g_net_tx_gdma;
 static net_gdma_context_t g_net_socket_rx_gdma;
+static net_gdma_context_t g_net_tcp_tx_gdma;
 static u8 g_net_gdma_initialized;
 
 static void net_gdma_done_from_isr(net_gdma_context_t *ctx)
@@ -147,6 +153,12 @@ static void net_gdma_socket_rx_done(uint32_t id)
 {
 	(void)id;
 	net_gdma_done_from_isr(&g_net_socket_rx_gdma);
+}
+
+static void net_gdma_tcp_tx_done(uint32_t id)
+{
+	(void)id;
+	net_gdma_done_from_isr(&g_net_tcp_tx_gdma);
 }
 
 static void net_gdma_drain_completion(net_gdma_context_t *ctx)
@@ -215,7 +227,7 @@ static void net_gdma_init_all(void)
 	/* WLAN setup is serialized before packet traffic starts. */
 	g_net_gdma_initialized = 1;
 	/*
-	 * Reserve all three channels once during serialized WLAN setup and retain
+	 * Reserve all four channels once during serialized WLAN setup and retain
 	 * them for the lifetime of the network stack.  Socket RX is deliberately
 	 * separate: a blocking recv() copy must not contend with driver RX ingress.
 	 */
@@ -223,6 +235,10 @@ static void net_gdma_init_all(void)
 	net_gdma_init_context(&g_net_tx_gdma, "TX", net_gdma_tx_done);
 	net_gdma_init_context(&g_net_socket_rx_gdma, "SOCKET_RX",
 			       net_gdma_socket_rx_done);
+	/* tcp_write() has independent producer/lifetime rules; never serialize it
+	 * behind driver/NCM TX traffic on g_net_tx_gdma. */
+	net_gdma_init_context(&g_net_tcp_tx_gdma, "TCP_TX",
+			       net_gdma_tcp_tx_done);
 #endif
 }
 
@@ -611,15 +627,19 @@ int rltk_network_gdma_copy_rx(void *dst, const void *src, unsigned int len,
 int rltk_network_gdma_copy_socket_rx(void *dst, const void *src,
 				     unsigned int len)
 {
+#if CONFIG_NET_GDMA_STATS
 	static u32 dma_ops;
 	static u32 dma_bytes;
 	static u32 cpu_ops;
 	static u32 cpu_bytes;
-	static u32 recoveries;
 	static u32 report_probe;
 	static u32 last_report_tick;
+#endif
+	static u32 recoveries;
 	u32 dma_len = 0;
+#if CONFIG_NET_GDMA_STATS
 	u32 now;
+#endif
 	int result;
 	uintptr_t dst_start = (uintptr_t)dst;
 	uintptr_t src_start = (uintptr_t)src;
@@ -662,6 +682,7 @@ int rltk_network_gdma_copy_socket_rx(void *dst, const void *src,
 		dma_len = 0;
 	}
 
+#if CONFIG_NET_GDMA_STATS
 	if (dma_len != 0U) {
 		dma_ops++;
 		dma_bytes += dma_len;
@@ -692,9 +713,147 @@ int rltk_network_gdma_copy_socket_rx(void *dst, const void *src,
 			last_report_tick = now;
 		}
 	}
+#endif
 
 	return 0;
 }
+
+/*
+ * tcp_write() retains both buffers until this blocking helper returns, so a
+ * failed transfer can be repaired from the untouched source.  The destination
+ * is commonly offset by TCP headroom; cache-line edges therefore stay on the
+ * CPU while only the isolated middle is submitted to this dedicated channel.
+ * Keeping TCP_TX separate prevents a TCPIP-thread copy from contending with
+ * the driver/NCM TX channel.
+ */
+int rltk_network_gdma_copy_tcp_tx(void *dst, const void *src,
+				  unsigned int len, unsigned int *dma_len_out)
+{
+	u32 dma_len = 0;
+	uintptr_t dst_start = (uintptr_t)dst;
+	uintptr_t src_start = (uintptr_t)src;
+	uintptr_t dst_end = dst_start + len;
+	uintptr_t src_end = src_start + len;
+	int result;
+	int dma_accessible;
+
+	dma_accessible = dst_end >= dst_start && src_end >= src_start &&
+		(((dst_start >= 0x20100000U) && (dst_end <= 0x2017A000U)) ||
+		 ((dst_start >= 0x60000000U) && (dst_end <= 0x60800000U)) ||
+		 ((dst_start >= 0x70000000U) && (dst_end <= 0x72000000U))) &&
+		(((src_start >= 0x20100000U) && (src_end <= 0x2017A000U)) ||
+		 ((src_start >= 0x60000000U) && (src_end <= 0x60800000U)) ||
+		 ((src_start >= 0x70000000U) && (src_end <= 0x72000000U)));
+
+	if (dma_accessible) {
+		result = net_gdma_copy_with_edges(&g_net_tcp_tx_gdma, dst, src,
+						  len, NULL, &dma_len);
+	} else {
+		rtw_memcpy(dst, (void *)src, len);
+		result = 0;
+	}
+	if (result != 0) {
+		printf("[TCP_TX_GDMA][RECOVERY] len=%u result=%d; CPU copy\n",
+		       len, result);
+		rtw_memcpy(dst, (void *)src, len);
+		dma_len = 0;
+	}
+	if (dma_len_out != NULL) {
+		*dma_len_out = dma_len;
+	}
+	return 0;
+}
+
+#if CONFIG_TCP_PHASE_PROFILE
+typedef struct tcp_phase_profile_s {
+	u32 window_start_us;
+	u32 rx_ops;
+	u32 rx_bytes;
+	u32 rx_total_us;
+	u32 rx_checksum_us;
+	u32 tx_ops;
+	u32 tx_bytes;
+	u32 tx_total_us;
+	u32 tx_copy_ops;
+	u32 tx_copy_bytes;
+	u32 tx_copy_dma_bytes;
+	u32 tx_copy_us;
+} tcp_phase_profile_t;
+
+static tcp_phase_profile_t g_tcp_phase_profile;
+
+static void rltk_tcp_perf_report(u32 now)
+{
+	u32 window;
+
+	if (g_tcp_phase_profile.window_start_us == 0U) {
+		g_tcp_phase_profile.window_start_us = now;
+		return;
+	}
+	window = now - g_tcp_phase_profile.window_start_us;
+	if (window < 5000000U) {
+		return;
+	}
+	printf("[TCP_PERF] window_us=%u RX ops=%u bytes=%u total_us=%u checksum_us=%u; "
+	       "TX ops=%u bytes=%u total_us=%u copy=%u/%uB dma=%uB copy_us=%u\n",
+	       (unsigned int)window,
+	       (unsigned int)g_tcp_phase_profile.rx_ops,
+	       (unsigned int)g_tcp_phase_profile.rx_bytes,
+	       (unsigned int)g_tcp_phase_profile.rx_total_us,
+	       (unsigned int)g_tcp_phase_profile.rx_checksum_us,
+	       (unsigned int)g_tcp_phase_profile.tx_ops,
+	       (unsigned int)g_tcp_phase_profile.tx_bytes,
+	       (unsigned int)g_tcp_phase_profile.tx_total_us,
+	       (unsigned int)g_tcp_phase_profile.tx_copy_ops,
+	       (unsigned int)g_tcp_phase_profile.tx_copy_bytes,
+	       (unsigned int)g_tcp_phase_profile.tx_copy_dma_bytes,
+	       (unsigned int)g_tcp_phase_profile.tx_copy_us);
+	rtw_memset(&g_tcp_phase_profile, 0, sizeof(g_tcp_phase_profile));
+	g_tcp_phase_profile.window_start_us = now;
+}
+
+unsigned int rltk_tcp_perf_now_us(void)
+{
+	return hal_read_curtime_us();
+}
+
+void rltk_tcp_perf_rx_complete(unsigned int start_us, unsigned int bytes,
+			       unsigned int checksum_us)
+{
+	u32 now = hal_read_curtime_us();
+	g_tcp_phase_profile.rx_ops++;
+	g_tcp_phase_profile.rx_bytes += bytes;
+	g_tcp_phase_profile.rx_total_us += now - start_us;
+	g_tcp_phase_profile.rx_checksum_us += checksum_us;
+	rltk_tcp_perf_report(now);
+}
+
+void rltk_tcp_perf_tx_complete(unsigned int start_us, unsigned int bytes)
+{
+	u32 now = hal_read_curtime_us();
+	g_tcp_phase_profile.tx_ops++;
+	g_tcp_phase_profile.tx_bytes += bytes;
+	g_tcp_phase_profile.tx_total_us += now - start_us;
+	rltk_tcp_perf_report(now);
+}
+
+void rltk_tcp_perf_tx_copy(unsigned int bytes, unsigned int dma_bytes,
+			   unsigned int elapsed_us)
+{
+	g_tcp_phase_profile.tx_copy_ops++;
+	g_tcp_phase_profile.tx_copy_bytes += bytes;
+	g_tcp_phase_profile.tx_copy_dma_bytes += dma_bytes;
+	g_tcp_phase_profile.tx_copy_us += elapsed_us;
+}
+#else
+unsigned int rltk_tcp_perf_now_us(void) { return 0; }
+void rltk_tcp_perf_rx_complete(unsigned int s, unsigned int b, unsigned int c)
+{ (void)s; (void)b; (void)c; }
+void rltk_tcp_perf_tx_complete(unsigned int s, unsigned int b)
+{ (void)s; (void)b; }
+void rltk_tcp_perf_tx_copy(unsigned int b, unsigned int d, unsigned int e)
+{ (void)b; (void)d; (void)e; }
+#endif
 
 /*
  * This symbol is referenced only by a build-local copy of rtl8195b_recv.o.
@@ -732,16 +891,21 @@ static u32 wlan_rx_ring_hash(const void *buffer, u32 len)
 void rtw_rx_ring_memcpy(void *dst, void *src, u32 len)
 {
 	static u8 first_call = 1;
+#if CONFIG_NET_GDMA_STATS || CONFIG_WLAN_RX_RING_GDMA_VERIFY
 	static u32 attempts;
+#endif
 	static u32 recoveries;
+#if CONFIG_NET_GDMA_STATS
 	static u32 last_report_tick;
+#endif
 	u32 source_hash = 0;
-	u32 now;
 	int result;
 
 	if (first_call) {
 		first_call = 0;
+#if CONFIG_NET_GDMA_STATS
 		last_report_tick = rtw_get_current_time();
+#endif
 		printf("[WLAN_RX_GDMA] ring-to-skb redirect active threshold=%u "
 		       "max_len=%u verify=%u\n",
 		       (unsigned int)NET_GDMA_COPY_THRESHOLD,
@@ -758,7 +922,9 @@ void rtw_rx_ring_memcpy(void *dst, void *src, u32 len)
 #if CONFIG_WLAN_RX_RING_GDMA_VERIFY
 	source_hash = wlan_rx_ring_hash(src, len);
 #endif
+#if CONFIG_NET_GDMA_STATS || CONFIG_WLAN_RX_RING_GDMA_VERIFY
 	attempts++;
+#endif
 	result = rltk_network_gdma_copy_rx(dst, src, len, NULL);
 
 #if CONFIG_WLAN_RX_RING_GDMA_VERIFY
@@ -776,7 +942,8 @@ void rtw_rx_ring_memcpy(void *dst, void *src, u32 len)
 		rtw_memcpy(dst, src, len);
 	}
 
-	now = rtw_get_current_time();
+#if CONFIG_NET_GDMA_STATS
+	u32 now = rtw_get_current_time();
 	if (rtw_systime_to_ms(now - last_report_tick) >= NET_GDMA_REPORT_MS) {
 		printf("[WLAN_RX_GDMA][STATS] attempts=%u recoveries=%u verify=%u\n",
 		       (unsigned int)attempts, (unsigned int)recoveries,
@@ -785,6 +952,7 @@ void rtw_rx_ring_memcpy(void *dst, void *src, u32 len)
 		recoveries = 0;
 		last_report_tick = now;
 	}
+#endif
 }
 
 #endif /* CONFIG_LWIP_LAYER && CONFIG_PLATFORM_8195BHP */

@@ -55,6 +55,9 @@
 #include "lwip/stats.h"
 #include "lwip/ip6.h"
 #include "lwip/ip6_addr.h"
+#if defined(CONFIG_PLATFORM_8195BHP)
+#include "lwip_intf.h"
+#endif
 #if LWIP_ND6_TCP_REACHABILITY_HINTS
 #include "lwip/nd6.h"
 #endif /* LWIP_ND6_TCP_REACHABILITY_HINTS */
@@ -125,6 +128,15 @@ tcp_input(struct pbuf *p, struct netif *inp)
 #endif /* SO_REUSE */
   u8_t hdrlen_bytes;
   err_t err;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_PHASE_PROFILE
+  unsigned int tcp_perf_start_us = rltk_tcp_perf_now_us();
+  unsigned int tcp_perf_bytes = p->tot_len;
+  unsigned int tcp_perf_checksum_us = 0;
+#define TCP_PERF_INPUT_DONE() \
+  rltk_tcp_perf_rx_complete(tcp_perf_start_us, tcp_perf_bytes, tcp_perf_checksum_us)
+#else
+#define TCP_PERF_INPUT_DONE() do { } while (0)
+#endif
 
   LWIP_UNUSED_ARG(inp);
   LWIP_ASSERT_CORE_LOCKED();
@@ -159,8 +171,14 @@ tcp_input(struct pbuf *p, struct netif *inp)
 #if CHECKSUM_CHECK_TCP
   IF__NETIF_CHECKSUM_ENABLED(inp, NETIF_CHECKSUM_CHECK_TCP) {
     /* Verify TCP checksum. */
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_PHASE_PROFILE
+    unsigned int checksum_start_us = rltk_tcp_perf_now_us();
+#endif
     u16_t chksum = ip_chksum_pseudo(p, IP_PROTO_TCP, p->tot_len,
                                     ip_current_src_addr(), ip_current_dest_addr());
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_PHASE_PROFILE
+    tcp_perf_checksum_us += rltk_tcp_perf_now_us() - checksum_start_us;
+#endif
     if (chksum != 0) {
       LWIP_DEBUGF(TCP_INPUT_DEBUG, ("tcp_input: packet discarded due to failing checksum 0x%04"X16_F"\n",
                                     chksum));
@@ -308,6 +326,7 @@ tcp_input(struct pbuf *p, struct netif *inp)
           tcp_timewait_input(pcb);
         }
         pbuf_free(p);
+        TCP_PERF_INPUT_DONE();
         return;
       }
     }
@@ -380,6 +399,7 @@ tcp_input(struct pbuf *p, struct netif *inp)
         tcp_listen_input(lpcb);
       }
       pbuf_free(p);
+      TCP_PERF_INPUT_DONE();
       return;
     }
   }
@@ -395,6 +415,7 @@ tcp_input(struct pbuf *p, struct netif *inp)
   if ((pcb != NULL) && LWIP_HOOK_TCP_INPACKET_PCB(pcb, tcphdr, tcphdr_optlen,
       tcphdr_opt1len, tcphdr_opt2, p) != ERR_OK) {
     pbuf_free(p);
+    TCP_PERF_INPUT_DONE();
     return;
   }
 #endif
@@ -584,11 +605,14 @@ aborted:
 
   LWIP_ASSERT("tcp_input: tcp_pcbs_sane()", tcp_pcbs_sane());
   PERF_STOP("tcp_input");
+  TCP_PERF_INPUT_DONE();
   return;
 dropped:
   TCP_STATS_INC(tcp.drop);
   MIB2_STATS_INC(mib2.tcpinerrs);
   pbuf_free(p);
+  TCP_PERF_INPUT_DONE();
+#undef TCP_PERF_INPUT_DONE
 }
 
 /** Called from tcp_input to check for TF_CLOSED flag. This results in closing

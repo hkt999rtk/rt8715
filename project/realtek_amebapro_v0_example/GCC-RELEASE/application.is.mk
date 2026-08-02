@@ -776,6 +776,10 @@ GCCFLAGS += -DCONFIG_BUILD_RAM=1 -DCONFIG_BUILD_LIB=1
 GCCFLAGS += -DV8M_STKOVF -DARM_MATH_CM7 -DCONFIG_FATFS_WRAPPER=1
 WLAN_RX_GDMA_VERIFY ?= 0
 GCCFLAGS += -DCONFIG_WLAN_RX_RING_GDMA_VERIFY=$(WLAN_RX_GDMA_VERIFY)
+NET_GDMA_STATS ?= 0
+TCP_PHASE_PROFILE ?= 1
+GCCFLAGS += -DCONFIG_NET_GDMA_STATS=$(NET_GDMA_STATS)
+GCCFLAGS += -DCONFIG_TCP_PHASE_PROFILE=$(TCP_PHASE_PROFILE)
 # Avoid FreeRTOS-Plus-POSIX vs newlib type conflicts (mode_t, clockid_t, timer_t)
 GCCFLAGS += -DposixconfigENABLE_MODE_T=0
 GCCFLAGS += -DposixconfigENABLE_CLOCKID_T=0
@@ -800,6 +804,19 @@ endif
 CFLAGS = $(GCCFLAGS)
 CFLAGS += -Wall -Wpointer-arith -Wstrict-prototypes -Wundef -Wno-write-strings -Wno-maybe-uninitialized
 CFLAGS += -w
+
+# Compile only measured lwIP hot paths for throughput.  Keeping the rest at
+# -Os limits ITCM growth; TCP_PHASE_PROFILE can be disabled after board data
+# identifies the stable bottleneck.
+LWIP_HOT_OPT_FLAGS ?= -O3
+LWIP_HOT_O3_O := \
+	../../../component/common/network/lwip/lwip_v2.1.2/src/core/inet_chksum.o \
+	../../../component/common/network/lwip/lwip_v2.1.2/src/core/pbuf.o \
+	../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp.o \
+	../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_in.o \
+	../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_out.o \
+	../../../component/common/network/lwip/lwip_v2.1.2/src/netif/ethernet.o
+$(LWIP_HOT_O3_O): CFLAGS := $(filter-out -Os,$(CFLAGS)) $(LWIP_HOT_OPT_FLAGS)
 
 CPPFLAGS = $(GCCFLAGS)
 CPPFLAGS += -std=c++11 -fno-use-cxa-atexit

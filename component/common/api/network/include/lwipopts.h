@@ -347,7 +347,7 @@ extern unsigned int sys_now(void);
 #define CONFIG_WLAN_RX_ZERO_COPY       1
 #define WLAN_RX_ZERO_COPY_MIN_LEN      1024
 #define WLAN_RX_ZERO_COPY_POOL_SIZE    256
-#define WLAN_RX_ZERO_COPY_STATS        1
+#define WLAN_RX_ZERO_COPY_STATS        0
 #define WLAN_RX_ZERO_COPY_SELFTEST     1
 #define WLAN_RX_ZERO_COPY_DRAIN_TIMEOUT_MS 5000
 

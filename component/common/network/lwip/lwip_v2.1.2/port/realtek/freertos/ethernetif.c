@@ -108,6 +108,13 @@ struct wlan_rx_zc_stats {
 };
 
 static struct wlan_rx_zc_stats g_wlan_rx_zc_stats;
+#if WLAN_RX_ZERO_COPY_STATS
+#define WLAN_RX_ZC_STAT_INC(field) (g_wlan_rx_zc_stats.field++)
+#define WLAN_RX_ZC_STAT_ADD(field, value) (g_wlan_rx_zc_stats.field += (value))
+#else
+#define WLAN_RX_ZC_STAT_INC(field) do { } while (0)
+#define WLAN_RX_ZC_STAT_ADD(field, value) do { (void)(value); } while (0)
+#endif
 static u8_t g_wlan_rx_zc_pool_initialized;
 static u8_t g_wlan_rx_zc_selftest_state;
 static u8_t g_wlan_rx_zc_quiesced;
@@ -128,7 +135,9 @@ static void wlan_rx_zc_pool_init(void)
 	g_wlan_rx_zc_pool = (struct wlan_rx_custom_pbuf *)
 		rtw_zmalloc(sizeof(*g_wlan_rx_zc_pool) *
 			    WLAN_RX_ZERO_COPY_POOL_SIZE);
+#if WLAN_RX_ZERO_COPY_STATS
 	g_wlan_rx_zc_stats.last_report_ms = sys_now();
+#endif
 	if (g_wlan_rx_zc_pool == NULL) {
 		printf("[WLAN_RX_ZC] wrapper pool allocation failed; copy fallback only\n");
 	} else {
@@ -189,9 +198,11 @@ static struct wlan_rx_custom_pbuf *wlan_rx_zc_wrapper_alloc(void)
 	}
 	if (wrapper != NULL) {
 		g_wlan_rx_zc_stats.outstanding++;
+#if WLAN_RX_ZERO_COPY_STATS
 		if (g_wlan_rx_zc_stats.outstanding > g_wlan_rx_zc_stats.peak) {
 			g_wlan_rx_zc_stats.peak = g_wlan_rx_zc_stats.outstanding;
 		}
+#endif
 	}
 	SYS_ARCH_UNPROTECT(old_level);
 	return wrapper;
@@ -271,7 +282,7 @@ static struct pbuf *wlan_rx_zc_try(int idx, int total_len)
 #endif
 
 	if ((unsigned int)total_len < WLAN_RX_ZERO_COPY_MIN_LEN) {
-		g_wlan_rx_zc_stats.fallback_small++;
+		WLAN_RX_ZC_STAT_INC(fallback_small);
 		return NULL;
 	}
 
@@ -280,7 +291,7 @@ static struct pbuf *wlan_rx_zc_try(int idx, int total_len)
 	selftest_state = g_wlan_rx_zc_selftest_state;
 	SYS_ARCH_UNPROTECT(selftest_level);
 	if (selftest_state == 2U) {
-		g_wlan_rx_zc_stats.fallback_invalid++;
+		WLAN_RX_ZC_STAT_INC(fallback_invalid);
 		return NULL;
 	}
 #endif
@@ -292,7 +303,7 @@ static struct pbuf *wlan_rx_zc_try(int idx, int total_len)
 	 */
 	wrapper = wlan_rx_zc_wrapper_alloc();
 	if (wrapper == NULL) {
-		g_wlan_rx_zc_stats.fallback_pool++;
+		WLAN_RX_ZC_STAT_INC(fallback_pool);
 		return NULL;
 	}
 
@@ -323,22 +334,22 @@ static struct pbuf *wlan_rx_zc_try(int idx, int total_len)
 		} else if (ret == -1) {
 			printf("[WLAN_RX_ZC][SELFTEST] clone lifetime FAIL; "
 			       "copy fallback only\n");
-			g_wlan_rx_zc_stats.fallback_invalid++;
+			WLAN_RX_ZC_STAT_INC(fallback_invalid);
 			wlan_rx_zc_wrapper_free(wrapper);
 			return NULL;
 		} else {
-			g_wlan_rx_zc_stats.fallback_clone++;
+			WLAN_RX_ZC_STAT_INC(fallback_clone);
 			wlan_rx_zc_wrapper_free(wrapper);
 			return NULL;
 		}
 	} else if (selftest_state == 3U) {
 		/* Another interface is testing; copy this packet without waiting. */
-		g_wlan_rx_zc_stats.fallback_clone++;
+		WLAN_RX_ZC_STAT_INC(fallback_clone);
 		wlan_rx_zc_wrapper_free(wrapper);
 		return NULL;
 	}
 	if (selftest_state == 2U) {
-		g_wlan_rx_zc_stats.fallback_invalid++;
+		WLAN_RX_ZC_STAT_INC(fallback_invalid);
 		wlan_rx_zc_wrapper_free(wrapper);
 		return NULL;
 	}
@@ -348,9 +359,9 @@ static struct pbuf *wlan_rx_zc_try(int idx, int total_len)
 				       &rx_ref, &payload);
 	if (ret != 0) {
 		if (ret == -2) {
-			g_wlan_rx_zc_stats.fallback_clone++;
+			WLAN_RX_ZC_STAT_INC(fallback_clone);
 		} else {
-			g_wlan_rx_zc_stats.fallback_invalid++;
+			WLAN_RX_ZC_STAT_INC(fallback_invalid);
 		}
 		wlan_rx_zc_wrapper_free(wrapper);
 		return NULL;
@@ -365,13 +376,13 @@ static struct pbuf *wlan_rx_zc_try(int idx, int total_len)
 		rltk_wlan_rx_ref_release(rx_ref);
 		wrapper->rx_ref = NULL;
 		wrapper->magic = 0;
-		g_wlan_rx_zc_stats.fallback_invalid++;
+		WLAN_RX_ZC_STAT_INC(fallback_invalid);
 		wlan_rx_zc_wrapper_free(wrapper);
 		return NULL;
 	}
 
-	g_wlan_rx_zc_stats.ops++;
-	g_wlan_rx_zc_stats.bytes += (u32_t)total_len;
+	WLAN_RX_ZC_STAT_INC(ops);
+	WLAN_RX_ZC_STAT_ADD(bytes, (u32_t)total_len);
 	return p;
 }
 

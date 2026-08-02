@@ -74,6 +74,9 @@
 #include "lwip/stats.h"
 #include "lwip/ip6.h"
 #include "lwip/ip6_addr.h"
+#if defined(CONFIG_PLATFORM_8195BHP)
+#include "lwip_intf.h"
+#endif
 #if LWIP_TCP_TIMESTAMPS
 #include "lwip/sys.h"
 #endif
@@ -101,8 +104,28 @@
 #define TCP_DATA_COPY2(dst, src, len, chksum, chksum_swapped)  \
   tcp_seg_add_chksum(LWIP_CHKSUM_COPY(dst, src, len), len, chksum, chksum_swapped);
 #else /* TCP_CHECKSUM_ON_COPY*/
+#if defined(CONFIG_PLATFORM_8195BHP)
+static void
+tcp_data_copy_gdma(void *dst, const void *src, u16_t len)
+{
+  unsigned int dma_len = 0;
+#if CONFIG_TCP_PHASE_PROFILE
+  unsigned int start_us = rltk_tcp_perf_now_us();
+#endif
+
+  (void)rltk_network_gdma_copy_tcp_tx(dst, src, len, &dma_len);
+#if CONFIG_TCP_PHASE_PROFILE
+  rltk_tcp_perf_tx_copy(len, dma_len, rltk_tcp_perf_now_us() - start_us);
+#else
+  LWIP_UNUSED_ARG(dma_len);
+#endif
+}
+#define TCP_DATA_COPY(dst, src, len, seg)                     tcp_data_copy_gdma(dst, src, len)
+#define TCP_DATA_COPY2(dst, src, len, chksum, chksum_swapped) tcp_data_copy_gdma(dst, src, len)
+#else
 #define TCP_DATA_COPY(dst, src, len, seg)                     MEMCPY(dst, src, len)
 #define TCP_DATA_COPY2(dst, src, len, chksum, chksum_swapped) MEMCPY(dst, src, len)
+#endif
 #endif /* TCP_CHECKSUM_ON_COPY*/
 
 /** Define this to 1 for an extra check that the output checksum is valid
@@ -410,6 +433,9 @@ tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
 #endif /* TCP_CHECKSUM_ON_COPY */
   err_t err;
   u16_t mss_local;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_PHASE_PROFILE
+  unsigned int tcp_perf_start_us;
+#endif
 
   LWIP_ERROR("tcp_write: invalid pcb", pcb != NULL, return ERR_ARG);
 
@@ -433,6 +459,9 @@ tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
   if (err != ERR_OK) {
     return err;
   }
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_PHASE_PROFILE
+  tcp_perf_start_us = rltk_tcp_perf_now_us();
+#endif
   queuelen = pcb->snd_queuelen;
 
 #if LWIP_TCP_TIMESTAMPS
@@ -792,6 +821,9 @@ tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
     TCPH_SET_FLAG(seg->tcphdr, TCP_PSH);
   }
 
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_PHASE_PROFILE
+  rltk_tcp_perf_tx_complete(tcp_perf_start_us, len);
+#endif
   return ERR_OK;
 memerr:
   tcp_set_flags(pcb, TF_NAGLEMEMERR);
@@ -808,6 +840,9 @@ memerr:
                 pcb->unsent != NULL);
   }
   LWIP_DEBUGF(TCP_QLEN_DEBUG | LWIP_DBG_STATE, ("tcp_write: %"S16_F" (with mem err)\n", pcb->snd_queuelen));
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_PHASE_PROFILE
+  rltk_tcp_perf_tx_complete(tcp_perf_start_us, len);
+#endif
   return ERR_MEM;
 }
 

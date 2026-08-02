@@ -67,6 +67,14 @@ int rltk_network_gdma_copy_rx(void *dst, const void *src, unsigned int len,
 			      const void *allocation_end);
 int rltk_network_gdma_copy_socket_rx(void *dst, const void *src,
 				     unsigned int len);
+int rltk_network_gdma_copy_tcp_tx(void *dst, const void *src,
+				  unsigned int len, unsigned int *dma_len);
+unsigned int rltk_tcp_perf_now_us(void);
+void rltk_tcp_perf_rx_complete(unsigned int start_us, unsigned int bytes,
+			       unsigned int checksum_us);
+void rltk_tcp_perf_tx_complete(unsigned int start_us, unsigned int bytes);
+void rltk_tcp_perf_tx_copy(unsigned int bytes, unsigned int dma_bytes,
+			   unsigned int elapsed_us);
 #endif
 unsigned char rltk_wlan_running(unsigned char idx);		// interface is up. 0: interface is down
 
