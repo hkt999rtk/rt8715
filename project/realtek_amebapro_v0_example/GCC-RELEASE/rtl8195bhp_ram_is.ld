@@ -223,6 +223,17 @@ SECTIONS
 		*(.eram.text*)
 		*(.speex.text*)
 
+		/*
+		 * Sustained CarPlay screen/audio processing must not compete with
+		 * NOR XIP cache misses.  ITCM input sections were consumed above and
+		 * retain priority; place only the remaining ordinary text in LPDDR.
+		 * The CarPlay archive also contains the ChaCha/AES routing and software
+		 * fallback paths used by AirPlayScreenReceiver.
+		 */
+		*lib_CarPlay_chacha_m33.a:*(.text*)
+		*lib_fdkaac.a:*(.text*)
+		*lib_Accessory2.a:AirPlayScreen.o(.text*)
+
 		__psram_code_text_end__ = .;
 		__lpddr_code_text_end__ = .;
 	} > EXTERNAL_RAM
@@ -246,7 +257,12 @@ SECTIONS
 		*(.sdram.rodata.str1*)
 		*(.usbd.rodata.str1*)
 		*(.wlan.rodata.str1*)
-		*(.eram.rodata.str1*)	
+		*(.eram.rodata.str1*)
+
+		/* Keep hot codec/crypto lookup tables with their LPDDR text. */
+		*lib_CarPlay_chacha_m33.a:*(.rodata*)
+		*lib_fdkaac.a:*(.rodata* .haac.rodata* .faac.rodata*)
+		*lib_Accessory2.a:AirPlayScreen.o(.rodata*)
 
 		. = ALIGN(4);
 		__psram_code_rodata_end__ = .;
