@@ -14,7 +14,10 @@
 typedef struct atss_task_stat {
 	char task_name[ATSS_TASK_NAME_LEN];
 	uint32_t priority;
-	uint32_t runtime_ticks;
+	union {
+		uint32_t runtime_us;
+		uint32_t runtime_ticks; /* Deprecated source-compatible alias. */
+	};
 	uint32_t cpu_utilization_x10;
 	uint32_t stack_size_bytes;
 	uint32_t stack_used_bytes;

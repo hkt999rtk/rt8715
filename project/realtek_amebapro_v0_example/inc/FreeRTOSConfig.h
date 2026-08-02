@@ -128,11 +128,18 @@ tick off. */
 /* Run time stats gathering definitions. */
 #define configGENERATE_RUN_TIME_STATS	1
 #if configGENERATE_RUN_TIME_STATS
-#define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS() //( ulHighFrequencyTimerTicks = 0UL )
-#define portGET_RUN_TIME_COUNTER_VALUE() xTickCount //ulHighFrequencyTimerTicks
+/*
+ * Use the always-running 1 us system GTimer instead of the 1 ms RTOS tick.
+ * The counter is 32-bit and wraps about every 71.6 minutes; tasks.c and ATSS
+ * intentionally use unsigned modulo subtraction so that rollover is harmless.
+ */
+extern void atss_runtime_counter_init(void);
+extern uint32_t atss_runtime_counter_get(void);
+#define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS() atss_runtime_counter_init()
+#define portGET_RUN_TIME_COUNTER_VALUE() atss_runtime_counter_get()
 #undef	configUSE_TRACE_FACILITY
 #define configUSE_TRACE_FACILITY			1
-#define portCONFIGURE_STATS_PEROID_VALUE	1000 //unit Ticks
+#define portCONFIGURE_STATS_PEROID_VALUE	1000000U /* one second, in us */
 #endif 
 
 /* This demo makes use of one or more example stats formatting functions.  These

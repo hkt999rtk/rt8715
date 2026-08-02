@@ -184,9 +184,11 @@ static int atss_calculate_sample(const TaskStatus_t *start_tasks,
 
 		stats[end_index].priority =
 			(uint32_t)end_tasks[end_index].uxCurrentPriority;
-		stats[end_index].runtime_ticks = task_delta;
+		stats[end_index].runtime_us = task_delta;
 		stats[end_index].cpu_utilization_x10 =
-			(task_delta * 1000U + (total_delta / 2U)) / total_delta;
+			(uint32_t)(((uint64_t)task_delta * 1000ULL +
+				    ((uint64_t)total_delta / 2ULL)) /
+				   (uint64_t)total_delta);
 
 		if (xTaskGetDebugInfo(end_tasks[end_index].xHandle, &task_debug_info) == pdPASS) {
 			task_name = task_debug_info.pcTaskName;
@@ -221,17 +223,17 @@ static void atss_print_sample(const atss_task_stat_t *stats, size_t count)
 	size_t index;
 	uint32_t utilization_x10;
 
-	AT_PRINTK("[ATSS]: %-31s %5s %7s %7s %12s %12s %12s",
-		 "Task", "Prio", "CPU", "Ticks", "StackSize(B)", "StackUsed(B)", "StackPeak(B)");
+	AT_PRINTK("[ATSS]: %-31s %5s %7s %10s %12s %12s %12s",
+		 "Task", "Prio", "CPU", "Time(us)", "StackSize(B)", "StackUsed(B)", "StackPeak(B)");
 
 	for (index = 0; index < count; index++) {
 		utilization_x10 = stats[index].cpu_utilization_x10;
-		AT_PRINTK("[ATSS]: %-31s %5u %5u.%u%% %7u %12u %12u %12u",
+		AT_PRINTK("[ATSS]: %-31s %5u %5u.%u%% %10u %12u %12u %12u",
 			 stats[index].task_name,
 			 (unsigned int)stats[index].priority,
 			 (unsigned int)(utilization_x10 / 10U),
 			 (unsigned int)(utilization_x10 % 10U),
-			 (unsigned int)stats[index].runtime_ticks,
+			 (unsigned int)stats[index].runtime_us,
 			 (unsigned int)stats[index].stack_size_bytes,
 			 (unsigned int)stats[index].stack_used_bytes,
 			 (unsigned int)stats[index].stack_peak_bytes);

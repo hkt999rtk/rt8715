@@ -55,7 +55,10 @@ status = customer_atss_stop();
 typedef struct atss_task_stat {
 	char task_name[32];
 	uint32_t priority;
-	uint32_t runtime_ticks;
+	union {
+		uint32_t runtime_us;
+		uint32_t runtime_ticks; /* Deprecated compatibility alias. */
+	};
 	uint32_t cpu_utilization_x10;
 	uint32_t stack_size_bytes;
 	uint32_t stack_used_bytes;
@@ -63,12 +66,19 @@ typedef struct atss_task_stat {
 } atss_task_stat_t;
 ```
 
+`runtime_us` 是 task 在最近一個取樣區間內的執行時間，單位為微秒。
+舊程式仍可讀取 `runtime_ticks`，但它只是同一欄位的相容別名，數值單位也已是微秒。
+
 `cpu_utilization_x10` 使用 0.1% 為單位，例如 `277` 表示 `27.7%`。
 
 ## 注意事項
 
 - API 只能從 task context 呼叫，不可從 ISR 呼叫。
 - `get` 回傳的是最近一個完整的 2 秒區間，不是從 start 以來的累積百分比。
+- 底層 32-bit 1 us hardware counter 約每 71.6 分鐘回繞一次；FreeRTOS
+  runtime accounting 與 ATSS 取樣均使用 unsigned modulo subtraction，跨越
+  回繞點仍可正確計算。單次取樣或兩次 runtime accounting 更新的間隔必須小於
+  一個完整 counter 週期；正常 task scheduling 與 ATSS 的 2 秒取樣符合此條件。
 - `sequence` 每完成一次有效取樣增加 1，可用來判斷資料是否更新。
 - 範例回傳的 `stats` 指向範例自己的 static buffer；下一次呼叫
   `customer_atss_get_latest()` 時內容會被覆寫。
@@ -76,4 +86,3 @@ typedef struct atss_task_stat {
   `configUSE_TRACE_FACILITY`。
 - Stack Size／Used 與長 task name 使用此套件內的 FreeRTOS
   `TaskDebugInfo_t`／`xTaskGetDebugInfo()` 擴充。
-
