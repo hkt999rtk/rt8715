@@ -7,7 +7,13 @@
 
 #ifdef CONFIG_PLATFORM_8195BHP  //Ameba Pro Config setting
 #define MAX_SKB_BUF_SIZE     1666	// should >= the size in wlan driver
+#if defined(CARBOX_RECOVERY_BUILD) && CARBOX_RECOVERY_BUILD
+/* Recovery has one OTA TCP stream. Start with 32 buffers to avoid embedding
+ * the normal application's 1.7 MiB pool; validate this count under RX stress. */
+#define MAX_SKB_BUF_NUM      32
+#else
 #define MAX_SKB_BUF_NUM      1024         // Please modify here
+#endif
 #define MAX_LOCAL_SKB_NUM    (MAX_SKB_BUF_NUM + 2)
 #define SKBUF_IN_DRAM 1
 #if WIFI_LOGO_CERTIFICATION

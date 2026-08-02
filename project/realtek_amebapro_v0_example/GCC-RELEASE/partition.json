@@ -20,6 +20,7 @@
             "items": [
                 "boot",
                 "fw1",
+                "fw2",
                 "fatfs",
                 "littlefs"
             ]
@@ -33,8 +34,15 @@
         },
         "fw1": {
             "start_addr": "0x40000",
-            "length": "0x600000",
+            "length": "0x80000",
             "type": "FW1",
+            "dbg_skip": false,
+            "hash_key": "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E5F"
+        },
+        "fw2": {
+            "start_addr": "0xC0000",
+            "length": "0x580000",
+            "type": "FW2",
             "dbg_skip": false,
             "hash_key": "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E5F"
         },

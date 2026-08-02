@@ -8,8 +8,26 @@
 #include <lwip/sockets.h>
 
 /************************Related setting****************************/
+/*
+ * Keep the vendor defaults for normal firmware, while allowing the
+ * immutable recovery image to compile only the raw TCP OTA path. Recovery
+ * has a strict 512 KiB budget and has no USB or filesystem dependency.
+ */
+#ifndef CONFIG_OTA_HTTP_UPDATE
+#define CONFIG_OTA_HTTP_UPDATE 1
+#endif
+
+#ifndef CONFIG_OTA_DFU_UPDATE
+#define CONFIG_OTA_DFU_UPDATE 1
+#endif
+
+#if CONFIG_OTA_HTTP_UPDATE
 #define HTTP_OTA_UPDATE
+#endif
+
+#if CONFIG_OTA_DFU_UPDATE
 #define DFU_OTA_UPDATE
+#endif
 
 #if FATFS_DISK_SD
 #define SDCARD_OTA_UPDATE

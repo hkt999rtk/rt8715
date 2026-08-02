@@ -578,7 +578,63 @@ Certain platform allows computing and verifying the IP, UDP, TCP and ICMP checks
 #define MEMP_NUM_MLD6_GROUP             20
 #define LWIP_NETIF_EXT_STATUS_CALLBACK  1
 #endif
-     
+
+/*
+ * The immutable Recovery image only runs DHCP plus one OTA TCP connection.
+ * Keep these overrides last because the production video profiles above
+ * deliberately enlarge several pools. A full Ethernet frame still fits in
+ * each pbuf, while the reduced object counts avoid embedding MiB-sized pools
+ * in the 512 KiB FW1 image.
+ */
+#if defined(CARBOX_RECOVERY_BUILD) && CARBOX_RECOVERY_BUILD
+#undef MEM_SIZE
+#define MEM_SIZE                       (16 * 1024)
+#undef MEMP_NUM_PBUF
+#define MEMP_NUM_PBUF                  32
+#undef MEMP_NUM_NETBUF
+#define MEMP_NUM_NETBUF                8
+#undef MEMP_NUM_NETCONN
+#define MEMP_NUM_NETCONN               8
+#undef MEMP_NUM_TCP_PCB
+#define MEMP_NUM_TCP_PCB               8
+#undef MEMP_NUM_TCP_PCB_LISTEN
+#define MEMP_NUM_TCP_PCB_LISTEN        4
+#undef MEMP_NUM_UDP_PCB
+#define MEMP_NUM_UDP_PCB               8
+#undef MEMP_NUM_TCP_SEG
+#define MEMP_NUM_TCP_SEG               32
+#undef MEMP_NUM_TCPIP_MSG_INPKT
+#define MEMP_NUM_TCPIP_MSG_INPKT       32
+#undef TCPIP_MBOX_SIZE
+#define TCPIP_MBOX_SIZE                32
+#undef DEFAULT_TCP_RECVMBOX_SIZE
+#define DEFAULT_TCP_RECVMBOX_SIZE      8
+#undef DEFAULT_UDP_RECVMBOX_SIZE
+#define DEFAULT_UDP_RECVMBOX_SIZE      8
+#undef DEFAULT_RAW_RECVMBOX_SIZE
+#define DEFAULT_RAW_RECVMBOX_SIZE      4
+#undef DEFAULT_ACCEPTMBOX_SIZE
+#define DEFAULT_ACCEPTMBOX_SIZE        4
+#undef PBUF_POOL_BUFSIZE
+#define PBUF_POOL_BUFSIZE              1600
+#undef PBUF_POOL_SIZE
+#define PBUF_POOL_SIZE                 32
+#undef TCP_SND_BUF
+#define TCP_SND_BUF                    (4 * TCP_MSS)
+#undef TCP_SND_QUEUELEN
+#define TCP_SND_QUEUELEN               16
+#undef TCP_WND
+#define TCP_WND                        (8 * TCP_MSS)
+#undef TCP_SNDLOWAT
+#define TCP_SNDLOWAT                   TCP_MSS
+#undef CONFIG_WLAN_RX_ZERO_COPY
+#define CONFIG_WLAN_RX_ZERO_COPY       0
+#undef LWIP_MDNS_RESPONDER
+#define LWIP_MDNS_RESPONDER            0
+#undef IP_FORWARD
+#define IP_FORWARD                     0
+#endif
+
 #include "lwip/init.h"                  //for version control
 
 #endif /* LWIP_HDR_LWIPOPTS_H */

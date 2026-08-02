@@ -735,6 +735,50 @@ SRAM_C += ../../../component/soc/realtek/8195b/fwlib/hal-rtl8195b-hp/source/ram_
 ERAM_C +=
 
 
+# Immutable FW1 recovery image. Use an explicit allow-list so application,
+# multimedia, USB, filesystem and CarPlay code cannot silently enter the
+# 512 KiB recovery partition as the normal firmware grows.
+ifeq ($(CARBOX_RECOVERY_BUILD),1)
+SRC_ASM :=
+SRC_CPP :=
+ERAM_C :=
+DTCM_C :=
+SRC_C := $(filter \
+	../../../component/soc/realtek/8195b/cmsis/rtl8195b-hp/source/ram_s/app_start.c \
+	../../../component/soc/realtek/8195b/cmsis/rtl8195b-hp/source/ram/mpu_config.c \
+	../../../component/soc/realtek/8195b/app/shell/% \
+	../../../component/soc/realtek/8195b/misc/driver/% \
+	../../../component/soc/realtek/8195b/misc/platform/ota_8195b.c \
+	../../../component/common/api/wifi/% \
+	../../../component/common/api/lwip_netconf.c \
+	../../../component/common/network/ssl/% \
+	../../../component/common/mbed/targets/hal/rtl8195b/hal/rtl8195bh/% \
+	../../../component/soc/realtek/8195b/fwlib/hal-rtl8195b-hp/source/% \
+	../../../component/os/% \
+	../../../component/common/drivers/wlan/realtek/src/core/option/rtw_opt_skbuf.c, \
+	$(SRC_C))
+SRC_C := $(filter-out \
+	../../../component/common/api/wifi/wifi_simple_config.c \
+	../../../component/common/api/wifi/rtw_wpa_supplicant/wpa_supplicant/wifi_p2p_config.c \
+	../../../component/common/api/wifi/rtw_wpa_supplicant/wpa_supplicant/wifi_wps_config.c, \
+	$(SRC_C))
+SRC_C += ../src/recovery/recovery_main.c
+CINIT_C := \
+	../../../component/soc/realtek/8195b/fwlib/hal-rtl8195b-hp/source/ram/hal_timer.c \
+	../../../component/os/freertos/freertos_v10.0.0/portable/MemMang/heap_4_2.c \
+	../../../component/soc/realtek/8195b/misc/utilities/source/ram/libc_wrap.c
+SRAM_C := \
+	../../../component/common/mbed/targets/hal/rtl8195b/hal/rtl8195bh/flash_api.c \
+	../../../component/soc/realtek/8195b/misc/driver/flash_api_ext.c \
+	../../../component/soc/realtek/8195b/fwlib/hal-rtl8195b-hp/source/ram_s/hal_flash.c
+ITCM_C := $(filter-out \
+	../../../component/common/network/lwip/lwip_v2.1.2/src/core/ipv4/ip_nat/% \
+	../../../component/common/network/dhcp/dhcps.c \
+	../../../component/common/network/sntp/sntp.c, \
+	$(ITCM_C))
+endif
+
+
 
 
 # Generate obj list
@@ -776,6 +820,29 @@ GCCFLAGS += -DCONFIG_BUILD_RAM=1 -DCONFIG_BUILD_LIB=1
 GCCFLAGS += -DV8M_STKOVF -DARM_MATH_CM7 -DCONFIG_FATFS_WRAPPER=1
 WLAN_RX_GDMA_VERIFY ?= 0
 GCCFLAGS += -DCONFIG_WLAN_RX_RING_GDMA_VERIFY=$(WLAN_RX_GDMA_VERIFY)
+CARBOX_IMMUTABLE_RECOVERY_OTA ?= 1
+GCCFLAGS += -DCARBOX_IMMUTABLE_RECOVERY_OTA=$(CARBOX_IMMUTABLE_RECOVERY_OTA)
+CARBOX_RECOVERY_BUILD ?= 0
+GCCFLAGS += -DCARBOX_RECOVERY_BUILD=$(CARBOX_RECOVERY_BUILD)
+CARBOX_LINK_FW ?= 2
+ifeq ($(CARBOX_RECOVERY_BUILD),1)
+GCCFLAGS += -DCONFIG_OTA_HTTP_UPDATE=0 -DCONFIG_OTA_DFU_UPDATE=0
+endif
+
+# This SDK compiles .o files beside their sources before copying them into the
+# target directory. Recovery and Main use different preprocessor settings, so
+# remember which mode produced those shared source-tree objects. Switching
+# modes touches the stamp and forces a safe rebuild instead of silently linking
+# Recovery-configured objects into Main (or vice versa).
+CARBOX_COMPILE_MODE_STAMP := .carbox_compile_mode
+.PHONY: carbox_compile_mode_force
+carbox_compile_mode_force:
+
+$(CARBOX_COMPILE_MODE_STAMP): carbox_compile_mode_force
+	@printf '%s\n' 'CARBOX_RECOVERY_BUILD=$(CARBOX_RECOVERY_BUILD)' > $@.tmp
+	@if ! cmp -s $@.tmp $@ 2>/dev/null; then mv -f $@.tmp $@; else rm -f $@.tmp; fi
+
+$(ASM_O) $(SRC_O) $(CPP_O) $(ERAM_O) $(SRAM_O) $(CINIT_O) $(ITCM_O) $(DTCM_O): $(CARBOX_COMPILE_MODE_STAMP)
 # Avoid FreeRTOS-Plus-POSIX vs newlib type conflicts (mode_t, clockid_t, timer_t)
 GCCFLAGS += -DposixconfigENABLE_MODE_T=0
 GCCFLAGS += -DposixconfigENABLE_CLOCKID_T=0
@@ -871,15 +938,21 @@ CARBOX_RTK264_SOURCE := $(CARBOX_RTK264_DIR)/lib_rtk264.c
 CARBOX_RTK264_HEADER := $(CARBOX_RTK264_DIR)/lib_rtk264.h
 CARBOX_RTK264_OBJECT := $(CARBOX_RTK264_BUILD_DIR)/lib_rtk264.o
 CARBOX_RTK264_ARCHIVE := $(CARBOX_RTK264_BUILD_DIR)/lib_rtk264.a
+ifeq ($(CARBOX_RECOVERY_BUILD),1)
+all recovery_image: LIBFLAGS += -l_soc_is $(WLAN_RX_GDMA_ORIGINAL) -l_wps
+else
 all: LIBFLAGS += -l_codec -l_dct -l_h264 -l_haac -l_hmp3 -l_http -l_mmf -l_muxer -l_p2p -l_rtsp -l_sdcard -l_soc_is -l_speex  -l_websocket $(WLAN_RX_GDMA_ARCHIVE) -l_wps -l_qr_code -l_tftp -l_opusenc -l_opusfile -l_opus
+endif
 mp: LIBFLAGS += -l_codec -l_dct -l_h264 -l_haac -l_hmp3 -l_http -l_mmf -l_muxer -l_p2p -l_rtsp -l_sdcard -l_soc_is -l_speex  -l_websocket -l_wlan_mp -l_wps -l_qr_code -l_tftp -l_opusenc -l_opusfile -l_opus
+ifneq ($(CARBOX_RECOVERY_BUILD),1)
 ifneq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK),1)
-all mp: LIBFLAGS += -l_mdns
+all: LIBFLAGS += -l_mdns -l_faac
+endif
+all: LIBFLAGS += -lrtstream -lrtscamkit -lrtsv4l2 -lrtsisp -lrtsosd
 endif
 ifneq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK),1)
-all mp: LIBFLAGS += -l_faac
+mp: LIBFLAGS += -l_mdns -l_faac
 endif
-all: LIBFLAGS += -lrtstream -lrtscamkit -lrtsv4l2 -lrtsisp -lrtsosd 
 LIBFLAGS += -Wl,-u,ram_start -Wl,-u,cinit_start
 ifeq ($(CARBOX_USB_LIB),1)
 LIBFLAGS += -Wl,--whole-archive $(CARBOX_USB_ARCHIVE) -Wl,--no-whole-archive
@@ -954,12 +1027,12 @@ prebuild:
 	@echo ===========================================================
 	@echo "  ELF2BIN  prebuild GCC"
 	@$(ELF2BIN) prebuild GCC xip_fw.ld FW >/dev/null 2>&1
-	@# Patch: FW1 6MB, FW2 offset accordingly (AB-zone, FW1 only)
-	@sed -i 's/__ICFEDIT_region_XIP_FW1_FLASH_end__.*=.*;/__ICFEDIT_region_XIP_FW1_FLASH_end__\t\t= 0x98640220 ;/' xip_fw.ld
-	@sed -i 's/__ICFEDIT_region_XIP_FW2_FLASH_start__.*=.*;/__ICFEDIT_region_XIP_FW2_FLASH_start__\t\t= 0x98640220 ;/' xip_fw.ld
-	@sed -i 's/__ICFEDIT_region_XIP_FW2_FLASH_end__.*=.*;/__ICFEDIT_region_XIP_FW2_FLASH_end__\t\t= 0x98840220 ;/' xip_fw.ld
-	@# Ensure FW1 link target + release video RAM
-	@sed -i 's/linkFW = .*/linkFW = 1;/' amebapro_config_is.ld
+	@# Immutable Recovery FW1 is 512 KiB; upgradeable Main FW2 ends at FATFS.
+	@sed -i 's/__ICFEDIT_region_XIP_FW1_FLASH_end__.*=.*;/__ICFEDIT_region_XIP_FW1_FLASH_end__\t\t= 0x980C0220 ;/' xip_fw.ld
+	@sed -i 's/__ICFEDIT_region_XIP_FW2_FLASH_start__.*=.*;/__ICFEDIT_region_XIP_FW2_FLASH_start__\t\t= 0x980C0220 ;/' xip_fw.ld
+	@sed -i 's/__ICFEDIT_region_XIP_FW2_FLASH_end__.*=.*;/__ICFEDIT_region_XIP_FW2_FLASH_end__\t\t= 0x98640220 ;/' xip_fw.ld
+	@# Recovery passes CARBOX_LINK_FW=1; the normal Main build defaults to FW2.
+	@sed -i 's/linkFW = .*/linkFW = $(CARBOX_LINK_FW);/' amebapro_config_is.ld
 	@sed -i 's/reserveVOE = .*/reserveVOE = 0;/' amebapro_config_is.ld
 	@# Extend RAM region into RAM_SHARED (video off) — need ~352KB
 	@sed -i 's/RAM_END = reserveVOE==1 ? 0x20124000 : 0x2013CC00;/RAM_END = 0x20160000;/' rtl8195bhp_ram_is.ld
@@ -1005,7 +1078,11 @@ carbox_rtk264: $(CARBOX_RTK264_ARCHIVE)
 ifeq ($(CARBOX_BUILD_RTK264),1)
 application: carbox_rtk264
 endif
+ifeq ($(CARBOX_RECOVERY_BUILD),1)
+application: prerequirement $(SRC_O) $(ERAM_O) $(SRAM_O) $(CINIT_O) $(ASM_O) $(ITCM_O) $(CPP_O)
+else
 application: wlan_rx_gdma prerequirement $(SRC_O) $(ERAM_O) $(SRAM_O) $(CINIT_O) $(ASM_O) $(ITCM_O) $(CPP_O)
+endif
 # Fixup: when ram_lp runs first and creates .o in source tree, make skips
 # our compile step but then cp to OBJ_DIR never happens.  Copy any
 # orphaned .o into OBJ_DIR before linking.
@@ -1047,6 +1124,27 @@ CARBOX_RAW_SECTION_SIZE := $(shell awk '/^\#define CARBOX_RAW_SECTION_SIZE /{pri
 
 partition.json: ../inc/carbox_flash_layout.h gen_partition_json.py
 	@python3 gen_partition_json.py ../inc/carbox_flash_layout.h $@
+
+CARBOX_RECOVERY_BIN := recovery_is/firmware_recovery.bin
+CARBOX_RECOVERY_JSON := recovery_is/firmware_recovery.json
+CARBOX_RECOVERY_SERIAL_JSON := recovery_is/firmware_recovery.serial.json
+CARBOX_MAIN_BIN := application_is/firmware_main.bin
+CARBOX_MAIN_JSON := application_is/firmware_main.json
+CARBOX_MAIN_SERIAL_JSON := application_is/firmware_main.serial.json
+
+.PHONY: recovery_image
+recovery_image: partition.json | application
+	@mkdir -p recovery_is
+	@python3 gen_firmware_json.py amebapro_firmware_is.json FW1 \
+		recovery_is/Debug/bin/recovery_is.axf $(CARBOX_RECOVERY_BIN) \
+		$(CARBOX_RECOVERY_JSON) recovery
+	@$(FLASH_TOOLDIR)/set_fw_json_serial.sh \
+		$(CARBOX_RECOVERY_JSON) $(CARBOX_RECOVERY_SERIAL_JSON) >/dev/null
+	@echo "  ELF2BIN  Recovery FW1"
+	@$(ELF2BIN) convert $(CARBOX_RECOVERY_SERIAL_JSON) FIRMWARE secure_bit=0 >/dev/null
+	@$(CHKSUM) $(CARBOX_RECOVERY_BIN) >/dev/null 2>&1
+	@python3 check_firmware_size.py $(CARBOX_FLASH_LAYOUT_H) \
+		CARBOX_RECOVERY_FW_SIZE $(CARBOX_RECOVERY_BIN)
  		
 .PHONY: manipulate_images
 manipulate_images:	partition.json | application
@@ -1061,15 +1159,23 @@ manipulate_images:	partition.json | application
 	@$(ELF2BIN) keygen keycfg.json >/dev/null 2>&1
 	@echo "  ELF2BIN  convert amebapro_bootloader.json"
 	@$(ELF2BIN) convert amebapro_bootloader.json PARTITIONTABLE secure_bit=0 >/dev/null 2>&1
-	@$(FLASH_TOOLDIR)/set_fw_json_serial.sh amebapro_firmware_is.json amebapro_firmware_is.serial.json >/dev/null 2>&1
-	@echo "  ELF2BIN  convert amebapro_firmware_is.serial.json"
-	@$(ELF2BIN) convert amebapro_firmware_is.serial.json FIRMWARE secure_bit=0 >/dev/null 2>&1
+	@python3 gen_firmware_json.py amebapro_firmware_is.json FW2 \
+		application_is/Debug/bin/application_is.axf $(CARBOX_MAIN_BIN) \
+		$(CARBOX_MAIN_JSON)
+	@$(FLASH_TOOLDIR)/set_fw_json_serial.sh \
+		$(CARBOX_MAIN_JSON) $(CARBOX_MAIN_SERIAL_JSON) >/dev/null 2>&1
+	@echo "  ELF2BIN  convert Main FW2"
+	@$(ELF2BIN) convert $(CARBOX_MAIN_SERIAL_JSON) FIRMWARE secure_bit=0 >/dev/null 2>&1
+	@$(CHKSUM) $(CARBOX_MAIN_BIN) >/dev/null 2>&1
+	@python3 check_firmware_size.py $(CARBOX_FLASH_LAYOUT_H) \
+		CARBOX_MAIN_FW_SIZE $(CARBOX_MAIN_BIN)
 	@cp ../../../component/soc/realtek/8195b/misc/bsp/image/bootloader.axf $(BOOT_BIN_DIR)/bootloader.axf
 	@echo "  ELF2BIN  convert amebapro_bootloader.json"
 	@$(ELF2BIN) convert amebapro_bootloader.json BOOTLOADER secure_bit=0 >/dev/null 2>&1
 	@cp bootloader/boot.bin application_is/boot.bin
 	@echo "  ELF2BIN  combine application_is/flash_is.bin"
-	@$(ELF2BIN) combine application_is/flash_is.bin PTAB=partition.bin,BOOT=application_is/boot.bin,FW1=application_is/firmware_is.bin >/dev/null 2>&1
+	@$(ELF2BIN) combine application_is/flash_is.bin \
+		PTAB=partition.bin,BOOT=application_is/boot.bin,FW2=$(CARBOX_MAIN_BIN) >/dev/null 2>&1
 	@if [ -f "$(CARBOX_FATFS_BIN)" ]; then \
 		size=$$(stat -c %s "$(CARBOX_FATFS_BIN)"); \
 		max=$$(( $(CARBOX_FATFS_SIZE) )); \
@@ -1091,20 +1197,26 @@ manipulate_images:	partition.json | application
 		echo "Pack $(CARBOX_RAW_SECTION_BIN) -> application_is/flash_is.bin @$(CARBOX_RAW_SECTION_BASE) ($$size bytes)"; \
 		dd if="$(CARBOX_RAW_SECTION_BIN)" of=application_is/flash_is.bin bs=4096 seek=$$(( $(CARBOX_RAW_SECTION_BASE) / 0x1000 )) conv=notrunc status=none; \
 	fi
-	@echo "  CHKSUM"
-	@$(CHKSUM) application_is/firmware_is.bin >/dev/null 2>&1
-	@$(FLASH_TOOLDIR)/postbuild.sh $(ELF2BIN) >/dev/null 2>&1
-	@FW_SRC=application_is/firmware_is.bin; \
-	 if [ ! -f "$$FW_SRC" ]; then \
-	   cat application_is/firmware_is_ota1.bin application_is/firmware_is_ota2.bin > /tmp/carbox_fw_merged.bin 2>/dev/null; \
-	   FW_SRC=/tmp/carbox_fw_merged.bin; \
-	 fi; \
-	 if [ -f "$$FW_SRC" ]; then \
-	   python3 gen_ota_app.py "$$FW_SRC" $(CARBOX_OTA_FW_VER) application_is/ota_app.bin; \
-	 fi
+	@python3 gen_ota_app.py $(CARBOX_MAIN_BIN) $(CARBOX_OTA_FW_VER) \
+		application_is/ota_app.bin
 	@if [ -f "application_is/ota_app.bin" ] && [ -f "$(CARBOX_FATFS_BIN)" ]; then \
 		python3 gen_ota_all.py application_is/ota_app.bin "$(CARBOX_FATFS_BIN)" $(CARBOX_OTA_FW_VER) "$(CARBOX_OTA_ALL_BIN)"; \
 	fi
+
+.PHONY: factory_image
+factory_image: partition.json
+	@test -f $(CARBOX_RECOVERY_BIN) || \
+		{ echo "ERROR: missing $(CARBOX_RECOVERY_BIN); run make recovery_image"; exit 1; }
+	@test -f $(CARBOX_MAIN_BIN) || \
+		{ echo "ERROR: missing $(CARBOX_MAIN_BIN); run make ram_is"; exit 1; }
+	@python3 check_firmware_size.py $(CARBOX_FLASH_LAYOUT_H) \
+		CARBOX_RECOVERY_FW_SIZE $(CARBOX_RECOVERY_BIN)
+	@python3 check_firmware_size.py $(CARBOX_FLASH_LAYOUT_H) \
+		CARBOX_MAIN_FW_SIZE $(CARBOX_MAIN_BIN)
+	@echo "  ELF2BIN  combine factory image (immutable FW1 + Main FW2)"
+	@$(ELF2BIN) combine application_is/flash_factory.bin \
+		PTAB=partition.bin,BOOT=application_is/boot.bin,\
+		FW1=$(CARBOX_RECOVERY_BIN),FW2=$(CARBOX_MAIN_BIN) >/dev/null 2>&1
 	
 
 # Generate build info

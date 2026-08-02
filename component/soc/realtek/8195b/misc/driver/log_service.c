@@ -71,6 +71,13 @@ extern unsigned char inic_cmd_ioctl;
 //#pragma section=".data.log_init"
 log_init_t* __log_init_begin__;
 log_init_t* __log_init_end__;
+#if defined(CARBOX_RECOVERY_BUILD) && CARBOX_RECOVERY_BUILD
+extern void recovery_at_init(void);
+log_init_t log_init_table[] = {
+	recovery_at_init,
+	at_log_init,
+};
+#else
 log_init_t log_init_table[] = {
 	at_wifi_init,
 	//	at_fs_init,
@@ -106,6 +113,7 @@ log_init_t log_init_table[] = {
 	at_qr_code_init,
 #endif
 };
+#endif /* CARBOX_RECOVERY_BUILD */
 #else
 #error "not implement, add to linker script"
 extern unsigned int __log_init_begin__;

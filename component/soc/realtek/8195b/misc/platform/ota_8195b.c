@@ -7,12 +7,63 @@
 #include "sys_api.h"
 #include "osdep_service.h"
 
+#ifndef CARBOX_IMMUTABLE_RECOVERY_OTA
+#define CARBOX_IMMUTABLE_RECOVERY_OTA 0
+#endif
+
+#if CARBOX_IMMUTABLE_RECOVERY_OTA
+#include "carbox_flash_layout.h"
+#endif
+
 extern void ls_sys_reset( void );
 extern void sys_reset(void);
 sys_thread_t TaskOTA = NULL;
 #define STACK_SIZE		1024
 #define TASK_PRIORITY	tskIDLE_PRIORITY + 1
+#define OTA_FLASH_SECTOR_SIZE	0x1000
 flash_t flash_ota;
+
+/*
+ * The factory recovery image lives in FW1 and must never be a field-OTA
+ * destination.  In immutable-recovery builds every erase/program operation is
+ * checked against FW2, not just the initial target selection.  This prevents a
+ * corrupt Content-Length, DFU index, or arithmetic overflow from crossing into
+ * Recovery or the filesystem partitions.
+ */
+static int update_ota_target_range_valid(uint32_t address, uint32_t length)
+{
+#if CARBOX_IMMUTABLE_RECOVERY_OTA
+	if (address < CARBOX_MAIN_FW_BASE ||
+	    length > CARBOX_MAIN_FW_SIZE ||
+	    (address - CARBOX_MAIN_FW_BASE) > (CARBOX_MAIN_FW_SIZE - length)) {
+		printf("\n\r[OTA][RECOVERY] Reject range addr=0x%08X len=0x%08X "
+		       "allowed=[0x%08X,0x%08X)", address, length,
+		       CARBOX_MAIN_FW_BASE,
+		       CARBOX_MAIN_FW_BASE + CARBOX_MAIN_FW_SIZE);
+		return 0;
+	}
+#else
+	(void)address;
+	(void)length;
+#endif
+	return 1;
+}
+
+static int update_ota_flash_erase_sector(uint32_t address)
+{
+	if (!update_ota_target_range_valid(address, OTA_FLASH_SECTOR_SIZE))
+		return -1;
+	flash_erase_sector(&flash_ota, address);
+	return 0;
+}
+
+static int update_ota_flash_write(uint32_t address, uint32_t length,
+				  const unsigned char *buffer)
+{
+	if (!update_ota_target_range_valid(address, length))
+		return -1;
+	return flash_burst_write(&flash_ota, address, length, (unsigned char *)buffer);
+}
 
 // Checksum check before appending signature
 // Please make sure target OTA firmware did contains 4 bytes checksum value, or the checksum check would always fail
@@ -51,10 +102,25 @@ int update_ota_connect_server(update_cfg_local_t *cfg){
 
 	if(connect(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1){
 		printf("\n\r[%s] Socket connect failed", __FUNCTION__);
+		close(server_socket);
 		return -1;
 	}
 
 	return server_socket;
+}
+
+static int update_ota_read_exact(int socket_fd, void *buffer, uint32_t length)
+{
+	uint32_t received = 0;
+
+	while (received < length) {
+		int ret = read(socket_fd, (unsigned char *)buffer + received,
+			       length - received);
+		if (ret <= 0)
+			return -1;
+		received += (uint32_t)ret;
+	}
+	return (int)received;
 }
 
 uint32_t update_ota_get_curr_fw_start_offset(void){
@@ -73,8 +139,32 @@ uint32_t update_ota_prepare_addr(void){
 	fw_img_export_info_type_t *pfw_image_info;
 
 	pfw_image_info = get_fw_img_info_tbl();
-	
+	if (pfw_image_info == NULL) {
+		printf("\n\r[%s] Firmware partition table is unavailable", __FUNCTION__);
+		return (uint32_t)-1;
+	}
+
 	printf("\n\r[%s] Get loaded_fw_idx %d\n\r", __FUNCTION__, pfw_image_info->loaded_fw_idx);
+#if CARBOX_IMMUTABLE_RECOVERY_OTA
+	/*
+	 * Only FW1 Recovery may perform field OTA, and it may only program FW2.
+	 * Do not silently fall back to the symmetric SDK behavior: running this
+	 * writer from FW2 would otherwise erase the immutable FW1 image.
+	 */
+	if (pfw_image_info->loaded_fw_idx != 1) {
+		printf("\n\r[%s] Recovery OTA rejected: loaded FW index is %d, expected FW1",
+		       __FUNCTION__, pfw_image_info->loaded_fw_idx);
+		return (uint32_t)-1;
+	}
+	if (pfw_image_info->fw1_start_offset != CARBOX_RECOVERY_FW_BASE ||
+	    pfw_image_info->fw2_start_offset != CARBOX_MAIN_FW_BASE) {
+		printf("\n\r[%s] Recovery OTA rejected: ROM layout FW1=0x%08X FW2=0x%08X",
+		       __FUNCTION__, pfw_image_info->fw1_start_offset,
+		       pfw_image_info->fw2_start_offset);
+		return (uint32_t)-1;
+	}
+	NewFWAddr = CARBOX_MAIN_FW_BASE;
+#else
 	if(pfw_image_info->loaded_fw_idx == 1)
 		NewFWAddr = pfw_image_info->fw2_start_offset;
 	else if(pfw_image_info->loaded_fw_idx == 2)
@@ -83,6 +173,7 @@ uint32_t update_ota_prepare_addr(void){
 		printf("\n\r[%s] Unexpected index %d", __FUNCTION__, pfw_image_info->loaded_fw_idx);
 		return -1;
 	}
+#endif
 
 	printf("\n\r[%s] NewFWAddr %08X\n\r", __FUNCTION__, NewFWAddr);
 	return NewFWAddr;
@@ -94,12 +185,18 @@ int update_ota_erase_upg_region(uint32_t img_len, uint32_t NewFWLen, uint32_t Ne
 	if(NewFWLen == 0){
 		NewFWLen = img_len;
 		printf("\n\r[%s] NewFWLen %d", __FUNCTION__, NewFWLen);
-		if((int)NewFWLen > 0){
+		if((int)NewFWLen > 0 && update_ota_target_range_valid(NewFWAddr, NewFWLen)){
 			NewFWBlkSize = ((NewFWLen - 1)/4096) + 1;
 			printf("\n\r[%s] NewFWBlkSize %d  0x%x", __FUNCTION__, NewFWBlkSize, NewFWBlkSize);
 			device_mutex_lock(RT_DEV_LOCK_FLASH);
-			for(int i = 0; i < NewFWBlkSize; i++)
-				flash_erase_sector(&flash_ota, NewFWAddr + i * 4096);
+			for(int i = 0; i < NewFWBlkSize; i++) {
+				if (update_ota_flash_erase_sector(NewFWAddr + i * OTA_FLASH_SECTOR_SIZE) < 0) {
+					device_mutex_unlock(RT_DEV_LOCK_FLASH);
+					printf("\n\r[%s] Erase rejected/failed at 0x%08X", __FUNCTION__,
+					       NewFWAddr + i * OTA_FLASH_SECTOR_SIZE);
+					return -1;
+				}
+			}
 			device_mutex_unlock(RT_DEV_LOCK_FLASH);
 		}else{
 			printf("\n\r[%s] Size INVALID", __FUNCTION__);
@@ -114,13 +211,17 @@ int update_ota_signature(unsigned char* sig_backup, uint32_t NewFWAddr){
 	int ret = 0;
 	unsigned char sig_readback[32];
 	printf("\n\r[%s] Append OTA signature", __FUNCTION__);
+	if (!update_ota_target_range_valid(NewFWAddr, 32)) {
+		printf("\n\r[%s] Signature target is outside OTA partition", __FUNCTION__);
+		return -1;
+	}
 	device_mutex_lock(RT_DEV_LOCK_FLASH);
-	if(flash_burst_write(&flash_ota, NewFWAddr + 16, 16, sig_backup + 16) < 0){
+	if(update_ota_flash_write(NewFWAddr + 16, 16, sig_backup + 16) < 0){
 		printf("\n\r[%s] Write stream failed", __FUNCTION__);
 		ret = -1;
 	}
 	else{
-		if(flash_burst_write(&flash_ota, NewFWAddr, 16, sig_backup) < 0){
+		if(update_ota_flash_write(NewFWAddr, 16, sig_backup) < 0){
 			printf("\n\r[%s] Write stream failed", __FUNCTION__);
 			ret = -1;
 		}
@@ -138,7 +239,7 @@ int update_ota_signature(unsigned char* sig_backup, uint32_t NewFWAddr){
 
 static void update_ota_local_task(void *param)
 {
-	int server_socket;
+	int server_socket = -1;
 	unsigned char *buf;
 	unsigned char sig_backup[32];
 	int read_bytes = 0, idx = 0;
@@ -180,8 +281,8 @@ static void update_ota_local_task(void *param)
 	memset(file_info, 0, sizeof(file_info));
 	if(file_info[0] == 0){
 		printf("\n\r[%s] Read info first", __FUNCTION__);
-		read_bytes = read(server_socket, file_info, sizeof(file_info));
-		if(read_bytes <= 0){
+		read_bytes = update_ota_read_exact(server_socket, file_info, sizeof(file_info));
+		if(read_bytes != sizeof(file_info)){
 			printf("\n\r[%s] Read socket failed or socket closed", __FUNCTION__);
 			goto update_ota_exit;
 		}
@@ -201,15 +302,10 @@ static void update_ota_local_task(void *param)
 		uint8_t  ota_resv[32];
 	}header;
 	
-	read_bytes = read(server_socket, &header, sizeof(header));
-	if(read_bytes <= 0){
+	read_bytes = update_ota_read_exact(server_socket, &header, sizeof(header));
+	if(read_bytes != sizeof(header)){
 		printf("\n\r[%s] Read socket failed or socket closed", __FUNCTION__);
 		goto update_ota_exit;
-	}
-	
-	if(read_bytes != sizeof(header)){
-		printf("\n\read data %d bytes, not equal to 32\r\n", read_bytes);
-		while(1);
 	}
 
 	NewFWLen = update_ota_erase_upg_region(file_info[2] - sizeof(header), NewFWLen, NewFWAddr);
@@ -226,15 +322,10 @@ static void update_ota_local_task(void *param)
 			int recv_len = rest_len > BUF_SIZE?BUF_SIZE:rest_len;
 				
 			memset(buf, 0, BUF_SIZE);
-			read_bytes = 0;
-			int read_ret;
-			while(read_bytes < recv_len){
-				read_ret = read(server_socket, &buf[read_bytes], recv_len-read_bytes);
-				if(read_ret < 0){
-					printf("\n\r[%s] Read socket failed %d", __FUNCTION__, read_ret);
-					goto update_ota_exit;
-				}
-				read_bytes += read_ret;
+			read_bytes = update_ota_read_exact(server_socket, buf, recv_len);
+			if(read_bytes != recv_len){
+				printf("\n\r[%s] Read socket failed/closed", __FUNCTION__);
+				goto update_ota_exit;
 			}
 			
 			printf(".");
@@ -252,7 +343,7 @@ static void update_ota_local_task(void *param)
 			}
 			
 			device_mutex_lock(RT_DEV_LOCK_FLASH);
-			if(flash_burst_write(&flash_ota, address + idx, read_bytes, buf) < 0){
+			if(update_ota_flash_write(address + idx, read_bytes, buf) < 0){
 				printf("\n\r[%s] Write stream failed", __FUNCTION__);
 				device_mutex_unlock(RT_DEV_LOCK_FLASH);
 				goto update_ota_exit;
@@ -341,6 +432,7 @@ int update_ota_local(char *ip, int port){
 	if(xTaskCreate(update_ota_local_task, "OTA_server", STACK_SIZE, pUpdateCfg, TASK_PRIORITY, &TaskOTA) != pdPASS){
 	  	update_free(pUpdateCfg);
 		printf("\n\r[%s] Create update task failed", __FUNCTION__);
+		return -1;
 	}
 	return 0;
 }
@@ -778,7 +870,7 @@ skip_read:
 			}
 
 			device_mutex_lock(RT_DEV_LOCK_FLASH);
-			if(flash_burst_write(&flash_ota, address + idx, read_bytes, buf) < 0){
+			if(update_ota_flash_write(address + idx, read_bytes, buf) < 0){
 				printf("\n\r[%s] Write sector failed", __FUNCTION__);
 				device_mutex_unlock(RT_DEV_LOCK_FLASH);
 				goto update_ota_exit;
@@ -1039,7 +1131,7 @@ int sdcard_update_ota(char* filename)
 			}
 			
 			device_mutex_lock(RT_DEV_LOCK_FLASH);
-			if(flash_burst_write(&flash_ota, address + idx, read_bytes, buf) < 0){
+			if(update_ota_flash_write(address + idx, read_bytes, buf) < 0){
 				printf("\n\r[%s] Write stream failed", __FUNCTION__);
 				device_mutex_unlock(RT_DEV_LOCK_FLASH);
 				f_close(&m_file);
@@ -1173,11 +1265,16 @@ int ota_upgrade_from_usb(unsigned char *buf,unsigned int size,int index){
                 dfu->read_bytes -=32;
         }
         device_mutex_lock(RT_DEV_LOCK_FLASH);
-        flash_erase_sector(&flash_ota, dfu->NewFWAddr + index * 4096);
+        if(update_ota_flash_erase_sector(dfu->NewFWAddr + index * OTA_FLASH_SECTOR_SIZE) < 0){
+                printf("\n\r[%s] Erase rejected/failed", __FUNCTION__);
+                device_mutex_unlock(RT_DEV_LOCK_FLASH);
+                ret = -1;
+                goto update_ota_exit;
+        }
         device_mutex_unlock(RT_DEV_LOCK_FLASH);
         
         device_mutex_lock(RT_DEV_LOCK_FLASH);
-        if(flash_burst_write(&flash_ota, dfu->address + dfu->idx, dfu->read_bytes, dfu->buf) < 0){
+        if(update_ota_flash_write(dfu->address + dfu->idx, dfu->read_bytes, dfu->buf) < 0){
                 printf("\n\r[%s] Write stream failed", __FUNCTION__);
                 device_mutex_unlock(RT_DEV_LOCK_FLASH);
                 //memory_close(&dfu);

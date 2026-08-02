@@ -33,6 +33,37 @@ endif
 ram_is: toolchain
 	@$(MAKE) -f application.is.mk all
 
+.PHONY: recovery_is
+recovery_is: toolchain
+	@$(MAKE) -f application.is.mk all \
+		CARBOX_RECOVERY_BUILD=1 \
+		CARBOX_IMMUTABLE_RECOVERY_OTA=1 \
+		CARBOX_LINK_FW=1 \
+		CARBOX_SKIP_IMAGE=1 \
+		CARBOX_EXPERIMENTAL_USB=0 \
+		CARBOX_EXPERIMENTAL_SMART_A_LINK=0 \
+		CARBOX_BUILD_RTK264=0 \
+		TARGET=recovery_is
+
+.PHONY: recovery_image
+recovery_image: toolchain
+	@$(MAKE) -f application.is.mk recovery_image \
+		CARBOX_RECOVERY_BUILD=1 \
+		CARBOX_IMMUTABLE_RECOVERY_OTA=1 \
+		CARBOX_LINK_FW=1 \
+		CARBOX_SKIP_IMAGE=1 \
+		CARBOX_EXPERIMENTAL_USB=0 \
+		CARBOX_EXPERIMENTAL_SMART_A_LINK=0 \
+		CARBOX_BUILD_RTK264=0 \
+		TARGET=recovery_is
+
+.PHONY: factory_image
+factory_image: toolchain
+	@# Recovery and Main share SDK source-tree .o paths; build sequentially.
+	@$(MAKE) recovery_image
+	@$(MAKE) ram_is
+	@$(MAKE) -f application.is.mk factory_image
+
 .PHONY: carbox_rtk264
 carbox_rtk264: toolchain
 	@$(MAKE) -f application.is.mk carbox_rtk264
