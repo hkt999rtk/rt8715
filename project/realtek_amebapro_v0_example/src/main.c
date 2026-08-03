@@ -27,6 +27,46 @@ extern hal_uart_adapter_t log_uart;
 
 #define CARBOX_LOGUART_BAUD  1500000//3000000
 
+/*
+ * Clock characterization aid.
+ *
+ * The supported system-clock API exposes only fixed 200/300 MHz PLL sources,
+ * while the underlying analog PLL has additional SDM/fractional controls.  Log
+ * the post-ROM register state before changing any clock code so that known-good
+ * 200 MHz and 300 MHz boots can be compared and the PLL encoding derived.
+ * These are read-only diagnostic accesses; do not write these registers here.
+ */
+#define CARBOX_SYSON_REG32(offset) \
+	(*(volatile const uint32_t *)(0x40000000UL + (offset)))
+
+static void carbox_clock_register_dump(void)
+{
+	uint32_t clk_ctrl1 = CARBOX_SYSON_REG32(0x14U);
+	uint32_t pll_ctrl0 = CARBOX_SYSON_REG32(0x50U);
+	uint32_t pll_ctrl1 = CARBOX_SYSON_REG32(0x54U);
+	uint32_t pll_ctrl2 = CARBOX_SYSON_REG32(0x58U);
+	uint32_t pll_ctrl3 = CARBOX_SYSON_REG32(0x5CU);
+	uint32_t pll_test = CARBOX_SYSON_REG32(0xA0U);
+
+	rt_printf("[CLOCK] SystemCoreClock=%lu Hz\r\n",
+		  (unsigned long)SystemCoreClock);
+	rt_printf("[CLOCK] SYSON 014=%08lx 050=%08lx 054=%08lx "
+		  "058=%08lx 05c=%08lx 0a0=%08lx\r\n",
+		  (unsigned long)clk_ctrl1,
+		  (unsigned long)pll_ctrl0,
+		  (unsigned long)pll_ctrl1,
+		  (unsigned long)pll_ctrl2,
+		  (unsigned long)pll_ctrl3,
+		  (unsigned long)pll_test);
+	rt_printf("[CLOCK] source=%s pll_source=%luMHz divider_en=%lu "
+		  "divider_sel=0x%lx pll_ready=%lu\r\n",
+		  (clk_ctrl1 & (1UL << 8)) ? "PLL" : "ANA-4M",
+		  (clk_ctrl1 & 1UL) ? 200UL : 300UL,
+		  (clk_ctrl1 >> 9) & 1UL,
+		  (clk_ctrl1 >> 4) & 0xFUL,
+		  (pll_test >> 26) & 1UL);
+}
+
 #if defined(CARBOX_EXPERIMENTAL_USB)
 
 
@@ -199,6 +239,7 @@ void main(void)
         console_init();
     hal_uart_set_baudrate(&log_uart, CARBOX_LOGUART_BAUD);
     rt_printf("main build_version %s\r\n",BOX_APP_VERSION);
+	carbox_clock_register_dump();
 	
 #ifdef CONFIG_FATFS
 
