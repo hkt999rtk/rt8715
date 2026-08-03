@@ -776,15 +776,27 @@ static int net_gdma_copy_with_edges(net_gdma_context_t *ctx, void *dst,
 int rltk_network_gdma_copy_tx(void *dst, const void *src, unsigned int len,
 			      const void *allocation_end)
 {
+#if CONFIG_NET_GDMA_COPY
 	return net_gdma_copy_with_edges(&g_net_tx_gdma, dst, src, len,
 					allocation_end, NULL);
+#else
+	(void)allocation_end;
+	rtw_memcpy(dst, (void *)src, len);
+	return 0;
+#endif
 }
 
 int rltk_network_gdma_copy_rx(void *dst, const void *src, unsigned int len,
 			      const void *allocation_end)
 {
+#if CONFIG_NET_GDMA_COPY
 	return net_gdma_copy_with_edges(&g_net_rx_gdma, dst, src, len,
 					allocation_end, NULL);
+#else
+	(void)allocation_end;
+	rtw_memcpy(dst, (void *)src, len);
+	return 0;
+#endif
 }
 
 /*
@@ -1066,6 +1078,9 @@ static u32 wlan_rx_ring_hash(const void *buffer, u32 len)
 
 void rtw_rx_ring_memcpy(void *dst, void *src, u32 len)
 {
+#if !CONFIG_NET_GDMA_COPY
+	rtw_memcpy(dst, src, len);
+#else
 	static u8 first_call = 1;
 #if CONFIG_NET_GDMA_STATS || CONFIG_WLAN_RX_RING_GDMA_VERIFY
 	static u32 attempts;
@@ -1129,6 +1144,7 @@ void rtw_rx_ring_memcpy(void *dst, void *src, u32 len)
 		last_report_tick = now;
 	}
 #endif
+#endif /* CONFIG_NET_GDMA_COPY */
 }
 
 #endif /* CONFIG_LWIP_LAYER && CONFIG_PLATFORM_8195BHP */
@@ -1250,7 +1266,7 @@ int rltk_wlan_send(int idx, struct eth_drv_sg *sg_list, int sg_len, int total_le
 #endif
 
 	for (last_sg = &sg_list[sg_len]; sg_list < last_sg; ++sg_list) {
-#if defined(CONFIG_PLATFORM_8195BHP)
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NET_GDMA_COPY
 		if (net_gdma_copy(&g_net_tx_gdma, skb->tail,
 				  (void *)(sg_list->buf), sg_list->len,
 				  skb->end, NULL) != 0) {
@@ -1301,7 +1317,7 @@ int rltk_wlan_recv(int idx, struct eth_drv_sg *sg_list, int sg_len)
 
 	for (last_sg = &sg_list[sg_len]; sg_list < last_sg; ++sg_list) {
 		if (sg_list->buf != 0) {
-#if defined(CONFIG_PLATFORM_8195BHP)
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NET_GDMA_COPY
 			if (net_gdma_copy_with_edges(&g_net_rx_gdma,
 						     (void *)(sg_list->buf),
 						     skb->data, sg_list->len,
