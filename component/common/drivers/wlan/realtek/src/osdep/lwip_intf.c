@@ -53,6 +53,17 @@ extern struct netif xnetif[];			//LWIP netif
 #define CONFIG_NET_GDMA_STATS 0
 #endif
 
+/*
+ * Temporary, default-on profiling used to determine whether GDMA IRQ and
+ * semaphore wake-up overhead is significant for the network's 1--4 KB
+ * copies.  Measurements are accumulated per transfer but printed only by the
+ * existing five-second statistics path.  Set this to 0 after board results
+ * establish that completion latency is no longer of interest.
+ */
+#ifndef CONFIG_NET_GDMA_LATENCY_PROFILE
+#define CONFIG_NET_GDMA_LATENCY_PROFILE 1
+#endif
+
 #ifndef CONFIG_TCP_PHASE_PROFILE
 #define CONFIG_TCP_PHASE_PROFILE 1
 #endif
@@ -99,6 +110,20 @@ typedef struct net_gdma_context_s {
 	u32 timeouts;
 	u32 report_probe;
 	u32 last_report_tick;
+#if CONFIG_NET_GDMA_LATENCY_PROFILE
+	volatile u8 latency_irq_seen;
+	volatile u32 latency_irq_cycles;
+	u32 latency_samples;
+	u32 latency_irq_before_wait;
+	u32 latency_submit_sum_cycles;
+	u32 latency_submit_max_cycles;
+	u32 latency_dma_irq_sum_cycles;
+	u32 latency_dma_irq_max_cycles;
+	u32 latency_wake_sum_cycles;
+	u32 latency_wake_max_cycles;
+	u32 latency_total_sum_cycles;
+	u32 latency_total_max_cycles;
+#endif
 } net_gdma_context_t;
 
 static net_gdma_context_t g_net_rx_gdma;
@@ -106,6 +131,9 @@ static net_gdma_context_t g_net_tx_gdma;
 static net_gdma_context_t g_net_socket_rx_gdma;
 static net_gdma_context_t g_net_tcp_tx_gdma;
 static u8 g_net_gdma_initialized;
+#if CONFIG_NET_GDMA_LATENCY_PROFILE
+static u8 g_net_gdma_latency_ready;
+#endif
 
 static void net_gdma_done_from_isr(net_gdma_context_t *ctx)
 {
@@ -133,6 +161,17 @@ static void net_gdma_done_from_isr(net_gdma_context_t *ctx)
 	if (ctx->irq_raw_error != 0U) {
 		ctx->irq_error = 1;
 	}
+#if CONFIG_NET_GDMA_LATENCY_PROFILE
+	/*
+	 * Timestamp immediately before giving the semaphore.  The task-side
+	 * irq-to-return interval therefore includes the callback tail, IRQ return,
+	 * semaphore wake-up and scheduling latency.
+	 */
+	if (g_net_gdma_latency_ready) {
+		ctx->latency_irq_cycles = DWT->CYCCNT;
+		ctx->latency_irq_seen = 1;
+	}
+#endif
 	ctx->in_flight = 0;
 	rtw_up_sema_from_isr(&ctx->done);
 }
@@ -226,6 +265,24 @@ static void net_gdma_init_all(void)
 
 	/* WLAN setup is serialized before packet traffic starts. */
 	g_net_gdma_initialized = 1;
+#if CONFIG_NET_GDMA_LATENCY_PROFILE
+	/*
+	 * hal_read_curtime_us() latches the system timer through a register write
+	 * and polling loop, so calling it in both task and GDMA IRQ context would
+	 * add measurable overhead and allow nested latch operations.  CYCCNT is a
+	 * single, re-entrant register read; unsigned deltas safely cover the short
+	 * (bounded to 10 ms) DMA intervals even though the 32-bit counter wraps.
+	 */
+	CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+	if ((DWT->CTRL & DWT_CTRL_NOCYCCNT_Msk) == 0U) {
+		DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+		g_net_gdma_latency_ready =
+			(DWT->CTRL & DWT_CTRL_CYCCNTENA_Msk) ? 1U : 0U;
+	}
+	printf("[NET_GDMA][LAT] profile enabled counter=%s core_hz=%u\n",
+	       g_net_gdma_latency_ready ? "CYCCNT" : "unavailable",
+	       (unsigned int)SystemCoreClock);
+#endif
 	/*
 	 * Reserve all four channels once during serialized WLAN setup and retain
 	 * them for the lifetime of the network stack.  Socket RX is deliberately
@@ -411,9 +468,67 @@ static int net_gdma_ensure_tested(net_gdma_context_t *ctx)
 	return 0;
 }
 
+#if CONFIG_NET_GDMA_LATENCY_PROFILE
+static void net_gdma_latency_record(net_gdma_context_t *ctx,
+				    u32 start_cycles, u32 submit_done_cycles,
+				    u32 wait_return_cycles, int irq_before_wait)
+{
+	u32 irq_cycles;
+	u32 submit_cycles;
+	u32 dma_irq_cycles;
+	u32 wake_cycles;
+	u32 total_cycles;
+
+	/* A successful semaphore wait must have observed the matching callback. */
+	if (!ctx->latency_irq_seen) {
+		return;
+	}
+
+	irq_cycles = ctx->latency_irq_cycles;
+	submit_cycles = submit_done_cycles - start_cycles;
+	/*
+	 * A very short transfer can complete inside dma_memcpy().  In that case
+	 * submit_cycles already contains setup, DMA, IRQ and HAL completion processing;
+	 * do not subtract timestamps in the opposite order across a 32-bit wrap.
+	 */
+	dma_irq_cycles = irq_before_wait ? 0U : irq_cycles - submit_done_cycles;
+	wake_cycles = wait_return_cycles - irq_cycles;
+	total_cycles = wait_return_cycles - start_cycles;
+
+	ctx->latency_samples++;
+	ctx->latency_irq_before_wait += irq_before_wait ? 1U : 0U;
+	ctx->latency_submit_sum_cycles += submit_cycles;
+	ctx->latency_dma_irq_sum_cycles += dma_irq_cycles;
+	ctx->latency_wake_sum_cycles += wake_cycles;
+	ctx->latency_total_sum_cycles += total_cycles;
+	if (submit_cycles > ctx->latency_submit_max_cycles) {
+		ctx->latency_submit_max_cycles = submit_cycles;
+	}
+	if (dma_irq_cycles > ctx->latency_dma_irq_max_cycles) {
+		ctx->latency_dma_irq_max_cycles = dma_irq_cycles;
+	}
+	if (wake_cycles > ctx->latency_wake_max_cycles) {
+		ctx->latency_wake_max_cycles = wake_cycles;
+	}
+	if (total_cycles > ctx->latency_total_max_cycles) {
+		ctx->latency_total_max_cycles = total_cycles;
+	}
+}
+
+static u32 net_gdma_cycles_to_us(u32 cycles)
+{
+	u32 cycles_per_us = SystemCoreClock / 1000000U;
+
+	if (cycles_per_us == 0U) {
+		return 0U;
+	}
+	return (cycles + (cycles_per_us / 2U)) / cycles_per_us;
+}
+#endif
+
 static void net_gdma_account(net_gdma_context_t *ctx, int used_dma, u32 len)
 {
-#if CONFIG_NET_GDMA_STATS
+#if CONFIG_NET_GDMA_STATS || CONFIG_NET_GDMA_LATENCY_PROFILE
 	u32 now;
 	u32 elapsed_ms;
 
@@ -447,6 +562,29 @@ static void net_gdma_account(net_gdma_context_t *ctx, int used_dma, u32 len)
 	       (unsigned int)ctx->dma_errors,
 	       (unsigned int)ctx->spurious_irqs);
 
+#if CONFIG_NET_GDMA_LATENCY_PROFILE
+	if (ctx->latency_samples != 0U) {
+		printf("[NET_GDMA][%s][LAT] samples=%u irq_before_wait=%u "
+		       "submit_avg/max=%u/%uus dma_irq_avg/max=%u/%uus "
+		       "wake_avg/max=%u/%uus total_avg/max=%u/%uus\n",
+		       ctx->name,
+		       (unsigned int)ctx->latency_samples,
+		       (unsigned int)ctx->latency_irq_before_wait,
+		       (unsigned int)net_gdma_cycles_to_us(
+			       ctx->latency_submit_sum_cycles / ctx->latency_samples),
+		       (unsigned int)net_gdma_cycles_to_us(ctx->latency_submit_max_cycles),
+		       (unsigned int)net_gdma_cycles_to_us(
+			       ctx->latency_dma_irq_sum_cycles / ctx->latency_samples),
+		       (unsigned int)net_gdma_cycles_to_us(ctx->latency_dma_irq_max_cycles),
+		       (unsigned int)net_gdma_cycles_to_us(
+			       ctx->latency_wake_sum_cycles / ctx->latency_samples),
+		       (unsigned int)net_gdma_cycles_to_us(ctx->latency_wake_max_cycles),
+		       (unsigned int)net_gdma_cycles_to_us(
+			       ctx->latency_total_sum_cycles / ctx->latency_samples),
+		       (unsigned int)net_gdma_cycles_to_us(ctx->latency_total_max_cycles));
+	}
+#endif
+
 	ctx->dma_ops = 0;
 	ctx->dma_bytes = 0;
 	ctx->cpu_ops = 0;
@@ -456,6 +594,18 @@ static void net_gdma_account(net_gdma_context_t *ctx, int used_dma, u32 len)
 	ctx->timeouts = 0;
 	ctx->dma_errors = 0;
 	ctx->spurious_irqs = 0;
+#if CONFIG_NET_GDMA_LATENCY_PROFILE
+	ctx->latency_samples = 0;
+	ctx->latency_irq_before_wait = 0;
+	ctx->latency_submit_sum_cycles = 0;
+	ctx->latency_submit_max_cycles = 0;
+	ctx->latency_dma_irq_sum_cycles = 0;
+	ctx->latency_dma_irq_max_cycles = 0;
+	ctx->latency_wake_sum_cycles = 0;
+	ctx->latency_wake_max_cycles = 0;
+	ctx->latency_total_sum_cycles = 0;
+	ctx->latency_total_max_cycles = 0;
+#endif
 	ctx->last_report_tick = now;
 #else
 	(void)ctx;
@@ -467,6 +617,14 @@ static void net_gdma_account(net_gdma_context_t *ctx, int used_dma, u32 len)
 static int net_gdma_copy(net_gdma_context_t *ctx, void *dst, const void *src,
 			 u32 len, const void *allocation_end, u32 *dma_len)
 {
+#if CONFIG_NET_GDMA_LATENCY_PROFILE
+	u32 latency_start_cycles;
+	u32 latency_submit_done_cycles;
+	u32 latency_wait_return_cycles;
+	int latency_irq_before_wait;
+	int latency_profile_active;
+#endif
+
 	if (dma_len != NULL) {
 		*dma_len = 0;
 	}
@@ -519,12 +677,30 @@ static int net_gdma_copy(net_gdma_context_t *ctx, void *dst, const void *src,
 	ctx->irq_error = 0;
 	ctx->irq_raw_error = 0;
 	ctx->in_flight = 1;
+#if CONFIG_NET_GDMA_LATENCY_PROFILE
+	ctx->latency_irq_seen = 0;
+	latency_profile_active = g_net_gdma_latency_ready ? 1 : 0;
+	latency_start_cycles = latency_profile_active ? DWT->CYCCNT : 0U;
+#endif
 	dma_memcpy(&ctx->dma, dst, (void *)src, len);
+#if CONFIG_NET_GDMA_LATENCY_PROFILE
+	latency_submit_done_cycles = latency_profile_active ? DWT->CYCCNT : 0U;
+	latency_irq_before_wait = ctx->latency_irq_seen ? 1 : 0;
+#endif
 	if (net_gdma_wait(ctx) != 0) {
 		/* Destination may be partially written.  Caller must drop the packet. */
 		ctx->busy = 0;
 		return -1;
 	}
+#if CONFIG_NET_GDMA_LATENCY_PROFILE
+	if (latency_profile_active) {
+		latency_wait_return_cycles = DWT->CYCCNT;
+		net_gdma_latency_record(ctx, latency_start_cycles,
+					latency_submit_done_cycles,
+					latency_wait_return_cycles,
+					latency_irq_before_wait);
+	}
+#endif
 
 	ctx->busy = 0;
 	net_gdma_account(ctx, 1, len);
