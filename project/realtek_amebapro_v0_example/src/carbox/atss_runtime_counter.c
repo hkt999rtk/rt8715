@@ -1,25 +1,33 @@
 #include <stdint.h>
 
-#include <hal_timer.h>
+#include "FreeRTOS.h"
+#include "cmsis.h"
 
-static uint32_t atss_runtime_counter_base_us;
+static uint32_t atss_runtime_counter_base_cycles;
 
 void atss_runtime_counter_init(void)
 {
 	/*
-	 * The platform system GTimer is already configured as a 1 us free-running
-	 * counter before the scheduler starts. Keep a logical zero point so boot
-	 * time is not charged to the first FreeRTOS task.
+	 * DWT CYCCNT is shared with the network latency profiler.  Enabling it is
+	 * idempotent, but resetting it here would corrupt an in-flight user of the
+	 * same hardware counter, so retain the current count and use a logical base.
+	 * A single CYCCNT read in the context-switch path is substantially cheaper
+	 * than hal_read_curtime_us(), which latches and polls the system GTimer.
 	 */
-	atss_runtime_counter_base_us = hal_read_curtime_us();
+	CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+	configASSERT((DWT->CTRL & DWT_CTRL_NOCYCCNT_Msk) == 0U);
+	DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+	configASSERT((DWT->CTRL & DWT_CTRL_CYCCNTENA_Msk) != 0U);
+	atss_runtime_counter_base_cycles = DWT->CYCCNT;
 }
 
-uint32_t atss_runtime_counter_get(void)
+uint32_t __attribute__((section(".itcm.text.atss_runtime_counter_get")))
+atss_runtime_counter_get(void)
 {
 	/*
-	 * Unsigned subtraction also works when the raw 32-bit microsecond counter
-	 * wraps. The returned value still wraps every ~71.6 minutes; FreeRTOS and
-	 * ATSS consume it using the same modulo arithmetic.
+	 * Return raw CPU cycles. Unsigned deltas remain correct across one wrap;
+	 * CYCCNT wraps in about 14.32 seconds at 300 MHz. ATSS samples every two
+	 * seconds and the scheduler accounts at every task switch.
 	 */
-	return hal_read_curtime_us() - atss_runtime_counter_base_us;
+	return DWT->CYCCNT - atss_runtime_counter_base_cycles;
 }

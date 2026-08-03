@@ -18,6 +18,7 @@
 #include "main.h"
 #include "atcmd_wifi.h"
 #include "device_lock.h"
+#include "hal_timer.h"
 #include "semphr.h"
 
 #if defined(configUSE_WAKELOCK_PMU) && (configUSE_WAKELOCK_PMU == 1)
@@ -117,11 +118,12 @@ static void atss_copy_name(char dst[ATSS_TASK_NAME_LEN], const char *src)
 	dst[index] = '\0';
 }
 
-static TaskStatus_t *atss_take_snapshot(UBaseType_t *task_count, uint32_t *total_runtime)
+static TaskStatus_t *atss_take_snapshot(UBaseType_t *task_count, uint32_t *wall_time_us)
 {
 	TaskStatus_t *tasks;
 	UBaseType_t capacity;
 	UBaseType_t count;
+	uint32_t snapshot_wall_us;
 	unsigned int retry;
 
 	for (retry = 0; retry < ATSS_SNAPSHOT_RETRIES; retry++) {
@@ -131,8 +133,20 @@ static TaskStatus_t *atss_take_snapshot(UBaseType_t *task_count, uint32_t *total
 			return NULL;
 		}
 
-		count = uxTaskGetSystemState(tasks, capacity, total_runtime);
+		/*
+		 * Keep the GTimer boundary and DWT task-counter snapshot in the same
+		 * scheduler-suspended interval. uxTaskGetSystemState() uses a nested
+		 * scheduler suspension, which is supported by FreeRTOS. Without this
+		 * outer level, its final xTaskResumeAll() could preempt this monitor
+		 * before the wall-clock read and make utilization appear too low.
+		 * Interrupts remain enabled while the scheduler is suspended.
+		 */
+		vTaskSuspendAll();
+		snapshot_wall_us = hal_read_curtime_us();
+		count = uxTaskGetSystemState(tasks, capacity, NULL);
+		(void)xTaskResumeAll();
 		if (count != 0U) {
+			*wall_time_us = snapshot_wall_us;
 			*task_count = count;
 			return tasks;
 		}
@@ -145,24 +159,31 @@ static TaskStatus_t *atss_take_snapshot(UBaseType_t *task_count, uint32_t *total
 
 static int atss_calculate_sample(const TaskStatus_t *start_tasks,
 				 UBaseType_t start_count,
-				 uint32_t start_total,
+				 uint32_t start_wall_us,
 				 const TaskStatus_t *end_tasks,
 				 UBaseType_t end_count,
-				 uint32_t end_total,
+				 uint32_t end_wall_us,
 				 atss_task_stat_t **out_stats,
-				 size_t *out_count)
+				 size_t *out_count,
+				 uint32_t *out_window_us)
 {
 	UBaseType_t start_index;
 	UBaseType_t end_index;
-	uint32_t total_delta;
+	uint32_t wall_delta_us;
 	uint32_t task_delta;
 	uint32_t stack_free_min_bytes;
+	uint64_t window_cycles;
 	const char *task_name;
 	TaskDebugInfo_t task_debug_info;
 	atss_task_stat_t *stats;
 
-	total_delta = end_total - start_total;
-	if (total_delta == 0U) {
+	wall_delta_us = end_wall_us - start_wall_us;
+	if (wall_delta_us == 0U || SystemCoreClock == 0U) {
+		return ATSS_NOT_READY;
+	}
+	window_cycles = ((uint64_t)wall_delta_us * (uint64_t)SystemCoreClock) /
+			1000000ULL;
+	if (window_cycles == 0ULL) {
 		return ATSS_NOT_READY;
 	}
 
@@ -184,11 +205,14 @@ static int atss_calculate_sample(const TaskStatus_t *start_tasks,
 
 		stats[end_index].priority =
 			(uint32_t)end_tasks[end_index].uxCurrentPriority;
-		stats[end_index].runtime_us = task_delta;
+		stats[end_index].runtime_us =
+			(uint32_t)(((uint64_t)task_delta * 1000000ULL +
+				    ((uint64_t)SystemCoreClock / 2ULL)) /
+				   (uint64_t)SystemCoreClock);
 		stats[end_index].cpu_utilization_x10 =
 			(uint32_t)(((uint64_t)task_delta * 1000ULL +
-				    ((uint64_t)total_delta / 2ULL)) /
-				   (uint64_t)total_delta);
+				    (window_cycles / 2ULL)) /
+				   window_cycles);
 
 		if (xTaskGetDebugInfo(end_tasks[end_index].xHandle, &task_debug_info) == pdPASS) {
 			task_name = task_debug_info.pcTaskName;
@@ -215,24 +239,29 @@ static int atss_calculate_sample(const TaskStatus_t *start_tasks,
 
 	*out_stats = stats;
 	*out_count = (size_t)end_count;
+	*out_window_us = wall_delta_us;
 	return ATSS_OK;
 }
 
-static void atss_print_sample(const atss_task_stat_t *stats, size_t count)
+static void atss_print_sample(const atss_task_stat_t *stats, size_t count,
+			      uint32_t window_us)
 {
 	size_t index;
-	uint32_t utilization_x10;
+	uint32_t utilization_x100;
 
 	AT_PRINTK("[ATSS]: %-31s %5s %7s %10s %12s %12s %12s",
 		 "Task", "Prio", "CPU", "Time(us)", "StackSize(B)", "StackUsed(B)", "StackPeak(B)");
 
 	for (index = 0; index < count; index++) {
-		utilization_x10 = stats[index].cpu_utilization_x10;
-		AT_PRINTK("[ATSS]: %-31s %5u %5u.%u%% %10u %12u %12u %12u",
+		utilization_x100 =
+			(uint32_t)(((uint64_t)stats[index].runtime_us * 10000ULL +
+				    ((uint64_t)window_us / 2ULL)) /
+				   (uint64_t)window_us);
+		AT_PRINTK("[ATSS]: %-31s %5u %4u.%02u%% %10u %12u %12u %12u",
 			 stats[index].task_name,
 			 (unsigned int)stats[index].priority,
-			 (unsigned int)(utilization_x10 / 10U),
-			 (unsigned int)(utilization_x10 % 10U),
+			 (unsigned int)(utilization_x100 / 100U),
+			 (unsigned int)(utilization_x100 % 100U),
 			 (unsigned int)stats[index].runtime_us,
 			 (unsigned int)stats[index].stack_size_bytes,
 			 (unsigned int)stats[index].stack_used_bytes,
@@ -276,20 +305,25 @@ static void atss_monitor(void *param)
 	size_t sample_count;
 	UBaseType_t start_count;
 	UBaseType_t end_count;
-	uint32_t start_total;
-	uint32_t end_total;
+	uint32_t start_wall_us;
+	uint32_t end_wall_us;
+	uint32_t sample_window_us;
 	int status;
 	BaseType_t normal_stop = pdFALSE;
 
 	(void)param;
 
-	start_tasks = atss_take_snapshot(&start_count, &start_total);
+	start_tasks = atss_take_snapshot(&start_count, &start_wall_us);
 	if (start_tasks == NULL) {
 		atss_set_latest_status(ATSS_NO_MEMORY);
 		if (atss_cli_print_enabled != pdFALSE) {
 			AT_PRINTK("[ATSS]: ERROR: unable to allocate the initial snapshot");
 		}
 		goto exit;
+	}
+	if (atss_cli_print_enabled != pdFALSE) {
+		AT_PRINTK("[ATSS]: runtime=DWT frequency=%luHz resolution=1cycle wallclock=GTIMER",
+			 (unsigned long)SystemCoreClock);
 	}
 
 	while (1) {
@@ -299,14 +333,14 @@ static void atss_monitor(void *param)
 			break;
 		}
 
-		end_tasks = atss_take_snapshot(&end_count, &end_total);
+		end_tasks = atss_take_snapshot(&end_count, &end_wall_us);
 		if (end_tasks == NULL) {
 			atss_set_latest_status(ATSS_NO_MEMORY);
 			if (atss_cli_print_enabled != pdFALSE) {
 				AT_PRINTK("[ATSS]: ERROR: unable to allocate a snapshot");
 			}
 			vPortFree(start_tasks);
-			start_tasks = atss_take_snapshot(&start_count, &start_total);
+			start_tasks = atss_take_snapshot(&start_count, &start_wall_us);
 			if (start_tasks == NULL) {
 				goto exit;
 			}
@@ -315,14 +349,16 @@ static void atss_monitor(void *param)
 
 		sample_stats = NULL;
 		sample_count = 0U;
-		status = atss_calculate_sample(start_tasks, start_count, start_total,
-					       end_tasks, end_count, end_total,
-					       &sample_stats, &sample_count);
+		sample_window_us = 0U;
+		status = atss_calculate_sample(start_tasks, start_count, start_wall_us,
+					       end_tasks, end_count, end_wall_us,
+					       &sample_stats, &sample_count,
+					       &sample_window_us);
 
 		vPortFree(start_tasks);
 		start_tasks = end_tasks;
 		start_count = end_count;
-		start_total = end_total;
+		start_wall_us = end_wall_us;
 
 		if (atss_monitor_stop_requested != pdFALSE) {
 			if (sample_stats != NULL) {
@@ -334,7 +370,8 @@ static void atss_monitor(void *param)
 		if (status == ATSS_OK) {
 			atss_publish_sample(sample_stats, sample_count);
 			if (atss_cli_print_enabled != pdFALSE) {
-				atss_print_sample(sample_stats, sample_count);
+				atss_print_sample(sample_stats, sample_count,
+						  sample_window_us);
 			}
 		} else {
 			atss_set_latest_status(status);

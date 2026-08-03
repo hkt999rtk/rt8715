@@ -183,6 +183,10 @@ SECTIONS
 		*(.wlan.text.rtw_recv_indicatepkt)
 		*(.wlan.text.rltk_netif_rx)
 
+		/* Called at every context switch; keep the DWT read beside the
+		 * FreeRTOS scheduler in ITCM and avoid an XIP/DRAM veneer. */
+		*(.cinit.itcm.text.atss_runtime_counter_get)
+
 		*(.itcm.text*)
 		*(.haac.text*)
 		*(.faac.text*)

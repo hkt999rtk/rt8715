@@ -3123,11 +3123,10 @@ void vTaskSwitchContext( void )
 				#endif
 
 				/* Add the amount of time the task has been running to the
-				accumulated time so far.  Both values are unsigned, therefore the
-				subtraction remains correct across one wrap of the 32-bit run-time
-				counter.  The platform counter wraps every ~71.6 minutes and this
-				function runs at every context switch, so more than one wrap cannot
-				occur between samples in this system. */
+				accumulated time so far. Both values are unsigned, therefore the
+				subtraction remains correct across one wrap of the 32-bit DWT
+				cycle counter. CYCCNT wraps in about 14.32 seconds at 300 MHz;
+				context switches in this system occur well within that interval. */
 				pxCurrentTCB->ulRunTimeCounter +=
 					( uint32_t ) ( ulTotalRunTime - ulTaskSwitchedInTime );
 				ulTaskSwitchedInTime = ulTotalRunTime;

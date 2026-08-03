@@ -129,9 +129,12 @@ tick off. */
 #define configGENERATE_RUN_TIME_STATS	1
 #if configGENERATE_RUN_TIME_STATS
 /*
- * Use the always-running 1 us system GTimer instead of the 1 ms RTOS tick.
- * The counter is 32-bit and wraps about every 71.6 minutes; tasks.c and ATSS
- * intentionally use unsigned modulo subtraction so that rollover is harmless.
+ * Charge task execution in raw DWT CPU cycles. A context switch therefore
+ * needs only one CYCCNT register read instead of a system-GTimer latch/poll.
+ * ATSS separately uses the 1 us GTimer as its wall-clock denominator.
+ * CYCCNT wraps in about 14.32 seconds at 300 MHz; unsigned modulo subtraction
+ * is valid because normal context switches and ATSS's two-second samples are
+ * much shorter than one wrap.
  */
 extern void atss_runtime_counter_init(void);
 extern uint32_t atss_runtime_counter_get(void);
@@ -139,8 +142,8 @@ extern uint32_t atss_runtime_counter_get(void);
 #define portGET_RUN_TIME_COUNTER_VALUE() atss_runtime_counter_get()
 #undef	configUSE_TRACE_FACILITY
 #define configUSE_TRACE_FACILITY			1
-#define portCONFIGURE_STATS_PEROID_VALUE	1000000U /* one second, in us */
-#endif 
+#define portCONFIGURE_STATS_PEROID_VALUE	CONFIG_CPU_CLK /* one second, in cycles */
+#endif
 
 /* This demo makes use of one or more example stats formatting functions.  These
 format the raw data provided by the uxTaskGetSystemState() function in to human
