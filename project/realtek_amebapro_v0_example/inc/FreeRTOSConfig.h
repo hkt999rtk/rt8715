@@ -123,7 +123,7 @@
 /* The full demo always has tasks to run so the tick will never be turned off.
 The blinky demo will use the default tickless idle implementation to turn the
 tick off. */
-#define configUSE_TICKLESS_IDLE					0
+#define configUSE_TICKLESS_IDLE					1
 
 /* Run time stats gathering definitions. */
 #define configGENERATE_RUN_TIME_STATS	1
