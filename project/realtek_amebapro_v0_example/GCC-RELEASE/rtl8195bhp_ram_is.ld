@@ -290,7 +290,7 @@ SECTIONS
 		 * The CarPlay archive also contains the ChaCha/AES routing and software
 		 * fallback paths used by AirPlayScreenReceiver.
 		 */
-		*lib_CarPlay_chacha_m33.a:*(.text*)
+		*lib_CarPlay.a:*(.text*)
 		*lib_fdkaac.a:*(.text*)
 		*lib_Accessory2.a:AirPlayScreen.o(.text*)
 
@@ -320,7 +320,7 @@ SECTIONS
 		*(.eram.rodata.str1*)
 
 		/* Keep hot codec/crypto lookup tables with their LPDDR text. */
-		*lib_CarPlay_chacha_m33.a:*(.rodata*)
+		*lib_CarPlay.a:*(.rodata*)
 		*lib_fdkaac.a:*(.rodata* .haac.rodata* .faac.rodata*)
 		*lib_Accessory2.a:AirPlayScreen.o(.rodata*)
 
