@@ -484,6 +484,20 @@ ITCM_C += ../../../component/common/network/lwip/lwip_v2.1.2/port/realtek/freert
 ITCM_C += ../../../component/common/network/dhcp/dhcps.c
 ITCM_C += ../../../component/common/network/sntp/sntp.c
 
+# ITCM is substantially more valuable to the sustained audio codecs than to
+# lwIP control/API code.  Keep the network stack in LPDDR (ERAM), rather than
+# falling back to NOR XIP, and reserve ITCM for the selected WLAN RX,
+# scheduler and codec hot paths in rtl8195bhp_ram_is.ld.
+CODEC_ITCM_RECLAIM_NETWORK ?= 1
+ifeq ($(CODEC_ITCM_RECLAIM_NETWORK),1)
+NETWORK_STACK_ITCM_C := $(filter \
+	../../../component/common/network/% \
+	../../../component/common/drivers/wlan/realtek/src/osdep/lwip_intf.c,\
+	$(ITCM_C))
+ITCM_C := $(filter-out $(NETWORK_STACK_ITCM_C),$(ITCM_C))
+ERAM_C += $(NETWORK_STACK_ITCM_C)
+endif
+
 #mdns
 SRC_C += ../../../component/common/network/mDNS/mDNSPlatform.c
 

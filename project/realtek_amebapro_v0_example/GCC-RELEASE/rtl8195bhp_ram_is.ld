@@ -188,6 +188,62 @@ SECTIONS
 		*(.cinit.itcm.text.atss_runtime_counter_get)
 
 		*(.itcm.text*)
+
+		/*
+		 * Codec placement experiment (2026-08-04): lwIP is compiled into
+		 * LPDDR so ITCM can be spent on sustained audio loops.  Select
+		 * function sections instead of entire archives: lib_fdkaac is about
+		 * 616 KiB and lib_opus is about 169 KiB, so neither archive fits in
+		 * the 128 KiB ITCM as a whole.
+		 *
+		 * FDK AAC: frame-level encode/decode, psychoacoustic/QC, SBR, TNS,
+		 * transform, FFT and QMF loops.  Lookup tables intentionally remain
+		 * in LPDDR; only executable hot paths consume ITCM.
+		 */
+		*lib_fdkaac.a:*(
+			.text.FDKaacEnc_EncodeFrame
+			.text.FDKaacEnc_psyMain
+			.text.FDKaacEnc_QCMain
+			.text.FDKaacEnc_Transform_Real
+			.text.FDKaacEnc_MsStereoProcessing
+			.text.CAacDecoder_DecodeFrame
+			.text.CBlock_FrequencyToTime
+			.text.CBlock_FrequencyToTimeLowDelay
+			.text.CTns_Filter
+			.text.sbr_dec
+			.text.lppTransposer
+			.text.imdct_block
+			.text.InvMdctTransformLowDelay_fdk
+		)
+		*lib_fdkaac.a:fft.o(.text*)
+		*lib_fdkaac.a:qmf.o(.text*)
+
+		/*
+		 * Opus: CELT/SILK decode plus the two dominant top-level encoder
+		 * loops.  The archive currently contributes code only when an Opus
+		 * API is referenced; these rules do not force unused Opus into the
+		 * production image.
+		 */
+		*lib_opus.a:*(
+			.text.opus_decode_frame
+			.text.celt_decode_with_ec
+			.text.celt_synthesis
+			.text.deemphasis*
+			.text.silk_Decode
+			.text.silk_decode_frame
+			.text.silk_decode_core
+			.text.silk_decode_parameters
+			.text.silk_decode_indices
+			.text.silk_decode_pulses
+			.text.decode_pulses
+			.text.quant_all_bands
+			.text.unquant_coarse_energy
+			.text.opus_fft_impl
+			.text.opus_ifft_c
+			.text.clt_mdct_backward_c
+			.text.opus_encode_native
+			.text.celt_encode_with_ec
+		)
 		*(.haac.text*)
 		*(.faac.text*)
 		*(.hmp3.text*)
