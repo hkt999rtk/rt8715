@@ -49,6 +49,10 @@ extern struct netif xnetif[];			//LWIP netif
 #define CONFIG_NET_GDMA_SELFTEST 1
 #endif
 
+#ifndef CONFIG_NET_GDMA_BENCH
+#define CONFIG_NET_GDMA_BENCH 0
+#endif
+
 #ifndef CONFIG_NET_GDMA_STATS
 #define CONFIG_NET_GDMA_STATS 0
 #endif
@@ -87,6 +91,11 @@ extern struct netif xnetif[];			//LWIP netif
 #define NET_GDMA_SELFTEST_MAX   1500U
 #define NET_GDMA_SELFTEST_ALLOC (NET_GDMA_SELFTEST_MAX + (3U * NET_GDMA_CACHE_LINE))
 
+#define NET_GDMA_BENCH_FAIL_NONE      0U
+#define NET_GDMA_BENCH_FAIL_ALLOC     1U
+#define NET_GDMA_BENCH_FAIL_TRANSFER  2U
+#define NET_GDMA_BENCH_FAIL_MISMATCH  3U
+
 typedef struct net_gdma_context_s {
 	gdma_t dma;
 	_sema done;
@@ -110,6 +119,17 @@ typedef struct net_gdma_context_s {
 	u32 timeouts;
 	u32 report_probe;
 	u32 last_report_tick;
+#if CONFIG_NET_GDMA_BENCH
+	u8 suppress_periodic_report;
+	u32 bench_submit_cycles;
+	u32 bench_dma_irq_cycles;
+	u32 bench_wake_cycles;
+	u32 bench_total_cycles;
+	u32 bench_selftest_failures;
+	u32 bench_selftest_last_len;
+	u32 bench_selftest_last_offset;
+	u8 bench_selftest_last_reason;
+#endif
 #if CONFIG_NET_GDMA_LATENCY_PROFILE
 	volatile u8 latency_irq_seen;
 	volatile u32 latency_irq_cycles;
@@ -130,6 +150,9 @@ static net_gdma_context_t g_net_rx_gdma;
 static net_gdma_context_t g_net_tx_gdma;
 static net_gdma_context_t g_net_socket_rx_gdma;
 static net_gdma_context_t g_net_tcp_tx_gdma;
+#if CONFIG_NET_GDMA_BENCH
+static net_gdma_context_t g_net_bench_gdma;
+#endif
 static u8 g_net_gdma_initialized;
 #if CONFIG_NET_GDMA_LATENCY_PROFILE
 static u8 g_net_gdma_latency_ready;
@@ -199,6 +222,14 @@ static void net_gdma_tcp_tx_done(uint32_t id)
 	(void)id;
 	net_gdma_done_from_isr(&g_net_tcp_tx_gdma);
 }
+
+#if CONFIG_NET_GDMA_BENCH
+static void net_gdma_bench_done(uint32_t id)
+{
+	(void)id;
+	net_gdma_done_from_isr(&g_net_bench_gdma);
+}
+#endif
 
 static void net_gdma_drain_completion(net_gdma_context_t *ctx)
 {
@@ -296,6 +327,15 @@ static void net_gdma_init_all(void)
 	 * behind driver/NCM TX traffic on g_net_tx_gdma. */
 	net_gdma_init_context(&g_net_tcp_tx_gdma, "TCP_TX",
 			       net_gdma_tcp_tx_done);
+#if CONFIG_NET_GDMA_BENCH
+	/* Normally reserved before application startup by the benchmark thread.
+	 * Keep this fallback for integrations that call the copy API directly. */
+	if (!g_net_bench_gdma.initialized) {
+		net_gdma_init_context(&g_net_bench_gdma, "BENCH",
+				       net_gdma_bench_done);
+		g_net_bench_gdma.suppress_periodic_report = 1;
+	}
+#endif
 #endif
 }
 
@@ -325,6 +365,22 @@ static int net_gdma_destination_safe(const void *dst, u32 len,
 	}
 
 	return 1;
+}
+
+static int net_gdma_transfer_aligned(const void *src, u32 len)
+{
+	/*
+	 * RTL8195B board testing showed that the ROM hal_gdma_memcpy_config()
+	 * can complete a transfer without reporting an error while corrupting
+	 * data when a word-sized memory copy is submitted with an unaligned
+	 * source (for example, aligned destination and source + 1).  The public
+	 * HAL documentation does not state this restriction, so enforce the
+	 * controller's four-byte transfer alignment here.  Destination alignment
+	 * is already stricter (one cache line) in net_gdma_destination_safe().
+	 * Unaligned edges are handled by the CPU wrapper below.
+	 */
+	return (((uintptr_t)src & (sizeof(u32) - 1U)) == 0U) &&
+	       ((len & (sizeof(u32) - 1U)) == 0U);
 }
 
 static int net_gdma_wait(net_gdma_context_t *ctx)
@@ -391,7 +447,6 @@ static int net_gdma_selftest(net_gdma_context_t *ctx)
 	u8 *src_base;
 	u8 *dst;
 	u32 case_index;
-	u32 offset;
 	u32 i;
 	int result = -1;
 
@@ -399,6 +454,10 @@ static int net_gdma_selftest(net_gdma_context_t *ctx)
 	dst_raw = (u8 *)rtw_malloc(NET_GDMA_SELFTEST_ALLOC);
 	if (src_raw == NULL || dst_raw == NULL) {
 		printf("[NET_GDMA][SELFTEST] %s allocation failed\n", ctx->name);
+#if CONFIG_NET_GDMA_BENCH
+		ctx->bench_selftest_last_reason = NET_GDMA_BENCH_FAIL_ALLOC;
+		ctx->bench_selftest_failures++;
+#endif
 		goto exit;
 	}
 
@@ -409,30 +468,55 @@ static int net_gdma_selftest(net_gdma_context_t *ctx)
 
 	for (case_index = 0; case_index < sizeof(lengths) / sizeof(lengths[0]);
 	     ++case_index) {
-		for (offset = 0; offset < 4U; ++offset) {
-			u8 *src = src_base + offset;
-			u32 len = lengths[case_index];
+		u8 *src = src_base;
+		u32 len = lengths[case_index];
 
-			for (i = 0; i < len; ++i) {
-				src[i] = (u8)(i + (offset * 29U) + len);
-			}
-			rtw_memset(dst, 0xA5, len);
-			net_gdma_drain_completion(ctx);
-			ctx->in_flight = 1;
-			dma_memcpy(&ctx->dma, dst, src, len);
-			if (net_gdma_wait(ctx) != 0 ||
-			    rtw_memcmp(dst, src, len) != _TRUE) {
-				printf("[NET_GDMA][SELFTEST] %s FAIL len=%u src_offset=%u\n",
-				       ctx->name, (unsigned int)len,
-				       (unsigned int)offset);
-				goto exit;
-			}
+		/*
+		 * Test the raw HAL only with the alignment guaranteed by the
+		 * production submission path.  Misaligned caller buffers are tested
+		 * by the benchmark through net_gdma_copy_with_edges(); requiring the
+		 * raw ROM HAL to support source + 1 incorrectly disables a healthy
+		 * channel even though that combination is never submitted now.
+		 */
+		for (i = 0; i < len; ++i) {
+			src[i] = (u8)(i + len);
+		}
+		rtw_memset(dst, 0xA5, len);
+		net_gdma_drain_completion(ctx);
+		ctx->in_flight = 1;
+		dma_memcpy(&ctx->dma, dst, src, len);
+		if (net_gdma_wait(ctx) != 0) {
+#if CONFIG_NET_GDMA_BENCH
+			ctx->bench_selftest_last_reason =
+				NET_GDMA_BENCH_FAIL_TRANSFER;
+			ctx->bench_selftest_last_len = len;
+			ctx->bench_selftest_last_offset = 0U;
+			ctx->bench_selftest_failures++;
+#endif
+			printf("[NET_GDMA][SELFTEST] %s FAIL len=%u src_offset=0\n",
+			       ctx->name, (unsigned int)len);
+			goto exit;
+		}
+		if (rtw_memcmp(dst, src, len) != _TRUE) {
+#if CONFIG_NET_GDMA_BENCH
+			ctx->bench_selftest_last_reason =
+				NET_GDMA_BENCH_FAIL_MISMATCH;
+			ctx->bench_selftest_last_len = len;
+			ctx->bench_selftest_last_offset = 0U;
+			ctx->bench_selftest_failures++;
+#endif
+			printf("[NET_GDMA][SELFTEST] %s FAIL len=%u src_offset=0\n",
+			       ctx->name, (unsigned int)len);
+			goto exit;
 		}
 	}
 
 	result = 0;
+#if CONFIG_NET_GDMA_BENCH
+	ctx->bench_selftest_last_reason = NET_GDMA_BENCH_FAIL_NONE;
+#endif
 	printf("[NET_GDMA][SELFTEST] %s PASS cases=%u\n", ctx->name,
-	       (unsigned int)(sizeof(lengths) / sizeof(lengths[0]) * 4U));
+	       (unsigned int)(sizeof(lengths) / sizeof(lengths[0])));
 
 exit:
 	if (src_raw != NULL) {
@@ -495,6 +579,18 @@ static void net_gdma_latency_record(net_gdma_context_t *ctx,
 	wake_cycles = wait_return_cycles - irq_cycles;
 	total_cycles = wait_return_cycles - start_cycles;
 
+#if CONFIG_NET_GDMA_BENCH
+	ctx->bench_submit_cycles = submit_cycles;
+	ctx->bench_dma_irq_cycles = dma_irq_cycles;
+	ctx->bench_wake_cycles = wake_cycles;
+	ctx->bench_total_cycles = total_cycles;
+	/* The benchmark consumes only the latest sample. Avoid overflowing the
+	 * normal long-running aggregate counters on its dedicated channel. */
+	if (ctx->suppress_periodic_report) {
+		return;
+	}
+#endif
+
 	ctx->latency_samples++;
 	ctx->latency_irq_before_wait += irq_before_wait ? 1U : 0U;
 	ctx->latency_submit_sum_cycles += submit_cycles;
@@ -531,6 +627,12 @@ static void net_gdma_account(net_gdma_context_t *ctx, int used_dma, u32 len)
 #if CONFIG_NET_GDMA_STATS || CONFIG_NET_GDMA_LATENCY_PROFILE
 	u32 now;
 	u32 elapsed_ms;
+
+#if CONFIG_NET_GDMA_BENCH
+	if (ctx->suppress_periodic_report) {
+		return;
+	}
+#endif
 
 	if (used_dma) {
 		ctx->dma_ops++;
@@ -629,6 +731,13 @@ static int net_gdma_copy(net_gdma_context_t *ctx, void *dst, const void *src,
 		*dma_len = 0;
 	}
 
+#if CONFIG_NET_GDMA_BENCH
+	ctx->bench_submit_cycles = 0;
+	ctx->bench_dma_irq_cycles = 0;
+	ctx->bench_wake_cycles = 0;
+	ctx->bench_total_cycles = 0;
+#endif
+
 	if (!g_net_gdma_initialized) {
 		net_gdma_init_all();
 	}
@@ -639,7 +748,8 @@ static int net_gdma_copy(net_gdma_context_t *ctx, void *dst, const void *src,
 		return 0;
 	}
 
-	if (!net_gdma_destination_safe(dst, len, allocation_end)) {
+	if (!net_gdma_transfer_aligned(src, len) ||
+	    !net_gdma_destination_safe(dst, len, allocation_end)) {
 		ctx->alignment_fallbacks++;
 		rtw_memcpy(dst, (void *)src, len);
 		net_gdma_account(ctx, 0, len);
@@ -799,6 +909,87 @@ int rltk_network_gdma_copy_rx(void *dst, const void *src, unsigned int len,
 #endif
 }
 
+int rltk_network_gdma_benchmark_init(void)
+{
+#if CONFIG_NET_GDMA_COPY && CONFIG_NET_GDMA_BENCH
+	/*
+	 * Reserve a genuinely separate channel before the rest of the application
+	 * starts allocating transient GDMA users.  This does not replace, borrow or
+	 * reorder any of the four production network contexts.
+	 */
+	if (!g_net_bench_gdma.initialized) {
+		net_gdma_init_context(&g_net_bench_gdma, "BENCH",
+				       net_gdma_bench_done);
+		g_net_bench_gdma.suppress_periodic_report = 1;
+	}
+	return g_net_bench_gdma.available ? 0 : -1;
+#else
+	return -1;
+#endif
+}
+
+void rltk_network_gdma_benchmark_print_status(unsigned int sequence)
+{
+#if CONFIG_NET_GDMA_COPY && CONFIG_NET_GDMA_BENCH
+	static const char *const reasons[] = {
+		"none", "alloc", "transfer", "mismatch"
+	};
+	net_gdma_context_t *ctx = &g_net_bench_gdma;
+	u32 reason = ctx->bench_selftest_last_reason;
+
+	if (reason >= sizeof(reasons) / sizeof(reasons[0])) {
+		reason = NET_GDMA_BENCH_FAIL_NONE;
+	}
+	printf("[GDMA_BENCH][%u][STATUS] initialized=%u available=%u tested=%u "
+	       "busy=%u in_flight=%u gdma=%u channel=%u selftest_fail=%u "
+	       "last=%s/%uB/off%u timeout=%u dma_error=%u late_irq=%u\n",
+	       sequence, (unsigned int)ctx->initialized,
+	       (unsigned int)ctx->available, (unsigned int)ctx->tested,
+	       (unsigned int)ctx->busy, (unsigned int)ctx->in_flight,
+	       (unsigned int)ctx->dma.hal_gdma_adaptor.gdma_index,
+	       (unsigned int)ctx->dma.hal_gdma_adaptor.ch_num,
+	       (unsigned int)ctx->bench_selftest_failures, reasons[reason],
+	       (unsigned int)ctx->bench_selftest_last_len,
+	       (unsigned int)ctx->bench_selftest_last_offset,
+	       (unsigned int)ctx->timeouts, (unsigned int)ctx->dma_errors,
+	       (unsigned int)ctx->spurious_irqs);
+#else
+	(void)sequence;
+#endif
+}
+
+int rltk_network_gdma_benchmark_copy(
+	void *dst, const void *src, unsigned int len, const void *allocation_end,
+	rltk_network_gdma_bench_sample_t *sample)
+{
+#if CONFIG_NET_GDMA_COPY && CONFIG_NET_GDMA_BENCH
+	u32 dma_len = 0;
+	int result;
+
+	if (sample == NULL) {
+		return -1;
+	}
+	rtw_memset(sample, 0, sizeof(*sample));
+	result = net_gdma_copy_with_edges(&g_net_bench_gdma, dst, src, len,
+					  allocation_end, &dma_len);
+	sample->dma_bytes = dma_len;
+	sample->submit_cycles = g_net_bench_gdma.bench_submit_cycles;
+	sample->dma_irq_cycles = g_net_bench_gdma.bench_dma_irq_cycles;
+	sample->wake_cycles = g_net_bench_gdma.bench_wake_cycles;
+	sample->dma_total_cycles = g_net_bench_gdma.bench_total_cycles;
+	return result;
+#else
+	(void)allocation_end;
+	if (sample != NULL) {
+		rtw_memset(sample, 0, sizeof(*sample));
+	}
+	/* Keep the benchmark meaningful when NET_GDMA_COPY=0: this is an
+	 * intentional CPU fallback, not a failed or missing copy. */
+	rtw_memcpy(dst, (void *)src, len);
+	return 0;
+#endif
+}
+
 /*
  * Socket recv owns both the source pbuf and the caller's destination buffer
  * until this blocking copy returns. That makes timeout recovery different
@@ -815,6 +1006,10 @@ int rltk_network_gdma_copy_rx(void *dst, const void *src, unsigned int len,
 int rltk_network_gdma_copy_socket_rx(void *dst, const void *src,
 				     unsigned int len)
 {
+#if !CONFIG_NET_GDMA_COPY
+	rtw_memcpy(dst, (void *)src, len);
+	return 0;
+#else
 #if CONFIG_NET_GDMA_STATS
 	static u32 dma_ops;
 	static u32 dma_bytes;
@@ -904,6 +1099,7 @@ int rltk_network_gdma_copy_socket_rx(void *dst, const void *src,
 #endif
 
 	return 0;
+#endif /* CONFIG_NET_GDMA_COPY */
 }
 
 /*
@@ -917,6 +1113,13 @@ int rltk_network_gdma_copy_socket_rx(void *dst, const void *src,
 int rltk_network_gdma_copy_tcp_tx(void *dst, const void *src,
 				  unsigned int len, unsigned int *dma_len_out)
 {
+#if !CONFIG_NET_GDMA_COPY
+	if (dma_len_out != NULL) {
+		*dma_len_out = 0U;
+	}
+	rtw_memcpy(dst, (void *)src, len);
+	return 0;
+#else
 	u32 dma_len = 0;
 	uintptr_t dst_start = (uintptr_t)dst;
 	uintptr_t src_start = (uintptr_t)src;
@@ -950,6 +1153,7 @@ int rltk_network_gdma_copy_tcp_tx(void *dst, const void *src,
 		*dma_len_out = dma_len;
 	}
 	return 0;
+#endif /* CONFIG_NET_GDMA_COPY */
 }
 
 #if CONFIG_TCP_PHASE_PROFILE

@@ -61,6 +61,14 @@ int rltk_wlan_rx_ref_acquire(int idx, unsigned int expected_len,
 void rltk_wlan_rx_ref_release(void *handle);
 int rltk_wlan_rx_ref_selftest(void);
 #if defined(CONFIG_PLATFORM_8195BHP)
+typedef struct rltk_network_gdma_bench_sample_s {
+	unsigned int dma_bytes;
+	unsigned int submit_cycles;
+	unsigned int dma_irq_cycles;
+	unsigned int wake_cycles;
+	unsigned int dma_total_cycles;
+} rltk_network_gdma_bench_sample_t;
+
 int rltk_network_gdma_copy_tx(void *dst, const void *src, unsigned int len,
 			      const void *allocation_end);
 int rltk_network_gdma_copy_rx(void *dst, const void *src, unsigned int len,
@@ -75,6 +83,11 @@ void rltk_tcp_perf_rx_complete(unsigned int start_us, unsigned int bytes,
 void rltk_tcp_perf_tx_complete(unsigned int start_us, unsigned int bytes);
 void rltk_tcp_perf_tx_copy(unsigned int bytes, unsigned int dma_bytes,
 			   unsigned int elapsed_us);
+int rltk_network_gdma_benchmark_init(void);
+void rltk_network_gdma_benchmark_print_status(unsigned int sequence);
+int rltk_network_gdma_benchmark_copy(
+	void *dst, const void *src, unsigned int len, const void *allocation_end,
+	rltk_network_gdma_bench_sample_t *sample);
 #endif
 unsigned char rltk_wlan_running(unsigned char idx);		// interface is up. 0: interface is down
 

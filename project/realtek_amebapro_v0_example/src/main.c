@@ -21,11 +21,199 @@ extern void uart2_test(void);
 #include "platform_autoconf.h"
 #include "hal_flash_boot.h"
 #include "hal_uart.h"
+#if defined(CONFIG_NET_GDMA_BENCH) && CONFIG_NET_GDMA_BENCH
+#include "lwip_intf.h"
+#include "osdep_service.h"
+#endif
 
 extern void console_init(void);
 extern hal_uart_adapter_t log_uart;
 
 #define CARBOX_LOGUART_BAUD  1500000//3000000
+
+#if defined(CONFIG_NET_GDMA_BENCH) && CONFIG_NET_GDMA_BENCH
+#define CARBOX_GDMA_BENCH_INTERVAL_MS 5000U
+#define CARBOX_GDMA_BENCH_ITERATIONS  64U
+#define CARBOX_GDMA_BENCH_WARMUP       4U
+#define CARBOX_GDMA_BENCH_MAX_LEN    1500U
+#define CARBOX_GDMA_BENCH_ALIGN        32U
+#define CARBOX_GDMA_BENCH_ALLOC \
+	(CARBOX_GDMA_BENCH_MAX_LEN + (3U * CARBOX_GDMA_BENCH_ALIGN))
+#define CARBOX_GDMA_BENCH_STACK_BYTES 4096U
+
+typedef struct carbox_gdma_bench_totals_s {
+	uint64_t cpu_cycles;
+	uint64_t gdma_cycles;
+	uint64_t submit_cycles;
+	uint64_t dma_irq_cycles;
+	uint64_t wake_cycles;
+	uint64_t dma_total_cycles;
+	uint32_t cpu_min_cycles;
+	uint32_t cpu_max_cycles;
+	uint32_t gdma_min_cycles;
+	uint32_t gdma_max_cycles;
+	uint32_t dma_bytes;
+	uint32_t fallbacks;
+	uint32_t errors;
+	uint32_t mismatches;
+} carbox_gdma_bench_totals_t;
+
+static uint32_t carbox_gdma_cycles_to_ns(uint64_t cycles, uint32_t samples)
+{
+	uint64_t divisor = (uint64_t)SystemCoreClock * samples;
+
+	if (divisor == 0U) {
+		return 0U;
+	}
+	return (uint32_t)((cycles * 1000000000ULL + (divisor / 2U)) / divisor);
+}
+
+static void carbox_gdma_bench_case(uint32_t sequence, uint32_t len,
+				   uint32_t offset, uint8_t *src_base,
+				   uint8_t *dst_base, const void *allocation_end)
+{
+	carbox_gdma_bench_totals_t totals = { 0 };
+	rltk_network_gdma_bench_sample_t sample;
+	uint8_t *src = src_base + offset;
+	uint8_t *dst = dst_base + offset;
+	uint32_t start;
+	uint32_t elapsed;
+	uint32_t i;
+	int result;
+
+	for (i = 0; i < len; ++i) {
+		src[i] = (uint8_t)(i * 29U + len + offset);
+	}
+	for (i = 0; i < CARBOX_GDMA_BENCH_WARMUP; ++i) {
+		rtw_memset(dst, 0xA5, len);
+		(void)rltk_network_gdma_benchmark_copy(dst, src, len,
+						  allocation_end, &sample);
+	}
+
+	totals.cpu_min_cycles = UINT32_MAX;
+	totals.gdma_min_cycles = UINT32_MAX;
+	for (i = 0; i < CARBOX_GDMA_BENCH_ITERATIONS; ++i) {
+		rtw_memset(dst, 0x5A, len);
+		start = DWT->CYCCNT;
+		rtw_memcpy(dst, src, len);
+		elapsed = DWT->CYCCNT - start;
+		totals.cpu_cycles += elapsed;
+		if (elapsed < totals.cpu_min_cycles) totals.cpu_min_cycles = elapsed;
+		if (elapsed > totals.cpu_max_cycles) totals.cpu_max_cycles = elapsed;
+		if (rtw_memcmp(dst, src, len) != _TRUE) totals.mismatches++;
+
+		rtw_memset(dst, 0xC3, len);
+		start = DWT->CYCCNT;
+		result = rltk_network_gdma_benchmark_copy(dst, src, len,
+							 allocation_end, &sample);
+		elapsed = DWT->CYCCNT - start;
+		totals.gdma_cycles += elapsed;
+		if (elapsed < totals.gdma_min_cycles) totals.gdma_min_cycles = elapsed;
+		if (elapsed > totals.gdma_max_cycles) totals.gdma_max_cycles = elapsed;
+		totals.submit_cycles += sample.submit_cycles;
+		totals.dma_irq_cycles += sample.dma_irq_cycles;
+		totals.wake_cycles += sample.wake_cycles;
+		totals.dma_total_cycles += sample.dma_total_cycles;
+		totals.dma_bytes += sample.dma_bytes;
+		if (sample.dma_bytes == 0U) totals.fallbacks++;
+		if (result != 0) totals.errors++;
+		if (rtw_memcmp(dst, src, len) != _TRUE) totals.mismatches++;
+	}
+
+	rt_printf("[GDMA_BENCH][%lu] len=%lu off=%lu iter=%u "
+		  "cpu_ns avg/min/max=%lu/%lu/%lu "
+		  "gdma_ns avg/min/max=%lu/%lu/%lu "
+		  "phase_ns submit/irq/wake/dma=%lu/%lu/%lu/%lu "
+		  "dma_avg=%luB fallback=%lu error=%lu mismatch=%lu\r\n",
+		  (unsigned long)sequence, (unsigned long)len,
+		  (unsigned long)offset, CARBOX_GDMA_BENCH_ITERATIONS,
+		  (unsigned long)carbox_gdma_cycles_to_ns(totals.cpu_cycles,
+							 CARBOX_GDMA_BENCH_ITERATIONS),
+		  (unsigned long)carbox_gdma_cycles_to_ns(totals.cpu_min_cycles, 1U),
+		  (unsigned long)carbox_gdma_cycles_to_ns(totals.cpu_max_cycles, 1U),
+		  (unsigned long)carbox_gdma_cycles_to_ns(totals.gdma_cycles,
+							 CARBOX_GDMA_BENCH_ITERATIONS),
+		  (unsigned long)carbox_gdma_cycles_to_ns(totals.gdma_min_cycles, 1U),
+		  (unsigned long)carbox_gdma_cycles_to_ns(totals.gdma_max_cycles, 1U),
+		  (unsigned long)carbox_gdma_cycles_to_ns(totals.submit_cycles,
+							 CARBOX_GDMA_BENCH_ITERATIONS),
+		  (unsigned long)carbox_gdma_cycles_to_ns(totals.dma_irq_cycles,
+							 CARBOX_GDMA_BENCH_ITERATIONS),
+		  (unsigned long)carbox_gdma_cycles_to_ns(totals.wake_cycles,
+							 CARBOX_GDMA_BENCH_ITERATIONS),
+		  (unsigned long)carbox_gdma_cycles_to_ns(totals.dma_total_cycles,
+							 CARBOX_GDMA_BENCH_ITERATIONS),
+		  (unsigned long)(totals.dma_bytes / CARBOX_GDMA_BENCH_ITERATIONS),
+		  (unsigned long)totals.fallbacks, (unsigned long)totals.errors,
+		  (unsigned long)totals.mismatches);
+}
+
+static void carbox_gdma_bench_task(void *param)
+{
+	static const uint16_t lengths[] = { 1024U, 1152U, 1280U, 1408U, 1500U };
+	uint8_t *src_raw;
+	uint8_t *dst_raw;
+	uint8_t *src;
+	uint8_t *dst;
+	TickType_t last_wake;
+	uint32_t sequence = 0;
+	uint32_t round_start;
+	uint32_t i;
+
+	(void)param;
+	src_raw = (uint8_t *)rtw_malloc(CARBOX_GDMA_BENCH_ALLOC);
+	dst_raw = (uint8_t *)rtw_malloc(CARBOX_GDMA_BENCH_ALLOC);
+	if (src_raw == NULL || dst_raw == NULL) {
+		rt_printf("[GDMA_BENCH] buffer allocation failed\r\n");
+		if (src_raw != NULL) rtw_mfree(src_raw, CARBOX_GDMA_BENCH_ALLOC);
+		if (dst_raw != NULL) rtw_mfree(dst_raw, CARBOX_GDMA_BENCH_ALLOC);
+		vTaskDelete(NULL);
+		return;
+	}
+	src = (uint8_t *)(((uintptr_t)src_raw + CARBOX_GDMA_BENCH_ALIGN - 1U) &
+			  ~(uintptr_t)(CARBOX_GDMA_BENCH_ALIGN - 1U));
+	dst = (uint8_t *)(((uintptr_t)dst_raw + CARBOX_GDMA_BENCH_ALIGN - 1U) &
+			  ~(uintptr_t)(CARBOX_GDMA_BENCH_ALIGN - 1U));
+
+	CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+	DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+	rt_printf("[GDMA_BENCH] enabled interval=%ums iterations=%u core=%luHz\r\n",
+		  CARBOX_GDMA_BENCH_INTERVAL_MS, CARBOX_GDMA_BENCH_ITERATIONS,
+		  (unsigned long)SystemCoreClock);
+	last_wake = xTaskGetTickCount();
+
+	for (;;) {
+		vTaskDelayUntil(&last_wake,
+				pdMS_TO_TICKS(CARBOX_GDMA_BENCH_INTERVAL_MS));
+		sequence++;
+		round_start = DWT->CYCCNT;
+		for (i = 0; i < sizeof(lengths) / sizeof(lengths[0]); ++i) {
+			carbox_gdma_bench_case(sequence, lengths[i], 0U, src, dst,
+					       dst_raw + CARBOX_GDMA_BENCH_ALLOC);
+			carbox_gdma_bench_case(sequence, lengths[i], 2U, src, dst,
+					       dst_raw + CARBOX_GDMA_BENCH_ALLOC);
+		}
+		rltk_network_gdma_benchmark_print_status(sequence);
+		rt_printf("[GDMA_BENCH][%lu] round_us=%lu\r\n",
+			  (unsigned long)sequence,
+			  (unsigned long)carbox_gdma_cycles_to_ns(
+				  DWT->CYCCNT - round_start, 1U) / 1000U);
+	}
+}
+
+static void carbox_gdma_bench_start(void)
+{
+	if (rltk_network_gdma_benchmark_init() != 0) {
+		rt_printf("[GDMA_BENCH] dedicated channel reservation failed\r\n");
+		return;
+	}
+	if (xTaskCreate(carbox_gdma_bench_task, "gdma_bench",
+			CARBOX_GDMA_BENCH_STACK_BYTES / sizeof(StackType_t), NULL,
+			tskIDLE_PRIORITY + 1, NULL) != pdPASS) {
+		rt_printf("[GDMA_BENCH] task create failed\r\n");
+	}
+}
+#endif
 
 /*
  * Clock characterization aid.
@@ -286,6 +474,10 @@ void main(void)
 	/* init diagnostic tracing before any task creation */
 	carbox_diag_init();
 	carbox_diag_trace_enter("main");
+
+#if defined(CONFIG_NET_GDMA_BENCH) && CONFIG_NET_GDMA_BENCH
+	carbox_gdma_bench_start();
+#endif
 
 #if defined(CONFIG_MEMCHECK)
 
