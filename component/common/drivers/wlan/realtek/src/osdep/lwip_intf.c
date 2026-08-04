@@ -125,6 +125,8 @@ typedef struct net_gdma_context_s {
 	u32 bench_dma_irq_cycles;
 	u32 bench_wake_cycles;
 	u32 bench_total_cycles;
+	u32 bench_poll_count;
+	u32 bench_yield_count;
 	u32 bench_selftest_failures;
 	u32 bench_selftest_last_len;
 	u32 bench_selftest_last_offset;
@@ -226,8 +228,13 @@ static void net_gdma_tcp_tx_done(uint32_t id)
 #if CONFIG_NET_GDMA_BENCH
 static void net_gdma_bench_done(uint32_t id)
 {
+	net_gdma_context_t *ctx = &g_net_bench_gdma;
+
 	(void)id;
-	net_gdma_done_from_isr(&g_net_bench_gdma);
+	/* A polling benchmark must not depend on the ROM completion ISR.  This
+	 * callback is installed only because dma_memcpy_init() requires one; any
+	 * invocation means interrupt suppression failed and is diagnostic only. */
+	ctx->spurious_irqs++;
 }
 #endif
 
@@ -287,6 +294,34 @@ static void net_gdma_init_context(net_gdma_context_t *ctx,
 	       (unsigned int)NET_GDMA_COPY_THRESHOLD);
 }
 
+#if CONFIG_NET_GDMA_BENCH
+static void net_gdma_init_benchmark_context(net_gdma_context_t *ctx)
+{
+	phal_gdma_adaptor_t adaptor;
+
+	ctx->name = "BENCH";
+	ctx->callback = net_gdma_bench_done;
+	ctx->initialized = 1;
+	/* Reserve a standalone channel without allocating a semaphore.  The
+	 * benchmark completion path is hardware polling plus task yield only. */
+	dma_memcpy_init(&ctx->dma, net_gdma_bench_done, 0);
+	adaptor = &ctx->dma.hal_gdma_adaptor;
+	if (!adaptor->have_chnl) {
+		printf("[GDMA_BENCH] dedicated channel allocation failed\n");
+		return;
+	}
+	adaptor->gdma_ctl.int_en = 0;
+	hal_gdma_isr_dis(adaptor);
+	hal_gdma_clean_pending_isr(adaptor);
+	ctx->available = 1;
+	ctx->tested = 1;
+	ctx->suppress_periodic_report = 1;
+	printf("[GDMA_BENCH] poll+yield channel gdma=%u channel=%u irq=off sema=none\n",
+	       (unsigned int)adaptor->gdma_index,
+	       (unsigned int)adaptor->ch_num);
+}
+#endif
+
 static void net_gdma_init_all(void)
 {
 #if CONFIG_NET_GDMA_COPY
@@ -331,9 +366,7 @@ static void net_gdma_init_all(void)
 	/* Normally reserved before application startup by the benchmark thread.
 	 * Keep this fallback for integrations that call the copy API directly. */
 	if (!g_net_bench_gdma.initialized) {
-		net_gdma_init_context(&g_net_bench_gdma, "BENCH",
-				       net_gdma_bench_done);
-		g_net_bench_gdma.suppress_periodic_report = 1;
+		net_gdma_init_benchmark_context(&g_net_bench_gdma);
 	}
 #endif
 #endif
@@ -909,18 +942,202 @@ int rltk_network_gdma_copy_rx(void *dst, const void *src, unsigned int len,
 #endif
 }
 
+#if CONFIG_NET_GDMA_BENCH
+static int net_gdma_benchmark_poll_body(
+	net_gdma_context_t *ctx, void *dst, const void *src, u32 len,
+	const void *allocation_end, rltk_network_gdma_bench_sample_t *sample)
+{
+	phal_gdma_adaptor_t adaptor = &ctx->dma.hal_gdma_adaptor;
+	u32 start_cycles;
+	u32 submit_done_cycles;
+	u32 poll_done_cycles;
+	u32 finish_done_cycles;
+	u32 timeout_cycles;
+	u32 channel_mask;
+	hal_status_t status;
+
+	if (len < NET_GDMA_COPY_THRESHOLD || !ctx->available ||
+	    !net_gdma_transfer_aligned(src, len) ||
+	    !net_gdma_destination_safe(dst, len, allocation_end)) {
+		rtw_memcpy(dst, (void *)src, len);
+		return 0;
+	}
+
+	/* This context belongs only to the benchmark task.  Keep the guard anyway
+	 * so an accidental second caller cannot overwrite an active descriptor. */
+	save_and_cli();
+	if (ctx->busy) {
+		restore_flags();
+		rtw_memcpy(dst, (void *)src, len);
+		return 0;
+	}
+	ctx->busy = 1;
+	restore_flags();
+
+	/* This dedicated benchmark channel never uses a completion semaphore or
+	 * completion IRQ.  Configure and start the HAL directly, poll the channel
+	 * enable bit, and yield after each incomplete observation. */
+	hal_gdma_clean_pending_isr(adaptor);
+	ctx->irq_error = 0;
+	ctx->irq_raw_error = 0;
+	ctx->in_flight = 1;
+	start_cycles = DWT->CYCCNT;
+	status = hal_gdma_memcpy_config(adaptor, dst, (void *)src, len);
+	if (status != HAL_OK) {
+		ctx->in_flight = 0;
+		ctx->busy = 0;
+		printf("[GDMA_BENCH][ERROR] poll+yield config failed len=%u err=%d\n",
+		       (unsigned int)len, (int)status);
+		return -1;
+	}
+	/* hal_gdma_memcpy_config() restores the normal memcpy defaults, including
+	 * interrupt enable.  Override it after configuration so transfer_start()
+	 * programs INT_EN=0 into the channel control register. */
+	adaptor->gdma_ctl.int_en = 0;
+	hal_gdma_isr_dis(adaptor);
+	if (adaptor->dcache_clean_by_addr != NULL) {
+		adaptor->dcache_clean_by_addr((uint32_t *)src, (int32_t)len);
+		/* The caller may have just filled this cacheable destination.  Clean
+		 * dirty lines before GDMA starts so an eviction while this task is
+		 * yielded cannot write stale bytes over completed DMA output.  The
+		 * post-transfer invalidate below then exposes the DMA result. */
+		adaptor->dcache_clean_by_addr((uint32_t *)dst, (int32_t)len);
+	}
+	hal_gdma_transfer_start(adaptor, MultiBlkDis);
+	submit_done_cycles = DWT->CYCCNT;
+	timeout_cycles = (SystemCoreClock / 1000U) * NET_GDMA_TIMEOUT_MS;
+	channel_mask = 1U << adaptor->ch_num;
+
+	/* Do not use hal_gdma_query_chnl_en() here: the RTL8195B ROM helper also
+	 * observes adaptor->busy, which is normally cleared by the memcpy ISR.
+	 * With IRQ deliberately disabled that software flag stays set forever.
+	 * CH_EN is the hardware completion indication and is documented to clear
+	 * automatically after the final AXI write reaches the destination. */
+	while ((adaptor->gdma_dev->ch_en_reg & channel_mask) != 0U) {
+		ctx->bench_poll_count++;
+		ctx->irq_raw_error = adaptor->gdma_dev->raw_err & channel_mask;
+		if (ctx->irq_raw_error != 0U) {
+			ctx->irq_error = 1;
+			break;
+		}
+		if ((DWT->CYCCNT - start_cycles) >= timeout_cycles) {
+			ctx->timeouts++;
+			ctx->in_flight = 0;
+			hal_gdma_abort(adaptor);
+			hal_gdma_clean_pending_isr(adaptor);
+			ctx->available = 0;
+			ctx->tested = 0;
+			ctx->busy = 0;
+			printf("[GDMA_BENCH][ERROR] poll+yield timeout len=%u ch_en=0x%x raw_tfr=0x%x\n",
+			       (unsigned int)len,
+			       (unsigned int)adaptor->gdma_dev->ch_en_reg,
+			       (unsigned int)adaptor->gdma_dev->raw_tfr);
+			return -1;
+		}
+		ctx->bench_yield_count++;
+		rtw_yield_os();
+	}
+	poll_done_cycles = DWT->CYCCNT;
+	ctx->in_flight = 0;
+	ctx->irq_raw_error = adaptor->gdma_dev->raw_err & channel_mask;
+	if (ctx->irq_raw_error != 0U) {
+		ctx->irq_error = 1;
+	}
+
+	if (ctx->irq_error) {
+		ctx->dma_errors++;
+		hal_gdma_abort(adaptor);
+		hal_gdma_clean_pending_isr(adaptor);
+		ctx->busy = 0;
+		printf("[GDMA_BENCH][ERROR] poll+yield DMA error len=%u raw=0x%x\n",
+		       (unsigned int)len, (unsigned int)ctx->irq_raw_error);
+		return -1;
+	}
+
+	/* With the memcpy ISR disabled, its normal destination-cache maintenance
+	 * and pending-bit cleanup must be completed synchronously before the caller
+	 * compares the copied bytes. */
+	if (adaptor->dcache_invalidate_by_addr != NULL) {
+		adaptor->dcache_invalidate_by_addr((uint32_t *)dst, (int32_t)len);
+	}
+	hal_gdma_clean_pending_isr(adaptor);
+	adaptor->busy = 0;
+	finish_done_cycles = DWT->CYCCNT;
+
+	sample->dma_bytes = len;
+	sample->submit_cycles = submit_done_cycles - start_cycles;
+	sample->poll_cycles = poll_done_cycles - submit_done_cycles;
+	sample->finish_cycles = finish_done_cycles - poll_done_cycles;
+	sample->dma_total_cycles = finish_done_cycles - start_cycles;
+	sample->poll_count = ctx->bench_poll_count;
+	sample->yield_count = ctx->bench_yield_count;
+	ctx->busy = 0;
+	return 0;
+}
+
+static int net_gdma_benchmark_poll_copy(
+	void *dst, const void *src, u32 len, const void *allocation_end,
+	rltk_network_gdma_bench_sample_t *sample)
+{
+	uintptr_t start = (uintptr_t)dst;
+	u32 prefix;
+	u32 body;
+	u32 suffix;
+	int result;
+
+	if (len < NET_GDMA_COPY_THRESHOLD ||
+	    (((start & (NET_GDMA_CACHE_LINE - 1U)) == 0U) &&
+	     (allocation_end != NULL ||
+	      (len & (NET_GDMA_CACHE_LINE - 1U)) == 0U))) {
+		return net_gdma_benchmark_poll_body(
+			&g_net_bench_gdma, dst, src, len, allocation_end, sample);
+	}
+
+	prefix = (start & (NET_GDMA_CACHE_LINE - 1U)) != 0U ?
+		 NET_GDMA_CACHE_LINE -
+		 (u32)(start & (NET_GDMA_CACHE_LINE - 1U)) : 0U;
+	if (prefix >= len) {
+		rtw_memcpy(dst, (void *)src, len);
+		return 0;
+	}
+	body = (len - prefix) & ~(NET_GDMA_CACHE_LINE - 1U);
+	if (body < NET_GDMA_COPY_THRESHOLD) {
+		rtw_memcpy(dst, (void *)src, len);
+		return 0;
+	}
+	suffix = len - prefix - body;
+	if (prefix != 0U) {
+		rtw_memcpy(dst, (void *)src, prefix);
+	}
+	result = net_gdma_benchmark_poll_body(
+		&g_net_bench_gdma, (u8 *)dst + prefix,
+		(const u8 *)src + prefix, body, allocation_end, sample);
+	if (result != 0) {
+		return result;
+	}
+	if (suffix != 0U) {
+		rtw_memcpy((u8 *)dst + prefix + body,
+			   (void *)((const u8 *)src + prefix + body), suffix);
+	}
+	return 0;
+}
+#endif
+
 int rltk_network_gdma_benchmark_init(void)
 {
-#if CONFIG_NET_GDMA_COPY && CONFIG_NET_GDMA_BENCH
+#if CONFIG_NET_GDMA_BENCH
 	/*
 	 * Reserve a genuinely separate channel before the rest of the application
 	 * starts allocating transient GDMA users.  This does not replace, borrow or
 	 * reorder any of the four production network contexts.
 	 */
 	if (!g_net_bench_gdma.initialized) {
-		net_gdma_init_context(&g_net_bench_gdma, "BENCH",
-				       net_gdma_bench_done);
-		g_net_bench_gdma.suppress_periodic_report = 1;
+		CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+		DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+		net_gdma_init_benchmark_context(&g_net_bench_gdma);
+		/* Every timed transfer is checked byte-for-byte by the benchmark, so
+		 * skip the production semaphore-based one-time self-test here. */
+		g_net_bench_gdma.tested = g_net_bench_gdma.available ? 1U : 0U;
 	}
 	return g_net_bench_gdma.available ? 0 : -1;
 #else
@@ -930,7 +1147,7 @@ int rltk_network_gdma_benchmark_init(void)
 
 void rltk_network_gdma_benchmark_print_status(unsigned int sequence)
 {
-#if CONFIG_NET_GDMA_COPY && CONFIG_NET_GDMA_BENCH
+#if CONFIG_NET_GDMA_BENCH
 	static const char *const reasons[] = {
 		"none", "alloc", "transfer", "mismatch"
 	};
@@ -942,7 +1159,7 @@ void rltk_network_gdma_benchmark_print_status(unsigned int sequence)
 	}
 	printf("[GDMA_BENCH][%u][STATUS] initialized=%u available=%u tested=%u "
 	       "busy=%u in_flight=%u gdma=%u channel=%u selftest_fail=%u "
-	       "last=%s/%uB/off%u timeout=%u dma_error=%u late_irq=%u\n",
+	       "last=%s/%uB/off%u timeout=%u dma_error=%u unexpected_irq=%u\n",
 	       sequence, (unsigned int)ctx->initialized,
 	       (unsigned int)ctx->available, (unsigned int)ctx->tested,
 	       (unsigned int)ctx->busy, (unsigned int)ctx->in_flight,
@@ -962,21 +1179,17 @@ int rltk_network_gdma_benchmark_copy(
 	void *dst, const void *src, unsigned int len, const void *allocation_end,
 	rltk_network_gdma_bench_sample_t *sample)
 {
-#if CONFIG_NET_GDMA_COPY && CONFIG_NET_GDMA_BENCH
-	u32 dma_len = 0;
+#if CONFIG_NET_GDMA_BENCH
 	int result;
 
 	if (sample == NULL) {
 		return -1;
 	}
 	rtw_memset(sample, 0, sizeof(*sample));
-	result = net_gdma_copy_with_edges(&g_net_bench_gdma, dst, src, len,
-					  allocation_end, &dma_len);
-	sample->dma_bytes = dma_len;
-	sample->submit_cycles = g_net_bench_gdma.bench_submit_cycles;
-	sample->dma_irq_cycles = g_net_bench_gdma.bench_dma_irq_cycles;
-	sample->wake_cycles = g_net_bench_gdma.bench_wake_cycles;
-	sample->dma_total_cycles = g_net_bench_gdma.bench_total_cycles;
+	g_net_bench_gdma.bench_poll_count = 0;
+	g_net_bench_gdma.bench_yield_count = 0;
+	result = net_gdma_benchmark_poll_copy(dst, src, len, allocation_end,
+					      sample);
 	return result;
 #else
 	(void)allocation_end;

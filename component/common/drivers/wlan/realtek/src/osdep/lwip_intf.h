@@ -64,9 +64,11 @@ int rltk_wlan_rx_ref_selftest(void);
 typedef struct rltk_network_gdma_bench_sample_s {
 	unsigned int dma_bytes;
 	unsigned int submit_cycles;
-	unsigned int dma_irq_cycles;
-	unsigned int wake_cycles;
+	unsigned int poll_cycles;
+	unsigned int finish_cycles;
 	unsigned int dma_total_cycles;
+	unsigned int poll_count;
+	unsigned int yield_count;
 } rltk_network_gdma_bench_sample_t;
 
 int rltk_network_gdma_copy_tx(void *dst, const void *src, unsigned int len,

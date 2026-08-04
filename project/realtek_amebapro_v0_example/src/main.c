@@ -45,9 +45,11 @@ typedef struct carbox_gdma_bench_totals_s {
 	uint64_t cpu_cycles;
 	uint64_t gdma_cycles;
 	uint64_t submit_cycles;
-	uint64_t dma_irq_cycles;
-	uint64_t wake_cycles;
+	uint64_t poll_cycles;
+	uint64_t finish_cycles;
 	uint64_t dma_total_cycles;
+	uint32_t polls;
+	uint32_t yields;
 	uint32_t cpu_min_cycles;
 	uint32_t cpu_max_cycles;
 	uint32_t gdma_min_cycles;
@@ -55,8 +57,38 @@ typedef struct carbox_gdma_bench_totals_s {
 	uint32_t dma_bytes;
 	uint32_t fallbacks;
 	uint32_t errors;
-	uint32_t mismatches;
+	uint32_t cpu_mismatches;
+	uint32_t gdma_mismatches;
+	uint32_t first_bad_iter;
+	uint32_t first_bad_index;
+	uint8_t first_bad_expected;
+	uint8_t first_bad_actual;
+	uint8_t first_bad_is_gdma;
+	uint8_t first_bad_valid;
 } carbox_gdma_bench_totals_t;
+
+static void carbox_gdma_record_mismatch(carbox_gdma_bench_totals_t *totals,
+					const uint8_t *dst, const uint8_t *src,
+					uint32_t len, uint32_t iteration,
+					int is_gdma)
+{
+	uint32_t i;
+
+	if (is_gdma) totals->gdma_mismatches++;
+	else totals->cpu_mismatches++;
+	if (totals->first_bad_valid) return;
+	for (i = 0; i < len; ++i) {
+		if (dst[i] != src[i]) {
+			totals->first_bad_valid = 1U;
+			totals->first_bad_is_gdma = is_gdma ? 1U : 0U;
+			totals->first_bad_iter = iteration;
+			totals->first_bad_index = i;
+			totals->first_bad_expected = src[i];
+			totals->first_bad_actual = dst[i];
+			break;
+		}
+	}
+}
 
 static uint32_t carbox_gdma_cycles_to_ns(uint64_t cycles, uint32_t samples)
 {
@@ -100,7 +132,9 @@ static void carbox_gdma_bench_case(uint32_t sequence, uint32_t len,
 		totals.cpu_cycles += elapsed;
 		if (elapsed < totals.cpu_min_cycles) totals.cpu_min_cycles = elapsed;
 		if (elapsed > totals.cpu_max_cycles) totals.cpu_max_cycles = elapsed;
-		if (rtw_memcmp(dst, src, len) != _TRUE) totals.mismatches++;
+		if (rtw_memcmp(dst, src, len) != _TRUE) {
+			carbox_gdma_record_mismatch(&totals, dst, src, len, i, 0);
+		}
 
 		rtw_memset(dst, 0xC3, len);
 		start = DWT->CYCCNT;
@@ -111,20 +145,25 @@ static void carbox_gdma_bench_case(uint32_t sequence, uint32_t len,
 		if (elapsed < totals.gdma_min_cycles) totals.gdma_min_cycles = elapsed;
 		if (elapsed > totals.gdma_max_cycles) totals.gdma_max_cycles = elapsed;
 		totals.submit_cycles += sample.submit_cycles;
-		totals.dma_irq_cycles += sample.dma_irq_cycles;
-		totals.wake_cycles += sample.wake_cycles;
+		totals.poll_cycles += sample.poll_cycles;
+		totals.finish_cycles += sample.finish_cycles;
 		totals.dma_total_cycles += sample.dma_total_cycles;
+		totals.polls += sample.poll_count;
+		totals.yields += sample.yield_count;
 		totals.dma_bytes += sample.dma_bytes;
 		if (sample.dma_bytes == 0U) totals.fallbacks++;
 		if (result != 0) totals.errors++;
-		if (rtw_memcmp(dst, src, len) != _TRUE) totals.mismatches++;
+		if (rtw_memcmp(dst, src, len) != _TRUE) {
+			carbox_gdma_record_mismatch(&totals, dst, src, len, i, 1);
+		}
 	}
 
 	rt_printf("[GDMA_BENCH][%lu] len=%lu off=%lu iter=%u "
 		  "cpu_ns avg/min/max=%lu/%lu/%lu "
 		  "gdma_ns avg/min/max=%lu/%lu/%lu "
-		  "phase_ns submit/irq/wake/dma=%lu/%lu/%lu/%lu "
-		  "dma_avg=%luB fallback=%lu error=%lu mismatch=%lu\r\n",
+		  "phase_ns submit/poll/finish/total=%lu/%lu/%lu/%lu "
+		  "poll/yield=%lu/%lu "
+		  "dma_avg=%luB fallback=%lu error=%lu mismatch_cpu/gdma=%lu/%lu\r\n",
 		  (unsigned long)sequence, (unsigned long)len,
 		  (unsigned long)offset, CARBOX_GDMA_BENCH_ITERATIONS,
 		  (unsigned long)carbox_gdma_cycles_to_ns(totals.cpu_cycles,
@@ -137,15 +176,27 @@ static void carbox_gdma_bench_case(uint32_t sequence, uint32_t len,
 		  (unsigned long)carbox_gdma_cycles_to_ns(totals.gdma_max_cycles, 1U),
 		  (unsigned long)carbox_gdma_cycles_to_ns(totals.submit_cycles,
 							 CARBOX_GDMA_BENCH_ITERATIONS),
-		  (unsigned long)carbox_gdma_cycles_to_ns(totals.dma_irq_cycles,
+		  (unsigned long)carbox_gdma_cycles_to_ns(totals.poll_cycles,
 							 CARBOX_GDMA_BENCH_ITERATIONS),
-		  (unsigned long)carbox_gdma_cycles_to_ns(totals.wake_cycles,
+		  (unsigned long)carbox_gdma_cycles_to_ns(totals.finish_cycles,
 							 CARBOX_GDMA_BENCH_ITERATIONS),
 		  (unsigned long)carbox_gdma_cycles_to_ns(totals.dma_total_cycles,
 							 CARBOX_GDMA_BENCH_ITERATIONS),
+		  (unsigned long)totals.polls, (unsigned long)totals.yields,
 		  (unsigned long)(totals.dma_bytes / CARBOX_GDMA_BENCH_ITERATIONS),
 		  (unsigned long)totals.fallbacks, (unsigned long)totals.errors,
-		  (unsigned long)totals.mismatches);
+		  (unsigned long)totals.cpu_mismatches,
+		  (unsigned long)totals.gdma_mismatches);
+	if (totals.first_bad_valid) {
+		rt_printf("[GDMA_BENCH][%lu][MISMATCH] len=%lu off=%lu path=%s "
+			  "iter=%lu index=%lu expected=%02x actual=%02x\r\n",
+			  (unsigned long)sequence, (unsigned long)len,
+			  (unsigned long)offset,
+			  totals.first_bad_is_gdma ? "gdma" : "cpu",
+			  (unsigned long)totals.first_bad_iter,
+			  (unsigned long)totals.first_bad_index,
+			  totals.first_bad_expected, totals.first_bad_actual);
+	}
 }
 
 static void carbox_gdma_bench_task(void *param)
