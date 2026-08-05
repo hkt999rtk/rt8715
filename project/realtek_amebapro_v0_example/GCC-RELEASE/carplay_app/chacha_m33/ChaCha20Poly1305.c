@@ -1198,20 +1198,30 @@ static void chacha_stats_maybe_report(void) {
 #endif
 
 static void chacha_copy_bytes(void *dst_arg, const void *src_arg, size_t len) {
-  uint8_t *dst = (uint8_t *)dst_arg;
-  const uint8_t *src = (const uint8_t *)src_arg;
-  size_t i;
+  uintptr_t dst_addr;
+  uintptr_t src_addr;
 
   /*
    * Mode 2 defers the hardware transaction until final/verify and stages the
    * streaming input in the caller's output buffer.  CarPlay commonly uses the
    * API in-place, so copying an already identical range only burns CPU.
-   * Exact aliasing is safe to skip. Partially overlapping ranges caused by a
-   * buffered streaming tail are deliberately still copied.
+   * Exact aliasing is safe to skip.  Route ordinary transfers through memcpy
+   * so the final firmware uses the board-measured M33 ITCM implementation
+   * instead of this former byte-at-a-time loop.  A buffered streaming tail can
+   * partially overlap; preserve correctness with memmove only for that rare
+   * case rather than slowing every transfer.
    */
-  if ((dst == src) || (len == 0u)) return;
+  if ((dst_arg == src_arg) || (len == 0u)) return;
 
-  for (i = 0; i < len; ++i) dst[i] = src[i];
+  dst_addr = (uintptr_t)dst_arg;
+  src_addr = (uintptr_t)src_arg;
+  if (((dst_addr < src_addr) && ((src_addr - dst_addr) < len)) ||
+      ((src_addr < dst_addr) && ((dst_addr - src_addr) < len))) {
+    (void)memmove(dst_arg, src_arg, len);
+    return;
+  }
+
+  (void)memcpy(dst_arg, src_arg, len);
 }
 
 static CHACHA_UNUSED size_t chacha_first_difference(

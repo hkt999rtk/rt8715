@@ -582,10 +582,16 @@ int __wrap_memcmp(const void *av, const void *bv, size_t len)
  * newlib.  The scalar prefix below is therefore required for performance, not
  * just correctness.
  *
- * Differently aligned pointers take a conservative byte-copy path.  memcpy
- * does not permit overlapping objects, so no overlap handling is required.
- * Keep the complete routine in ITCM; otherwise XIP latency hides the M33 bulk
- * loop's benefit.
+ * Differently aligned pointers cannot use LDM/STM, because those instructions
+ * require aligned addresses.  ARMv8-M scalar LDR/STR does support the DRAM
+ * buffers used here at unaligned addresses, however, so that path copies eight
+ * words per branch before handling its tail.  This retains the existing
+ * unaligned access semantics while removing most of the loop overhead seen in
+ * the WLAN RX, TCP/IP and AirPlay profiler samples.
+ *
+ * memcpy does not permit overlapping objects, so no overlap handling is
+ * required.  Keep the complete routine in ITCM; otherwise XIP latency hides
+ * the M33 bulk loop's benefit.
  */
 __attribute__((section(".itcm.text.libc_memcpy_m33"),
 	optimize("O3", "no-tree-loop-distribute-patterns")))
@@ -596,6 +602,46 @@ void *__wrap_memcpy(void *s1, const void *s2, size_t n)
 	void *result = s1;
 
 	if ((((uintptr_t)dst ^ (uintptr_t)src) & 3U) != 0U) {
+		while (n >= 32U) {
+			uint32_t w0, w1, w2, w3;
+			__asm volatile(
+				"ldr %0, [%4, #0]\n\t"
+				"ldr %1, [%4, #4]\n\t"
+				"ldr %2, [%4, #8]\n\t"
+				"ldr %3, [%4, #12]\n\t"
+				"str %0, [%5, #0]\n\t"
+				"str %1, [%5, #4]\n\t"
+				"str %2, [%5, #8]\n\t"
+				"str %3, [%5, #12]\n\t"
+				: "=&r" (w0), "=&r" (w1), "=&r" (w2), "=&r" (w3)
+				: "r" (src), "r" (dst)
+				: "memory");
+			__asm volatile(
+				"ldr %0, [%4, #16]\n\t"
+				"ldr %1, [%4, #20]\n\t"
+				"ldr %2, [%4, #24]\n\t"
+				"ldr %3, [%4, #28]\n\t"
+				"str %0, [%5, #16]\n\t"
+				"str %1, [%5, #20]\n\t"
+				"str %2, [%5, #24]\n\t"
+				"str %3, [%5, #28]\n\t"
+				: "=&r" (w0), "=&r" (w1), "=&r" (w2), "=&r" (w3)
+				: "r" (src), "r" (dst)
+				: "memory");
+			src += 32U;
+			dst += 32U;
+			n -= 32U;
+		}
+		while (n >= 4U) {
+			uint32_t word;
+			__asm volatile(
+				"ldr %0, [%1], #4\n\t"
+				"str %0, [%2], #4\n\t"
+				: "=&r" (word), "+r" (src), "+r" (dst)
+				:
+				: "memory");
+			n -= 4U;
+		}
 		while (n-- != 0U) {
 			*dst++ = *src++;
 		}
