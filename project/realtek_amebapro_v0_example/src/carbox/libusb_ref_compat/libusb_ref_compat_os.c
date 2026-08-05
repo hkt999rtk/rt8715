@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "FreeRTOS.h"
+#include "usb_hcd_profiler.h"
 #include "cmsis.h"
 #include "queue.h"
 #include "semphr.h"
@@ -308,6 +309,8 @@ int rtos_sema_give(void *p_handle)
 
 	if (rtos_critical_is_in_interrupt()) {
 		ret = xSemaphoreGiveFromISR((SemaphoreHandle_t)p_handle, &task_woken);
+		usb_hcd_profiler_isr_sema_give(ret == pdTRUE,
+						 task_woken == pdTRUE);
 		carbox_libusb_ref_yield_from_isr(task_woken);
 	} else {
 		ret = xSemaphoreGive((SemaphoreHandle_t)p_handle);

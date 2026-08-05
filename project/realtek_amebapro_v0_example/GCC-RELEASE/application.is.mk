@@ -713,6 +713,7 @@ SRC_C += ../src/main.c
 SRC_C += ../src/carbox/carbox_diag.c
 SRC_C += ../src/carbox/pc_profiler.c
 SRC_C += ../src/carbox/gcd_sync_profiler.c
+SRC_C += ../src/carbox/screen_queue_profiler.c
 SRC_C += ../src/carbox/memcheck.c
 SRC_C += ../src/carbox/carbox_stubs.c
 SRC_C += ../src/carbox/libusb_ref_compat/libusb_ref_compat_hal.c
@@ -751,6 +752,10 @@ SRAM_C += ../src/carbox/system_overclock.c
 # -------------------------------------------------------------------
 #@ERAM
 ERAM_C +=
+ERAM_C += ../src/carbox/usb_hcd_profiler.c
+# The RX hooks execute per packet; keep profiling out of XIP so the
+# instrumentation does not add flash stalls to the path being measured.
+ERAM_C += ../src/carbox/net_queue_profiler.c
 
 
 
@@ -801,8 +806,11 @@ GCD_SYNC_PROFILE ?= 0
 # Diagnostic A/B switch.  The production default preserves DispatchLite's
 # requested worker priority; set this to a non-negative value only for testing.
 GCD_WORK_PRIORITY ?= -1
+SCREEN_QUEUE_PROFILE ?= 0
+USB_HCD_PROFILE ?= 1
+NET_QUEUE_PROFILE ?= 1
 SYS_PLL_OVERCLOCK ?= 1
-SYS_PLL_TARGET_HZ ?= 350000000
+SYS_PLL_TARGET_HZ ?= 360000000
 GCCFLAGS += -DCONFIG_NET_GDMA_COPY=$(NET_GDMA_COPY)
 GCCFLAGS += -DCONFIG_NET_GDMA_BENCH=$(NET_GDMA_BENCH)
 GCCFLAGS += -DCONFIG_NET_GDMA_STATS=$(NET_GDMA_STATS)
@@ -810,6 +818,9 @@ GCCFLAGS += -DCONFIG_TCP_PHASE_PROFILE=$(TCP_PHASE_PROFILE)
 GCCFLAGS += -DCONFIG_PC_PROFILER=$(PC_PROFILER)
 GCCFLAGS += -DCONFIG_GCD_SYNC_PROFILE=$(GCD_SYNC_PROFILE)
 GCCFLAGS += -DCONFIG_GCD_WORK_PRIORITY=$(GCD_WORK_PRIORITY)
+GCCFLAGS += -DCONFIG_SCREEN_QUEUE_PROFILE=$(SCREEN_QUEUE_PROFILE)
+GCCFLAGS += -DCONFIG_USB_HCD_PROFILE=$(USB_HCD_PROFILE)
+GCCFLAGS += -DCONFIG_NET_QUEUE_PROFILE=$(NET_QUEUE_PROFILE)
 GCCFLAGS += -DCONFIG_SYS_PLL_OVERCLOCK=$(SYS_PLL_OVERCLOCK)
 GCCFLAGS += -DCONFIG_SYS_PLL_TARGET_HZ=$(SYS_PLL_TARGET_HZ)
 # Avoid FreeRTOS-Plus-POSIX vs newlib type conflicts (mode_t, clockid_t, timer_t)
@@ -863,6 +874,17 @@ LFLAGS += -Wl,--wrap=dispatch_sync_f
 endif
 ifneq ($(GCD_WORK_PRIORITY),-1)
 LFLAGS += -Wl,--wrap=xTaskCreate
+endif
+ifeq ($(SCREEN_QUEUE_PROFILE),1)
+LFLAGS += -Wl,--wrap=AirPlayScreen_SendVideo
+LFLAGS += -Wl,--wrap=CVector_push_back -Wl,--wrap=CVector_erase
+LFLAGS += -Wl,--wrap=CVector_delete
+LFLAGS += -Wl,--wrap=lwip_recv -Wl,--wrap=lwip_write
+endif
+ifeq ($(USB_HCD_PROFILE),1)
+LFLAGS += -Wl,--wrap=usbh_hcd_hc_submit_request
+LFLAGS += -Wl,--wrap=usbh_hcd_hc_get_urb_state
+LFLAGS += -Wl,--wrap=usbh_hcd_hc_get_transfer_size
 endif
 ifeq ($(FDK_AAC_PROFILE),1)
 LFLAGS += -Wl,--wrap=aacEncEncode -Wl,--wrap=aacDecoder_DecodeFrame
@@ -939,7 +961,17 @@ endif
 
 ifeq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK),1)
 CARBOX_SMART_CARPLAY_LIB_DIR := carplay_app
-CARBOX_CARPLAY_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_CarPlay.a
+CARBOX_CARPLAY_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_CarPlay.a
+CARBOX_CARPLAY_CHACHA_DIR := $(CARBOX_SMART_CARPLAY_LIB_DIR)/chacha_m33
+CARBOX_CARPLAY_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_chacha_m33.a
+$(CARBOX_CARPLAY_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
+		$(CARBOX_CARPLAY_CHACHA_DIR)/ChaCha20Poly1305.c \
+		$(CARBOX_CARPLAY_CHACHA_DIR)/ChaCha20Poly1305.h \
+		$(CARBOX_CARPLAY_CHACHA_DIR)/Makefile
+	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) replacement \
+		CHACHA_MODE=2 CHACHA_HW_MIN_LEN=4096 \
+		CHACHA_STATS_INTERVAL_MS=5000 CHACHA_HW_SELFTEST=0
+application: $(CARBOX_CARPLAY_ARCHIVE)
 LFLAGS += -Wl,--no-warn-mismatch
 LIBFLAGS += -Wl,--whole-archive
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_link.a
@@ -958,9 +990,9 @@ LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_jpeg.a
 # LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_usbdev.a
 # LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_ncm.a
 LIBFLAGS += -Wl,--no-whole-archive
-# The customer CarPlay archive now provides its own RTL8195B hardware ChaCha
-# implementation.  Keep this archive outside --whole-archive so the legacy,
-# unreferenced chacha_m33_asm.o member is not forced into the Realtek linker.
+# Keep the customer's RTL8195B hardware backend, replacing only the protocol
+# object so its internal copies use the measured M33 ITCM memcpy.  Leave this
+# archive outside --whole-archive so unrelated members remain demand-linked.
 LIBFLAGS += $(CARBOX_CARPLAY_ARCHIVE)
 endif
 

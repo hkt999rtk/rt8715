@@ -50,6 +50,17 @@
 #include "lwip/etharp.h"
 #include "netif/ethernet.h"
 
+#ifndef CONFIG_NET_QUEUE_PROFILE
+#define CONFIG_NET_QUEUE_PROFILE 0
+#endif
+
+#if CONFIG_NET_QUEUE_PROFILE
+#include "lwip/priv/tcp_priv.h"
+#include "FreeRTOS.h"
+#include "queue.h"
+#include "net_queue_profiler.h"
+#endif
+
 #define TCPIP_MSG_VAR_REF(name)     API_VAR_REF(name)
 #define TCPIP_MSG_VAR_DECLARE(name) API_VAR_DECLARE(struct tcpip_msg, name)
 #define TCPIP_MSG_VAR_ALLOC(name)   API_VAR_ALLOC(struct tcpip_msg, MEMP_TCPIP_MSG_API, name, ERR_MEM)
@@ -66,6 +77,69 @@ sys_mutex_t lock_tcpip_core;
 #endif /* LWIP_TCPIP_CORE_LOCKING */
 
 static void tcpip_thread_handle_msg(struct tcpip_msg *msg);
+
+#if CONFIG_NET_QUEUE_PROFILE
+static u32_t
+tcpip_queue_profile_netif_id(const struct netif *netif)
+{
+  if (netif == NULL) {
+    return 0U;
+  }
+  return (u32_t)netif_get_index(netif) |
+         ((u32_t)netif->num << 8) |
+         ((u32_t)(u8_t)netif->name[0] << 16) |
+         ((u32_t)(u8_t)netif->name[1] << 24);
+}
+#endif
+
+#if CONFIG_NET_QUEUE_PROFILE && LWIP_TCP
+/* Sampling once per 256 handled messages keeps list-walking overhead small
+ * while still providing several snapshots per second under streaming load. */
+static void
+tcpip_queue_profile_sample(void)
+{
+  static u8_t divider;
+  struct tcp_pcb *pcb;
+  u32_t active_pcbs = 0;
+  u32_t snd_queue_len = 0;
+  u32_t unsent_segments = 0;
+  u32_t unacked_segments = 0;
+  u32_t queued_bytes = 0;
+  u32_t refused_pbufs = 0;
+  u32_t refused_bytes = 0;
+
+  divider++;
+  if (divider != 0U) {
+    return;
+  }
+
+  for (pcb = tcp_active_pcbs; pcb != NULL; pcb = pcb->next) {
+    struct tcp_seg *seg;
+    struct pbuf *p;
+
+    active_pcbs++;
+    snd_queue_len += pcb->snd_queuelen;
+    for (seg = pcb->unsent; seg != NULL; seg = seg->next) {
+      unsent_segments++;
+      queued_bytes += seg->len;
+    }
+    for (seg = pcb->unacked; seg != NULL; seg = seg->next) {
+      unacked_segments++;
+      queued_bytes += seg->len;
+    }
+    for (p = pcb->refused_data; p != NULL; p = p->next) {
+      refused_pbufs++;
+      refused_bytes += p->len;
+    }
+  }
+
+  net_queue_profiler_tcp_sample(active_pcbs, snd_queue_len,
+                                unsent_segments, unacked_segments,
+                                queued_bytes, refused_pbufs, refused_bytes);
+}
+#else
+#define tcpip_queue_profile_sample() do { } while (0)
+#endif
 
 #if !LWIP_TIMERS
 /* wait for a message with timers disabled (e.g. pass a timer-check trigger into tcpip_thread) */
@@ -146,6 +220,7 @@ tcpip_thread(void *arg)
       continue;
     }
     tcpip_thread_handle_msg(msg);
+    tcpip_queue_profile_sample();
   }
 }
 
@@ -171,6 +246,12 @@ tcpip_thread_handle_msg(struct tcpip_msg *msg)
 #if !LWIP_TCPIP_CORE_LOCKING_INPUT
     case TCPIP_MSG_INPKT:
       LWIP_DEBUGF(TCPIP_DEBUG, ("tcpip_thread: PACKET %p\n", (void *)msg));
+#if CONFIG_NET_QUEUE_PROFILE
+      net_queue_profiler_rx_consume(
+                                    tcpip_queue_profile_netif_id(msg->msg.inp.netif),
+                                    msg->msg.inp.p->tot_len,
+                                    uxQueueMessagesWaiting(tcpip_mbox));
+#endif
       if (msg->msg.inp.input_fn(msg->msg.inp.p, msg->msg.inp.netif) != ERR_OK) {
         pbuf_free(msg->msg.inp.p);
       }
@@ -248,11 +329,18 @@ tcpip_inpkt(struct pbuf *p, struct netif *inp, netif_input_fn input_fn)
   return ret;
 #else /* LWIP_TCPIP_CORE_LOCKING_INPUT */
   struct tcpip_msg *msg;
+#if CONFIG_NET_QUEUE_PROFILE
+  u32_t netq_if_id = tcpip_queue_profile_netif_id(inp);
+  u32_t netq_bytes = p->tot_len;
+#endif
 
   LWIP_ASSERT("Invalid mbox", sys_mbox_valid_val(tcpip_mbox));
 
   msg = (struct tcpip_msg *)memp_malloc(MEMP_TCPIP_MSG_INPKT);
   if (msg == NULL) {
+#if CONFIG_NET_QUEUE_PROFILE
+    net_queue_profiler_rx_alloc_fail(netq_if_id);
+#endif
     return ERR_MEM;
   }
 
@@ -260,10 +348,20 @@ tcpip_inpkt(struct pbuf *p, struct netif *inp, netif_input_fn input_fn)
   msg->msg.inp.p = p;
   msg->msg.inp.netif = inp;
   msg->msg.inp.input_fn = input_fn;
+#if CONFIG_NET_QUEUE_PROFILE
+  net_queue_profiler_rx_post_begin(netq_if_id);
+#endif
   if (sys_mbox_trypost(&tcpip_mbox, msg) != ERR_OK) {
+#if CONFIG_NET_QUEUE_PROFILE
+    net_queue_profiler_rx_post_abort(netq_if_id);
+#endif
     memp_free(MEMP_TCPIP_MSG_INPKT, msg);
     return ERR_MEM;
   }
+#if CONFIG_NET_QUEUE_PROFILE
+  net_queue_profiler_rx_post_commit(netq_if_id, netq_bytes,
+                                    uxQueueMessagesWaiting(tcpip_mbox));
+#endif
   return ERR_OK;
 #endif /* LWIP_TCPIP_CORE_LOCKING_INPUT */
 }

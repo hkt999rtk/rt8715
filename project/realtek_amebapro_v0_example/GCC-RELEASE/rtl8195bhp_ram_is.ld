@@ -294,6 +294,12 @@ SECTIONS
 		*(.eram.text*)
 		*(.speex.text*)
 
+		/* Keep the sustained USB host controller path out of NOR XIP. */
+		*lib_usbsmart.a:usbh_hcd.o(.text*)
+		*lib_usbsmart.a:usbh_hal.o(.text*)
+		*lib_usbsmart.a:usb_hal.o(.text*)
+		*lib_usbsmart.a:usb_os.o(.text*)
+
 		/*
 		 * Sustained CarPlay screen/audio processing must not compete with
 		 * NOR XIP cache misses.  ITCM input sections were consumed above and
@@ -302,6 +308,7 @@ SECTIONS
 		 * fallback paths used by AirPlayScreenReceiver.
 		 */
 		*lib_CarPlay.a:*(.text*)
+		*lib_CarPlay_chacha_m33.a:*(.text*)
 		*lib_fdkaac.a:*(.text*)
 		*lib_Accessory2.a:AirPlayScreen.o(.text*)
 
@@ -330,8 +337,14 @@ SECTIONS
 		*(.wlan.rodata.str1*)
 		*(.eram.rodata.str1*)
 
+		*lib_usbsmart.a:usbh_hcd.o(.rodata*)
+		*lib_usbsmart.a:usbh_hal.o(.rodata*)
+		*lib_usbsmart.a:usb_hal.o(.rodata*)
+		*lib_usbsmart.a:usb_os.o(.rodata*)
+
 		/* Keep hot codec/crypto lookup tables with their LPDDR text. */
 		*lib_CarPlay.a:*(.rodata*)
+		*lib_CarPlay_chacha_m33.a:*(.rodata*)
 		*lib_fdkaac.a:*(.rodata* .haac.rodata* .faac.rodata*)
 		*lib_Accessory2.a:AirPlayScreen.o(.rodata*)
 

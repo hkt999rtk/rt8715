@@ -26,7 +26,9 @@ OPT_FLAGS ?= -O3
 
 OPT_TAG := $(patsubst -%,%,$(firstword $(OPT_FLAGS)))
 OBJ_DIR := $(OUTPUT_DIR)/obj-mode$(CHACHA_MODE)-clear$(CHACHA_ENABLE_CLEAR)-min$(CHACHA_HW_MIN_LEN)-naswp$(CHACHA_NONALIGNED_SW_POLY)-stats$(CHACHA_STATS_INTERVAL_MS)-selftest$(CHACHA_HW_SELFTEST)-$(OPT_TAG)
-OBJS := $(OBJ_DIR)/ChaCha20Poly1305.o \
+CORE_OBJ := $(OBJ_DIR)/ChaCha20Poly1305.o
+RTL_OBJ := $(OBJ_DIR)/ChaCha20Poly1305_rtl8195b.o
+OBJS := $(CORE_OBJ) \
 	$(OBJ_DIR)/ChaCha20Poly1305_rtl8195b.o
 
 ARCH_FLAGS := -march=armv8-m.main+dsp -mthumb -mcmse \
@@ -81,11 +83,13 @@ $(OBJ_DIR)/ChaCha20Poly1305_rtl8195b.o: ChaCha20Poly1305_rtl8195b.c ChaCha20Poly
 $(STANDALONE_LIB): $(OBJS)
 	$(AR) rcs $@ $^
 
-$(REPLACEMENT_CARPLAY_LIB): $(VENDOR_CARPLAY_LIB) $(OBJS) FORCE | $(OUTPUT_DIR)
+$(REPLACEMENT_CARPLAY_LIB): $(VENDOR_CARPLAY_LIB) $(CORE_OBJ) Makefile | $(OUTPUT_DIR)
 	cp -f $(VENDOR_CARPLAY_LIB) $@
 	chmod u+w $@
+	# Preserve the customer's hardware object.  Only replace the protocol
+	# object whose local copy helper previously used a byte-at-a-time loop.
 	$(AR) d $@ ChaCha20Poly1305.o chacha_m33_asm.o
-	$(AR) rcs $@ $(OBJS)
+	$(AR) rcs $@ $(CORE_OBJ)
 
 FORCE:
 

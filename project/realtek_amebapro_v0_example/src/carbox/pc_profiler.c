@@ -1,5 +1,8 @@
 #include "pc_profiler.h"
 #include "gcd_sync_profiler.h"
+#include "screen_queue_profiler.h"
+#include "usb_hcd_profiler.h"
+#include "net_queue_profiler.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -571,6 +574,9 @@ static void pcprof_task(void *arg)
 			      interval_count, late_10us, late_100us,
 			      caller_attributed);
 		gcd_sync_profiler_report(sequence);
+		screen_queue_profiler_report(sequence);
+		usb_hcd_profiler_report(sequence);
+		net_queue_profiler_report(sequence);
 	}
 }
 
