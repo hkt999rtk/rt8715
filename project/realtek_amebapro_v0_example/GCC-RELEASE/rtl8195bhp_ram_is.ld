@@ -187,6 +187,18 @@ SECTIONS
 		 * FreeRTOS scheduler in ITCM and avoid an XIP/DRAM veneer. */
 		*(.cinit.itcm.text.atss_runtime_counter_get)
 
+		/*
+		 * The public mem* wrappers deliberately select newlib instead of the
+		 * slower Realtek mask-ROM utility stubs.  These four implementations
+		 * total less than 1 KiB and serve the hottest WLAN, lwIP/NCM, crypto
+		 * and AirPlay memory paths, so execute them from ITCM rather than NOR
+		 * XIP or external DRAM.
+		 */
+		*libc.a:lib_a-memcmp.o(.text*)
+		*libc.a:lib_a-memcpy.o(.text*)
+		*libc.a:lib_a-memmove.o(.text*)
+		*libc.a:lib_a-memset.o(.text*)
+
 		*(.itcm.text*)
 
 		/*

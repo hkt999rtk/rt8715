@@ -551,25 +551,40 @@ int __wrap_puts(const char *str)
 	return __wrap_printf("%s\n", str);
 }
 
-// define in AmebaPro utilites/include/memory.h
+/*
+ * The Realtek wrappers traditionally redirect the mem* family to utility
+ * stubs whose implementations reside in mask ROM.  Network and video
+ * profiling on RTL8195B shows those ROM routines as major CPU hot spots,
+ * especially for the full-frame copies made by WLAN, lwIP/NCM and AirPlay.
+ *
+ * These symbols are linked with --wrap, so the __real_* names select the
+ * unwrapped newlib implementations.  Keep the public wrappers (and therefore
+ * all existing call sites, including rtw_mem* through the FreeRTOS OS-service
+ * table), but skip the ROM dispatch entirely.
+ */
+extern int __real_memcmp(const void *s1, const void *s2, size_t n);
+extern void *__real_memcpy(void *dest, const void *src, size_t n);
+extern void *__real_memmove(void *dest, const void *src, size_t n);
+extern void *__real_memset(void *dest, int value, size_t n);
+
 int __wrap_memcmp(const void *av, const void *bv, size_t len)
 {
-	return rt_memcmp(av, bv, len);
+	return __real_memcmp(av, bv, len);
 }
 
 void *__wrap_memcpy( void *s1, const void *s2, size_t n )
 {
-	return rt_memcpy(s1, s2, n);
+	return __real_memcpy(s1, s2, n);
 }
 
 void *__wrap_memmove (void *destaddr, const void *sourceaddr, unsigned length)
 {
-	return rt_memmove (destaddr, sourceaddr, length);
+	return __real_memmove(destaddr, sourceaddr, length);
 }
 
 void *__wrap_memset(void *dst0, int val, size_t length)
 {
-	return rt_memset(dst0, val, length);
+	return __real_memset(dst0, val, length);
 }
 // define in AmebaPro utilites/include/strporc.h
 // replace by linking command
