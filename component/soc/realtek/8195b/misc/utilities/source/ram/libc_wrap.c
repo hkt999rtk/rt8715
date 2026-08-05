@@ -557,13 +557,13 @@ int __wrap_puts(const char *str)
  * profiling on RTL8195B shows those ROM routines as major CPU hot spots,
  * especially for the full-frame copies made by WLAN, lwIP/NCM and AirPlay.
  *
- * These symbols are linked with --wrap, so the __real_* names select the
- * unwrapped newlib implementations.  Keep the public wrappers (and therefore
- * all existing call sites, including rtw_mem* through the FreeRTOS OS-service
- * table), but skip the ROM dispatch entirely.
+ * These symbols are linked with --wrap.  Keep the public wrappers (and
+ * therefore all existing call sites, including rtw_mem* through the FreeRTOS
+ * OS-service table), but skip the ROM dispatch entirely.  memcpy uses the
+ * board-measured Cortex-M33 implementation below; the other primitives retain
+ * their newlib implementations.
  */
 extern int __real_memcmp(const void *s1, const void *s2, size_t n);
-extern void *__real_memcpy(void *dest, const void *src, size_t n);
 extern void *__real_memmove(void *dest, const void *src, size_t n);
 extern void *__real_memset(void *dest, int value, size_t n);
 
@@ -572,9 +572,79 @@ int __wrap_memcmp(const void *av, const void *bv, size_t len)
 	return __real_memcmp(av, bv, len);
 }
 
-void *__wrap_memcpy( void *s1, const void *s2, size_t n )
+/*
+ * RTL8195B Cortex-M33 memcpy.
+ *
+ * On-board DWT measurements at 350 MHz showed the aligned 1--4 KiB paths are
+ * 26--32% faster than newlib.  Four-word LDM/STM transfers must begin on a
+ * 16-byte boundary: merely aligning to four bytes caused every transfer from
+ * an offset-2 buffer to cross a bus/cache boundary and lose about 14% versus
+ * newlib.  The scalar prefix below is therefore required for performance, not
+ * just correctness.
+ *
+ * Differently aligned pointers take a conservative byte-copy path.  memcpy
+ * does not permit overlapping objects, so no overlap handling is required.
+ * Keep the complete routine in ITCM; otherwise XIP latency hides the M33 bulk
+ * loop's benefit.
+ */
+__attribute__((section(".itcm.text.libc_memcpy_m33"),
+	optimize("O3", "no-tree-loop-distribute-patterns")))
+void *__wrap_memcpy(void *s1, const void *s2, size_t n)
 {
-	return __real_memcpy(s1, s2, n);
+	uint8_t *dst = (uint8_t *)s1;
+	const uint8_t *src = (const uint8_t *)s2;
+	void *result = s1;
+
+	if ((((uintptr_t)dst ^ (uintptr_t)src) & 3U) != 0U) {
+		while (n-- != 0U) {
+			*dst++ = *src++;
+		}
+		return result;
+	}
+
+	while (n != 0U && ((uintptr_t)dst & 3U) != 0U) {
+		*dst++ = *src++;
+		--n;
+	}
+
+	while (n >= 4U && ((uintptr_t)dst & 15U) != 0U) {
+		uint32_t word;
+		__asm volatile(
+			"ldr %0, [%1], #4\n\t"
+			"str %0, [%2], #4\n\t"
+			: "=&r" (word), "+r" (src), "+r" (dst)
+			:
+			: "memory");
+		n -= 4U;
+	}
+
+	while (n >= 32U) {
+		__asm volatile(
+			"ldmia %1!, {r2-r5}\n\t"
+			"stmia %0!, {r2-r5}\n\t"
+			"ldmia %1!, {r2-r5}\n\t"
+			"stmia %0!, {r2-r5}\n\t"
+			: "+r" (dst), "+r" (src)
+			:
+			: "r2", "r3", "r4", "r5", "memory");
+		n -= 32U;
+	}
+
+	while (n >= 4U) {
+		uint32_t word;
+		__asm volatile(
+			"ldr %0, [%1], #4\n\t"
+			"str %0, [%2], #4\n\t"
+			: "=&r" (word), "+r" (src), "+r" (dst)
+			:
+			: "memory");
+		n -= 4U;
+	}
+
+	while (n-- != 0U) {
+		*dst++ = *src++;
+	}
+	return result;
 }
 
 void *__wrap_memmove (void *destaddr, const void *sourceaddr, unsigned length)

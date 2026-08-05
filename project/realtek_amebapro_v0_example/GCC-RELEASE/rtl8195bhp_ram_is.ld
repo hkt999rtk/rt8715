@@ -186,16 +186,15 @@ SECTIONS
 		/* Called at every context switch; keep the DWT read beside the
 		 * FreeRTOS scheduler in ITCM and avoid an XIP/DRAM veneer. */
 		*(.cinit.itcm.text.atss_runtime_counter_get)
+		/* CINIT compilation prefixes explicit sections with `.cinit`. */
+		*(.cinit.itcm.text.libc_memcpy_m33)
 
 		/*
-		 * The public mem* wrappers deliberately select newlib instead of the
-		 * slower Realtek mask-ROM utility stubs.  These four implementations
-		 * total less than 1 KiB and serve the hottest WLAN, lwIP/NCM, crypto
-		 * and AirPlay memory paths, so execute them from ITCM rather than NOR
-		 * XIP or external DRAM.
+		 * The public mem* wrappers deliberately avoid the slower Realtek
+		 * mask-ROM utility stubs.  memcpy now has a measured M33 implementation
+		 * in .itcm.text; retain newlib's other three primitives in ITCM.
 		 */
 		*libc.a:lib_a-memcmp.o(.text*)
-		*libc.a:lib_a-memcpy.o(.text*)
 		*libc.a:lib_a-memmove.o(.text*)
 		*libc.a:lib_a-memset.o(.text*)
 
