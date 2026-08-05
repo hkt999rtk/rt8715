@@ -8,6 +8,8 @@
 #include "carbox_vfs_compat.h"
 
 #include "carbox/carbox_diag.h"
+#include "carbox/pc_profiler.h"
+#include "carbox/system_overclock.h"
 #if defined(CONFIG_MEMCHECK)
 #include "carbox/memcheck.h"
 #include "shell.h"
@@ -470,6 +472,8 @@ static void car_app_start_task(void *param)
 void main(void)
 {
 	int ret = 0;
+	int clock_status = carbox_system_overclock_early();
+
 	/* Initialize log uart and at command service */
 #if WINBOND_FLASH_UNPROTECT
         extern void flash_unprotect_winbond(void);
@@ -478,6 +482,8 @@ void main(void)
         console_init();
     hal_uart_set_baudrate(&log_uart, CARBOX_LOGUART_BAUD);
     rt_printf("main build_version %s\r\n",BOX_APP_VERSION);
+	rt_printf("[CLOCK] overclock status=%d requested=%lu Hz\r\n",
+		  clock_status, (unsigned long)CONFIG_SYS_PLL_TARGET_HZ);
 	carbox_clock_register_dump();
 	
 #ifdef CONFIG_FATFS
@@ -525,6 +531,7 @@ void main(void)
 	/* init diagnostic tracing before any task creation */
 	carbox_diag_init();
 	carbox_diag_trace_enter("main");
+	carbox_pc_profiler_start();
 
 #if defined(CONFIG_NET_GDMA_BENCH) && CONFIG_NET_GDMA_BENCH
 	carbox_gdma_bench_start();

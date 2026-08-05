@@ -711,6 +711,7 @@ SRC_C += ../../../component/common/drivers/wlan/realtek/src/core/option/rtw_opt_
 
 SRC_C += ../src/main.c
 SRC_C += ../src/carbox/carbox_diag.c
+SRC_C += ../src/carbox/pc_profiler.c
 SRC_C += ../src/carbox/memcheck.c
 SRC_C += ../src/carbox/carbox_stubs.c
 SRC_C += ../src/carbox/libusb_ref_compat/libusb_ref_compat_hal.c
@@ -743,6 +744,7 @@ SRAM_C += ../../../component/soc/realtek/8195b/misc/driver/flash_api_ext.c
 SRAM_C += ../../../component/common/file_system/fatfs/disk_if/src/flash_fatfs.c
 SRAM_C += ../src/carbox/vfs_compat/carbox_littlefs.c
 SRAM_C += ../../../component/soc/realtek/8195b/fwlib/hal-rtl8195b-hp/source/ram_s/hal_flash.c
+SRAM_C += ../src/carbox/system_overclock.c
 
 #ERAM
 # -------------------------------------------------------------------
@@ -793,10 +795,16 @@ NET_GDMA_COPY ?= 0
 NET_GDMA_BENCH ?= 0
 NET_GDMA_STATS ?= 0
 TCP_PHASE_PROFILE ?= 1
+PC_PROFILER ?= 1
+SYS_PLL_OVERCLOCK ?= 1
+SYS_PLL_TARGET_HZ ?= 330000000
 GCCFLAGS += -DCONFIG_NET_GDMA_COPY=$(NET_GDMA_COPY)
 GCCFLAGS += -DCONFIG_NET_GDMA_BENCH=$(NET_GDMA_BENCH)
 GCCFLAGS += -DCONFIG_NET_GDMA_STATS=$(NET_GDMA_STATS)
 GCCFLAGS += -DCONFIG_TCP_PHASE_PROFILE=$(TCP_PHASE_PROFILE)
+GCCFLAGS += -DCONFIG_PC_PROFILER=$(PC_PROFILER)
+GCCFLAGS += -DCONFIG_SYS_PLL_OVERCLOCK=$(SYS_PLL_OVERCLOCK)
+GCCFLAGS += -DCONFIG_SYS_PLL_TARGET_HZ=$(SYS_PLL_TARGET_HZ)
 # Avoid FreeRTOS-Plus-POSIX vs newlib type conflicts (mode_t, clockid_t, timer_t)
 GCCFLAGS += -DposixconfigENABLE_MODE_T=0
 GCCFLAGS += -DposixconfigENABLE_CLOCKID_T=0

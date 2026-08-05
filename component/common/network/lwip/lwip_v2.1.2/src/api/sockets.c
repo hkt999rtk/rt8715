@@ -619,6 +619,106 @@ free_socket(struct lwip_sock *sock, int is_tcp)
  * Exceptions are documented!
  */
 
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_PHASE_PROFILE
+#define LWIP_ACCEPT_PROFILE_WINDOW_US 5000000U
+
+struct lwip_accept_profile {
+  u32_t window_start_us;
+  u32_t calls;
+  u32_t ok;
+  u32_t wouldblock;
+  u32_t einval;
+  u32_t ebadf;
+  u32_t enfile;
+  u32_t other;
+  int last_errno;
+};
+
+static struct lwip_accept_profile accept_profile;
+
+/*
+ * This diagnostic is intentionally maintained separately from TCP_PERF.
+ * lwip_accept() runs in an application/dispatch task while TCP_PERF is also
+ * updated by TCP_IP.  Snapshotting under SYS_ARCH_PROTECT prevents a 5-second
+ * reset from splitting one accept result into two reporting windows.
+ */
+static void
+lwip_accept_profile_result(int listener_fd, int result_errno)
+{
+  struct lwip_accept_profile snapshot;
+  u32_t now = rltk_tcp_perf_now_us();
+  u32_t window;
+  u32_t failure_count = 0;
+  int log_failure = 0;
+  int report = 0;
+  SYS_ARCH_DECL_PROTECT(lev);
+
+  SYS_ARCH_PROTECT(lev);
+  if (accept_profile.window_start_us == 0U) {
+    accept_profile.window_start_us = now;
+  }
+  accept_profile.calls++;
+  if (result_errno == 0) {
+    accept_profile.ok++;
+  } else {
+    accept_profile.last_errno = result_errno;
+    if ((result_errno == EAGAIN) || (result_errno == EWOULDBLOCK)) {
+      accept_profile.wouldblock++;
+    } else if (result_errno == EINVAL) {
+      accept_profile.einval++;
+    } else if (result_errno == EBADF) {
+      accept_profile.ebadf++;
+    } else if (result_errno == ENFILE) {
+      accept_profile.enfile++;
+    } else {
+      accept_profile.other++;
+    }
+    failure_count = accept_profile.calls - accept_profile.ok;
+    /* Log enough early failures to expose errno immediately, then rate-limit
+     * a hot non-blocking accept loop so UART output does not become the bug. */
+    if ((failure_count <= 8U) || ((failure_count & 127U) == 0U)) {
+      log_failure = 1;
+    }
+  }
+
+  window = now - accept_profile.window_start_us;
+  if (window >= LWIP_ACCEPT_PROFILE_WINDOW_US) {
+    snapshot = accept_profile;
+    memset(&accept_profile, 0, sizeof(accept_profile));
+    accept_profile.window_start_us = now;
+    report = 1;
+  }
+  SYS_ARCH_UNPROTECT(lev);
+
+  if (log_failure) {
+    LWIP_PLATFORM_DIAG(("[LWIP_ACCEPT][FAIL] fd=%d errno=%d "
+                        "window_fail=%u\n",
+                        listener_fd, result_errno,
+                        (unsigned int)failure_count));
+  }
+  if (report) {
+    LWIP_PLATFORM_DIAG(("[LWIP_ACCEPT] window_us=%u calls=%u ok=%u fail=%u "
+                        "wouldblock=%u einval=%u ebadf=%u enfile=%u "
+                        "other=%u last_errno=%d\n",
+                        (unsigned int)window,
+                        (unsigned int)snapshot.calls,
+                        (unsigned int)snapshot.ok,
+                        (unsigned int)(snapshot.calls - snapshot.ok),
+                        (unsigned int)snapshot.wouldblock,
+                        (unsigned int)snapshot.einval,
+                        (unsigned int)snapshot.ebadf,
+                        (unsigned int)snapshot.enfile,
+                        (unsigned int)snapshot.other,
+                        snapshot.last_errno));
+  }
+}
+#else
+#define lwip_accept_profile_result(listener_fd, result_errno) do { \
+  LWIP_UNUSED_ARG(listener_fd); \
+  LWIP_UNUSED_ARG(result_errno); \
+} while (0)
+#endif
+
 int
 lwip_accept(int s, struct sockaddr *addr, socklen_t *addrlen)
 {
@@ -628,12 +728,14 @@ lwip_accept(int s, struct sockaddr *addr, socklen_t *addrlen)
   u16_t port = 0;
   int newsock;
   err_t err;
+  int accept_errno;
   int recvevent;
   SYS_ARCH_DECL_PROTECT(lev);
 
   LWIP_DEBUGF(SOCKETS_DEBUG, ("lwip_accept(%d)...\n", s));
   sock = get_socket(s);
   if (!sock) {
+    lwip_accept_profile_result(s, EBADF);
     return -1;
   }
 
@@ -642,13 +744,15 @@ lwip_accept(int s, struct sockaddr *addr, socklen_t *addrlen)
   if (err != ERR_OK) {
     LWIP_DEBUGF(SOCKETS_DEBUG, ("lwip_accept(%d): netconn_acept failed, err=%d\n", s, err));
     if (NETCONNTYPE_GROUP(netconn_type(sock->conn)) != NETCONN_TCP) {
-      sock_set_errno(sock, EOPNOTSUPP);
+      accept_errno = EOPNOTSUPP;
     } else if (err == ERR_CLSD) {
-      sock_set_errno(sock, EINVAL);
+      accept_errno = EINVAL;
     } else {
-      sock_set_errno(sock, err_to_errno(err));
+      accept_errno = err_to_errno(err);
     }
+    sock_set_errno(sock, accept_errno);
     done_socket(sock);
+    lwip_accept_profile_result(s, accept_errno);
     return -1;
   }
   LWIP_ASSERT("newconn != NULL", newconn != NULL);
@@ -658,6 +762,7 @@ lwip_accept(int s, struct sockaddr *addr, socklen_t *addrlen)
     netconn_delete(newconn);
     sock_set_errno(sock, ENFILE);
     done_socket(sock);
+    lwip_accept_profile_result(s, ENFILE);
     return -1;
   }
   LWIP_ASSERT("invalid socket index", (newsock >= LWIP_SOCKET_OFFSET) && (newsock < NUM_SOCKETS + LWIP_SOCKET_OFFSET));
@@ -693,8 +798,10 @@ lwip_accept(int s, struct sockaddr *addr, socklen_t *addrlen)
       LWIP_DEBUGF(SOCKETS_DEBUG, ("lwip_accept(%d): netconn_peer failed, err=%d\n", s, err));
       netconn_delete(newconn);
       free_socket(nsock, 1);
-      sock_set_errno(sock, err_to_errno(err));
+      accept_errno = err_to_errno(err);
+      sock_set_errno(sock, accept_errno);
       done_socket(sock);
+      lwip_accept_profile_result(s, accept_errno);
       return -1;
     }
 
@@ -714,6 +821,7 @@ lwip_accept(int s, struct sockaddr *addr, socklen_t *addrlen)
   sock_set_errno(sock, 0);
   done_socket(sock);
   done_socket(nsock);
+  lwip_accept_profile_result(s, 0);
   return newsock;
 }
 
