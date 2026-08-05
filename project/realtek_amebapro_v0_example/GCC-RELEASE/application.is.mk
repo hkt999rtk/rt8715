@@ -712,6 +712,7 @@ SRC_C += ../../../component/common/drivers/wlan/realtek/src/core/option/rtw_opt_
 SRC_C += ../src/main.c
 SRC_C += ../src/carbox/carbox_diag.c
 SRC_C += ../src/carbox/pc_profiler.c
+SRC_C += ../src/carbox/gcd_sync_profiler.c
 SRC_C += ../src/carbox/memcheck.c
 SRC_C += ../src/carbox/carbox_stubs.c
 SRC_C += ../src/carbox/libusb_ref_compat/libusb_ref_compat_hal.c
@@ -796,6 +797,10 @@ NET_GDMA_BENCH ?= 0
 NET_GDMA_STATS ?= 0
 TCP_PHASE_PROFILE ?= 1
 PC_PROFILER ?= 1
+GCD_SYNC_PROFILE ?= 0
+# Diagnostic A/B switch.  The production default preserves DispatchLite's
+# requested worker priority; set this to a non-negative value only for testing.
+GCD_WORK_PRIORITY ?= -1
 SYS_PLL_OVERCLOCK ?= 1
 SYS_PLL_TARGET_HZ ?= 350000000
 GCCFLAGS += -DCONFIG_NET_GDMA_COPY=$(NET_GDMA_COPY)
@@ -803,6 +808,8 @@ GCCFLAGS += -DCONFIG_NET_GDMA_BENCH=$(NET_GDMA_BENCH)
 GCCFLAGS += -DCONFIG_NET_GDMA_STATS=$(NET_GDMA_STATS)
 GCCFLAGS += -DCONFIG_TCP_PHASE_PROFILE=$(TCP_PHASE_PROFILE)
 GCCFLAGS += -DCONFIG_PC_PROFILER=$(PC_PROFILER)
+GCCFLAGS += -DCONFIG_GCD_SYNC_PROFILE=$(GCD_SYNC_PROFILE)
+GCCFLAGS += -DCONFIG_GCD_WORK_PRIORITY=$(GCD_WORK_PRIORITY)
 GCCFLAGS += -DCONFIG_SYS_PLL_OVERCLOCK=$(SYS_PLL_OVERCLOCK)
 GCCFLAGS += -DCONFIG_SYS_PLL_TARGET_HZ=$(SYS_PLL_TARGET_HZ)
 # Avoid FreeRTOS-Plus-POSIX vs newlib type conflicts (mode_t, clockid_t, timer_t)
@@ -851,6 +858,12 @@ CPPFLAGS += -Wall -Wpointer-arith -Wundef -Wno-write-strings -Wno-maybe-uninitia
 LFLAGS = 
 LFLAGS += -march=armv8-m.main+dsp -mthumb -mcmse -mfloat-abi=softfp -mfpu=fpv5-sp-d16 -Os -nostartfiles -specs=nosys.specs -nodefaultlibs -nostdlib
 LFLAGS += -Wl,--gc-sections -Wl,-Map=$(BIN_DIR)/$(TARGET).map -Wl,--cref -Wl,--build-id=none -Wl,--use-blx 
+ifeq ($(GCD_SYNC_PROFILE),1)
+LFLAGS += -Wl,--wrap=dispatch_sync_f
+endif
+ifneq ($(GCD_WORK_PRIORITY),-1)
+LFLAGS += -Wl,--wrap=xTaskCreate
+endif
 ifeq ($(FDK_AAC_PROFILE),1)
 LFLAGS += -Wl,--wrap=aacEncEncode -Wl,--wrap=aacDecoder_DecodeFrame
 endif

@@ -1,4 +1,5 @@
 #include "pc_profiler.h"
+#include "gcd_sync_profiler.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -569,6 +570,7 @@ static void pcprof_task(void *arg)
 			      interval_cycles_sum, interval_cycles_max,
 			      interval_count, late_10us, late_100us,
 			      caller_attributed);
+		gcd_sync_profiler_report(sequence);
 	}
 }
 
