@@ -117,6 +117,9 @@ enum tcpip_msg_type {
 #endif /* !LWIP_TCPIP_CORE_LOCKING */
 #if !LWIP_TCPIP_CORE_LOCKING_INPUT
   TCPIP_MSG_INPKT,
+  TCPIP_MSG_INPKT_STAGE1,
+  TCPIP_MSG_RX_TIMER_PROBE,
+  TCPIP_MSG_INPKT_BATCH,
 #endif /* !LWIP_TCPIP_CORE_LOCKING_INPUT */
 #if LWIP_TCPIP_TIMEOUT && LWIP_TIMERS
   TCPIP_MSG_TIMEOUT,
@@ -146,6 +149,7 @@ struct tcpip_msg {
       struct netif *netif;
       netif_input_fn input_fn;
     } inp;
+    void *inp_stage1;
 #endif /* !LWIP_TCPIP_CORE_LOCKING_INPUT */
     struct {
       tcpip_callback_fn function;

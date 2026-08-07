@@ -76,6 +76,7 @@
 #include "lwip/ip6_addr.h"
 #if defined(CONFIG_PLATFORM_8195BHP)
 #include "lwip_intf.h"
+#include "cmsis.h"
 #endif
 #if LWIP_TCP_TIMESTAMPS
 #include "lwip/sys.h"
@@ -149,6 +150,21 @@ tcp_data_copy_gdma(void *dst, const void *src, u16_t len)
 
 /* Forward declarations.*/
 static err_t tcp_output_segment(struct tcp_seg *seg, struct tcp_pcb *pcb, struct netif *netif);
+
+#ifndef CONFIG_TCP_OUTPUT_PROFILE
+#define CONFIG_TCP_OUTPUT_PROFILE 0
+#endif
+
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+#define TCP_OUTPUT_PROFILE_RETURN(value, category) do { \
+  err_t profile_return_value = (value); \
+  rltk_tcp_output_profile_end((category), profile_segments, profile_bytes, \
+                              DWT->CYCCNT - profile_start_cycles); \
+  return profile_return_value; \
+} while (0)
+#else
+#define TCP_OUTPUT_PROFILE_RETURN(value, category) return (value)
+#endif
 
 /* tcp_route: common code that returns a fixed bound netif or calls ip_route */
 static struct netif *
@@ -1275,6 +1291,15 @@ tcp_output(struct tcp_pcb *pcb)
   u32_t wnd, snd_nxt;
   err_t err;
   struct netif *netif;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+  u32_t profile_start_cycles;
+  u32_t profile_segments = 0U;
+  u32_t profile_bytes = 0U;
+  u8_t profile_had_unsent;
+
+  rltk_tcp_output_profile_begin();
+  profile_start_cycles = DWT->CYCCNT;
+#endif
 #if TCP_CWND_DEBUG
   s16_t i = 0;
 #endif /* TCP_CWND_DEBUG */
@@ -1291,12 +1316,15 @@ tcp_output(struct tcp_pcb *pcb)
      input processing code to call us when input processing is done
      with. */
   if (tcp_input_pcb == pcb) {
-    return ERR_OK;
+    TCP_OUTPUT_PROFILE_RETURN(ERR_OK, RLTK_TCP_OUTPUT_DEFERRED);
   }
 
   wnd = LWIP_MIN(pcb->snd_wnd, pcb->cwnd);
 
   seg = pcb->unsent;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+  profile_had_unsent = (seg != NULL);
+#endif
 
   if (seg == NULL) {
     LWIP_DEBUGF(TCP_OUTPUT_DEBUG, ("tcp_output: nothing to send (%p)\n",
@@ -1309,7 +1337,7 @@ tcp_output(struct tcp_pcb *pcb)
     /* If the TF_ACK_NOW flag is set and the ->unsent queue is empty, construct
      * an empty ACK segment and send it. */
     if (pcb->flags & TF_ACK_NOW) {
-      return tcp_send_empty_ack(pcb);
+      TCP_OUTPUT_PROFILE_RETURN(tcp_send_empty_ack(pcb), RLTK_TCP_OUTPUT_EMPTY_ACK);
     }
     /* nothing to send: shortcut out of here */
     goto output_done;
@@ -1324,14 +1352,14 @@ tcp_output(struct tcp_pcb *pcb)
 
   netif = tcp_route(pcb, &pcb->local_ip, &pcb->remote_ip);
   if (netif == NULL) {
-    return ERR_RTE;
+    TCP_OUTPUT_PROFILE_RETURN(ERR_RTE, RLTK_TCP_OUTPUT_ERROR);
   }
 
   /* If we don't have a local IP address, we get one from netif */
   if (ip_addr_isany(&pcb->local_ip)) {
     const ip_addr_t *local_ip = ip_netif_get_local_ip(netif, &pcb->remote_ip);
     if (local_ip == NULL) {
-      return ERR_RTE;
+      TCP_OUTPUT_PROFILE_RETURN(ERR_RTE, RLTK_TCP_OUTPUT_ERROR);
     }
     ip_addr_copy(pcb->local_ip, *local_ip);
   }
@@ -1351,7 +1379,7 @@ tcp_output(struct tcp_pcb *pcb)
     }
     /* We need an ACK, but can't send data now, so send an empty ACK */
     if (pcb->flags & TF_ACK_NOW) {
-      return tcp_send_empty_ack(pcb);
+      TCP_OUTPUT_PROFILE_RETURN(tcp_send_empty_ack(pcb), RLTK_TCP_OUTPUT_EMPTY_ACK);
     }
     goto output_done;
   }
@@ -1396,8 +1424,12 @@ tcp_output(struct tcp_pcb *pcb)
     if (err != ERR_OK) {
       /* segment could not be sent, for whatever reason */
       tcp_set_flags(pcb, TF_NAGLEMEMERR);
-      return err;
+      TCP_OUTPUT_PROFILE_RETURN(err, RLTK_TCP_OUTPUT_ERROR);
     }
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+    profile_segments++;
+    profile_bytes += seg->len;
+#endif
 #if TCP_OVERSIZE_DBGCHECK
     seg->oversize_left = 0;
 #endif /* TCP_OVERSIZE_DBGCHECK */
@@ -1451,7 +1483,15 @@ tcp_output(struct tcp_pcb *pcb)
 
 output_done:
   tcp_clear_flags(pcb, TF_NAGLEMEMERR);
-  return ERR_OK;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+  if (profile_segments != 0U) {
+    TCP_OUTPUT_PROFILE_RETURN(ERR_OK, RLTK_TCP_OUTPUT_DATA);
+  }
+  if (profile_had_unsent) {
+    TCP_OUTPUT_PROFILE_RETURN(ERR_OK, RLTK_TCP_OUTPUT_DEFERRED);
+  }
+#endif
+  TCP_OUTPUT_PROFILE_RETURN(ERR_OK, RLTK_TCP_OUTPUT_NOOP);
 }
 
 /** Check if a segment's pbufs are used by someone else than TCP.
@@ -1492,6 +1532,15 @@ tcp_output_segment(struct tcp_seg *seg, struct tcp_pcb *pcb, struct netif *netif
   err_t err;
   u16_t len;
   u32_t *opts;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+  u32_t profile_start_cycles = DWT->CYCCNT;
+  u32_t profile_checksum_start_cycles;
+  u32_t profile_prepare_cycles;
+  u32_t profile_checksum_cycles;
+  u32_t profile_ip_start_cycles;
+  u32_t profile_ip_cycles;
+  u32_t profile_bytes;
+#endif
 #if TCP_CHECKSUM_ON_COPY
   int seg_chksum_was_swapped = 0;
 #endif
@@ -1598,6 +1647,11 @@ tcp_output_segment(struct tcp_seg *seg, struct tcp_pcb *pcb, struct netif *netif
 #endif
   LWIP_ASSERT("options not filled", (u8_t *)opts == ((u8_t *)(seg->tcphdr + 1)) + LWIP_TCP_OPT_LENGTH_SEGMENT(seg->flags, pcb));
 
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+  profile_prepare_cycles = DWT->CYCCNT - profile_start_cycles;
+  profile_checksum_start_cycles = DWT->CYCCNT;
+#endif
+
 #if CHECKSUM_GEN_TCP
   IF__NETIF_CHECKSUM_ENABLED(netif, NETIF_CHECKSUM_GEN_TCP) {
 #if TCP_CHECKSUM_ON_COPY
@@ -1636,12 +1690,23 @@ tcp_output_segment(struct tcp_seg *seg, struct tcp_pcb *pcb, struct netif *netif
 #endif /* TCP_CHECKSUM_ON_COPY */
   }
 #endif /* CHECKSUM_GEN_TCP */
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+  profile_checksum_cycles = DWT->CYCCNT - profile_checksum_start_cycles;
+  profile_bytes = seg->p->tot_len;
+  profile_ip_start_cycles = DWT->CYCCNT;
+#endif
   TCP_STATS_INC(tcp.xmit);
 
   NETIF_SET_HINTS(netif, &(pcb->netif_hints));
   err = ip_output_if(seg->p, &pcb->local_ip, &pcb->remote_ip, pcb->ttl,
                      pcb->tos, IP_PROTO_TCP, netif);
   NETIF_RESET_HINTS(netif);
+
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+  profile_ip_cycles = DWT->CYCCNT - profile_ip_start_cycles;
+  rltk_tcp_output_profile_lwip(0U, profile_bytes, profile_prepare_cycles,
+                              profile_checksum_cycles, profile_ip_cycles);
+#endif
 
 #if TCP_CHECKSUM_ON_COPY
   if (seg_chksum_was_swapped) {
@@ -1958,20 +2023,38 @@ tcp_output_control_segment(const struct tcp_pcb *pcb, struct pbuf *p,
 {
   err_t err;
   struct netif *netif;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+  u32_t profile_start_cycles = DWT->CYCCNT;
+  u32_t profile_prepare_cycles = 0U;
+  u32_t profile_checksum_start_cycles = 0U;
+  u32_t profile_checksum_cycles = 0U;
+  u32_t profile_ip_start_cycles = 0U;
+  u32_t profile_ip_cycles = 0U;
+  u32_t profile_bytes = 0U;
+#endif
 
   LWIP_ASSERT("tcp_output_control_segment: invalid pbuf", p != NULL);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+  profile_bytes = p->tot_len;
+#endif
 
   netif = tcp_route(pcb, src, dst);
   if (netif == NULL) {
     err = ERR_RTE;
   } else {
     u8_t ttl, tos;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+    profile_checksum_start_cycles = DWT->CYCCNT;
+#endif
 #if CHECKSUM_GEN_TCP
     IF__NETIF_CHECKSUM_ENABLED(netif, NETIF_CHECKSUM_GEN_TCP) {
       struct tcp_hdr *tcphdr = (struct tcp_hdr *)p->payload;
       tcphdr->chksum = ip_chksum_pseudo(p, IP_PROTO_TCP, p->tot_len,
                                         src, dst);
     }
+#endif
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+    profile_checksum_cycles = DWT->CYCCNT - profile_checksum_start_cycles;
 #endif
     if (pcb != NULL) {
       NETIF_SET_HINTS(netif, LWIP_CONST_CAST(struct netif_hint*, &(pcb->netif_hints)));
@@ -1983,9 +2066,21 @@ tcp_output_control_segment(const struct tcp_pcb *pcb, struct pbuf *p,
       tos = 0;
     }
     TCP_STATS_INC(tcp.xmit);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+    profile_ip_start_cycles = DWT->CYCCNT;
+    profile_prepare_cycles = profile_ip_start_cycles - profile_start_cycles -
+                             profile_checksum_cycles;
+#endif
     err = ip_output_if(p, src, dst, ttl, tos, IP_PROTO_TCP, netif);
     NETIF_RESET_HINTS(netif);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+    profile_ip_cycles = DWT->CYCCNT - profile_ip_start_cycles;
+#endif
   }
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+  rltk_tcp_output_profile_lwip(1U, profile_bytes, profile_prepare_cycles,
+                              profile_checksum_cycles, profile_ip_cycles);
+#endif
   pbuf_free(p);
   return err;
 }

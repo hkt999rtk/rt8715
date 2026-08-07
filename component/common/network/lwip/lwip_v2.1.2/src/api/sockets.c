@@ -56,6 +56,7 @@
 #include "lwip/mld6.h"
 #if defined(CONFIG_PLATFORM_8195BHP)
 #include <lwip_intf.h>
+#include "large_memcpy_gdma.h"
 #endif
 #if LWIP_CHECKSUM_ON_COPY
 #include "lwip/inet_chksum.h"
@@ -70,6 +71,18 @@
 
 #ifndef CONFIG_SOCKET_RECV_PROFILE
 #define CONFIG_SOCKET_RECV_PROFILE 0
+#endif
+
+#ifndef CONFIG_SOCKET_RECV_GDMA
+#define CONFIG_SOCKET_RECV_GDMA 0
+#endif
+
+#ifndef CONFIG_SOCKET_RECV_GDMA_PROFILE
+#define CONFIG_SOCKET_RECV_GDMA_PROFILE 0
+#endif
+
+#ifndef SOCKET_RECV_GDMA_THRESHOLD
+#define SOCKET_RECV_GDMA_THRESHOLD 4096U
 #endif
 
 #ifdef LWIP_HOOK_FILENAME
@@ -1423,6 +1436,203 @@ lwip_recv_tcp_copy(const struct pbuf *p, void *dst, u16_t len
 #endif
   return copied;
 }
+
+#if CONFIG_SOCKET_RECV_GDMA
+#define LWIP_RECV_GDMA_PENDING_MAX  16U
+#define LWIP_RECV_GDMA_WINDOW_US    10000000U
+
+struct lwip_recv_gdma_pending {
+  struct pbuf *p;
+  void *dst;
+  u16_t len;
+};
+
+#if CONFIG_SOCKET_RECV_GDMA_PROFILE
+struct lwip_recv_gdma_stats {
+  u32_t window_start_us;
+  u32_t flushes;
+  u32_t attempts;
+  u32_t successes;
+  u32_t fallbacks;
+  u32_t small_cpu;
+  u32_t input_blocks;
+  u32_t input_bytes;
+  u32_t dma_blocks;
+  u32_t dma_batches;
+  u32_t dma_bytes;
+  u32_t cpu_edge_bytes;
+  u32_t max_blocks;
+  u32_t max_bytes;
+};
+
+static struct lwip_recv_gdma_stats lwip_recv_gdma_stats;
+static u32_t lwip_recv_gdma_report_sequence;
+
+static void
+lwip_recv_gdma_zero_volatile(void *ptr, size_t len)
+{
+  volatile u8_t *p = (volatile u8_t *)ptr;
+
+  while (len-- != 0U) {
+    *p++ = 0U;
+  }
+}
+
+static void
+lwip_recv_gdma_profile(u32_t blocks, u32_t bytes, int attempted, int success,
+                       const carbox_gdma_copyv_result_t *result)
+{
+  struct lwip_recv_gdma_stats snapshot;
+  u32_t now = rltk_tcp_perf_now_us();
+  u32_t window;
+  int report = 0;
+  SYS_ARCH_DECL_PROTECT(lev);
+
+  SYS_ARCH_PROTECT(lev);
+  if (lwip_recv_gdma_stats.window_start_us == 0U) {
+    lwip_recv_gdma_stats.window_start_us = now;
+  }
+  lwip_recv_gdma_stats.flushes++;
+  lwip_recv_gdma_stats.input_blocks += blocks;
+  lwip_recv_gdma_stats.input_bytes += bytes;
+  if (blocks > lwip_recv_gdma_stats.max_blocks) {
+    lwip_recv_gdma_stats.max_blocks = blocks;
+  }
+  if (bytes > lwip_recv_gdma_stats.max_bytes) {
+    lwip_recv_gdma_stats.max_bytes = bytes;
+  }
+  if (attempted) {
+    lwip_recv_gdma_stats.attempts++;
+    if (success) {
+      lwip_recv_gdma_stats.successes++;
+      lwip_recv_gdma_stats.dma_blocks += result->dma_blocks;
+      lwip_recv_gdma_stats.dma_batches += result->dma_batches;
+      lwip_recv_gdma_stats.dma_bytes += result->dma_bytes;
+      lwip_recv_gdma_stats.cpu_edge_bytes += result->cpu_edge_bytes;
+    } else {
+      lwip_recv_gdma_stats.fallbacks++;
+    }
+  } else {
+    lwip_recv_gdma_stats.small_cpu++;
+  }
+
+  window = now - lwip_recv_gdma_stats.window_start_us;
+  if (window >= LWIP_RECV_GDMA_WINDOW_US) {
+    snapshot = lwip_recv_gdma_stats;
+    lwip_recv_gdma_zero_volatile(&lwip_recv_gdma_stats,
+                                 sizeof(lwip_recv_gdma_stats));
+    lwip_recv_gdma_stats.window_start_us = now;
+    report = 1;
+  }
+  SYS_ARCH_UNPROTECT(lev);
+
+  if (report) {
+    LWIP_PLATFORM_DIAG(("[RECVGDMA] window_us=%u flush/attempt/success/fallback/small_cpu="
+                        "%u/%u/%u/%u/%u input blocks/bytes=%u/%u max=%u/%uB\n",
+                        (unsigned int)window,
+                        (unsigned int)snapshot.flushes,
+                        (unsigned int)snapshot.attempts,
+                        (unsigned int)snapshot.successes,
+                        (unsigned int)snapshot.fallbacks,
+                        (unsigned int)snapshot.small_cpu,
+                        (unsigned int)snapshot.input_blocks,
+                        (unsigned int)snapshot.input_bytes,
+                        (unsigned int)snapshot.max_blocks,
+                        (unsigned int)snapshot.max_bytes));
+    LWIP_PLATFORM_DIAG(("[RECVGDMA] dma blocks/batches/bytes=%u/%u/%u "
+                        "cpu_edge_bytes=%u coverage=%u.%u%%\n",
+                        (unsigned int)snapshot.dma_blocks,
+                        (unsigned int)snapshot.dma_batches,
+                        (unsigned int)snapshot.dma_bytes,
+                        (unsigned int)snapshot.cpu_edge_bytes,
+                        snapshot.input_bytes != 0U ?
+                          (unsigned int)(((uint64_t)snapshot.dma_bytes * 1000ULL /
+                                          snapshot.input_bytes) / 10ULL) : 0U,
+                        snapshot.input_bytes != 0U ?
+                          (unsigned int)(((uint64_t)snapshot.dma_bytes * 1000ULL /
+                                          snapshot.input_bytes) % 10ULL) : 0U));
+    /* Keep the channel diagnosis adjacent to this recv-GDMA window.  The
+     * latched reason remains visible even if the original early error scrolled
+     * out of the UART capture. */
+    carbox_large_memcpy_gdma_report(++lwip_recv_gdma_report_sequence);
+  }
+}
+#endif /* CONFIG_SOCKET_RECV_GDMA_PROFILE */
+
+static int
+lwip_recv_gdma_flush(struct lwip_recv_gdma_pending *pending, u8_t count
+#if CONFIG_SOCKET_RECV_PROFILE
+                     , struct lwip_recv_profile_sample *profile
+#endif
+                     )
+{
+  carbox_gdma_copy_block_t blocks[LWIP_RECV_GDMA_PENDING_MAX];
+  carbox_gdma_copyv_result_t result;
+  u32_t total = 0U;
+  u8_t i;
+  int attempted;
+  int success = 0;
+
+  for (i = 0U; i < count; ++i) {
+    blocks[i].dst = pending[i].dst;
+    blocks[i].src = pending[i].p->payload;
+    blocks[i].len = pending[i].len;
+    total += pending[i].len;
+  }
+  attempted = total > SOCKET_RECV_GDMA_THRESHOLD && count >= 2U;
+  if (attempted) {
+    success = carbox_linked_gdma_copyv_try(blocks, count, &result);
+  } else {
+    result.dma_bytes = 0U;
+    result.cpu_edge_bytes = 0U;
+    result.dma_blocks = 0U;
+    result.dma_batches = 0U;
+  }
+
+  if (!success) {
+    for (i = 0U; i < count; ++i) {
+      u16_t copied = lwip_recv_tcp_copy(pending[i].p, pending[i].dst,
+                                        pending[i].len
+#if CONFIG_SOCKET_RECV_PROFILE
+                                        , profile
+#endif
+                                        );
+      if (copied != pending[i].len) {
+        return -1;
+      }
+    }
+  }
+#if CONFIG_SOCKET_RECV_GDMA_PROFILE
+  lwip_recv_gdma_profile(count, total, attempted, success, &result);
+#endif
+  return 0;
+}
+
+static void
+lwip_recv_gdma_consume(struct lwip_sock *sock,
+                       struct lwip_recv_gdma_pending *pending, u8_t count)
+{
+  u8_t i;
+
+  for (i = 0U; i < count; ++i) {
+    struct pbuf *p = pending[i].p;
+
+    LWIP_ASSERT("lwip_recv_gdma_consume: invalid length",
+                p->tot_len >= pending[i].len);
+    if (p->tot_len > pending[i].len) {
+      /* A partial record can only be the final record in a recv() call. */
+      LWIP_ASSERT("lwip_recv_gdma_consume: partial record is not last",
+                  i + 1U == count);
+      sock->lastdata.pbuf = pbuf_free_header(p, pending[i].len);
+    } else {
+      if (sock->lastdata.pbuf == p) {
+        sock->lastdata.pbuf = NULL;
+      }
+      pbuf_free(p);
+    }
+  }
+}
+#endif /* CONFIG_SOCKET_RECV_GDMA */
 #endif
 
 /* Helper function to loop over receiving pbufs from netconn
@@ -1435,6 +1645,10 @@ lwip_recv_tcp(struct lwip_sock *sock, void *mem, size_t len, int flags)
   u8_t apiflags = NETCONN_NOAUTORCVD;
   ssize_t recvd = 0;
   ssize_t recv_left = (len <= SSIZE_MAX) ? (ssize_t)len : SSIZE_MAX;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_SOCKET_RECV_GDMA
+  struct lwip_recv_gdma_pending recv_pending[LWIP_RECV_GDMA_PENDING_MAX];
+  u8_t recv_pending_count = 0U;
+#endif
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_SOCKET_RECV_PROFILE
   struct lwip_recv_profile_sample recv_profile;
 
@@ -1522,6 +1736,62 @@ lwip_recv_tcp(struct lwip_sock *sock, void *mem, size_t len, int flags)
       copylen = (u16_t)(SSIZE_MAX - recvd);
     }
 
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_SOCKET_RECV_GDMA
+    /* Accumulate independent TCP pbuf payloads without copying them.  A full
+     * 16-entry batch is submitted immediately; the final partial batch is
+     * submitted when this recv() has gathered all currently available data.
+     * Chained pbufs remain on the proven scalar helper because one pending
+     * record must own exactly one pbuf while DMA is in flight. */
+    if (((flags & MSG_PEEK) == 0) && copylen <= p->len) {
+      struct lwip_recv_gdma_pending *entry =
+        &recv_pending[recv_pending_count++];
+
+      entry->p = p;
+      entry->dst = (u8_t *)mem + recvd;
+      entry->len = copylen;
+      if (p->tot_len == copylen) {
+        /* Ownership stays in recv_pending until linked GDMA completes.  Clear
+         * lastdata so the next nonblocking mailbox fetch can be gathered. */
+        sock->lastdata.pbuf = NULL;
+      }
+      recvd += copylen;
+      LWIP_ASSERT("invalid copylen, len would underflow",
+                  recv_left >= copylen);
+      recv_left -= copylen;
+      apiflags |= NETCONN_DONTBLOCK | NETCONN_NOFIN;
+
+      if ((recv_pending_count == LWIP_RECV_GDMA_PENDING_MAX) ||
+          (recv_left == 0)) {
+        int flush_result = lwip_recv_gdma_flush(recv_pending,
+                                                 recv_pending_count
+#if CONFIG_SOCKET_RECV_PROFILE
+                                                 , &recv_profile
+#endif
+                                                 );
+        LWIP_ASSERT("lwip_recv_tcp: linked GDMA/CPU fallback copy failed",
+                    flush_result == 0);
+        lwip_recv_gdma_consume(sock, recv_pending, recv_pending_count);
+        recv_pending_count = 0U;
+      }
+      continue;
+    }
+
+    /* Preserve output order and pbuf lifetime before handling an unusual
+     * chained pbuf with the existing synchronous copy helper. */
+    if (recv_pending_count != 0U) {
+      int flush_result = lwip_recv_gdma_flush(recv_pending,
+                                               recv_pending_count
+#if CONFIG_SOCKET_RECV_PROFILE
+                                               , &recv_profile
+#endif
+                                               );
+      LWIP_ASSERT("lwip_recv_tcp: pending linked GDMA copy failed",
+                  flush_result == 0);
+      lwip_recv_gdma_consume(sock, recv_pending, recv_pending_count);
+      recv_pending_count = 0U;
+    }
+#endif /* CONFIG_SOCKET_RECV_GDMA */
+
     /* copy the contents of the received buffer into
     the supplied memory pointer mem */
 #if defined(CONFIG_PLATFORM_8195BHP)
@@ -1573,6 +1843,19 @@ lwip_recv_tcp(struct lwip_sock *sock, void *mem, size_t len, int flags)
     /* @todo: do we need to support peeking more than one pbuf? */
   } while ((recv_left > 0) && !(flags & MSG_PEEK));
 lwip_recv_tcp_done:
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_SOCKET_RECV_GDMA
+  if (recv_pending_count != 0U) {
+    int flush_result = lwip_recv_gdma_flush(recv_pending, recv_pending_count
+#if CONFIG_SOCKET_RECV_PROFILE
+                                             , &recv_profile
+#endif
+                                             );
+    LWIP_ASSERT("lwip_recv_tcp: final linked GDMA copy failed",
+                flush_result == 0);
+    lwip_recv_gdma_consume(sock, recv_pending, recv_pending_count);
+    recv_pending_count = 0U;
+  }
+#endif
   if ((recvd > 0) && !(flags & MSG_PEEK)) {
     /* ensure window update after copying all data */
     netconn_tcp_recvd(sock->conn, (size_t)recvd);

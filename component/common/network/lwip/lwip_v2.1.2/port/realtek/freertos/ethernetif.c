@@ -61,8 +61,18 @@
 #include "platform_stdlib.h"
 #include "basic_types.h"
 
+#if defined(CONFIG_USBH_CDC_NCM)
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+#endif
+
 #if CONFIG_WLAN
 #include <lwip_intf.h>
+#endif
+#if defined(CONFIG_PLATFORM_8195BHP)
+#include "cmsis.h"
+#include "hal_timer.h"
 #endif
 
 #define netifMTU                                (1500)
@@ -472,6 +482,199 @@ static const char *TAG = "ETHERNET";
 static u8 TX_BUFFER[MAX_BUFFER_SIZE] __attribute__((aligned(32)));
 static u8 RX_BUFFER[MAX_BUFFER_SIZE];
 
+#ifndef CONFIG_NCM_TX_PROFILE
+#define CONFIG_NCM_TX_PROFILE 0
+#endif
+
+#ifndef CONFIG_NCM_TX_ASYNC
+#define CONFIG_NCM_TX_ASYNC 0
+#endif
+
+#ifndef CONFIG_NCM_TX_ASYNC_PROFILE
+#define CONFIG_NCM_TX_ASYNC_PROFILE 0
+#endif
+
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
+#define NCM_TX_PROFILE_WINDOW_US 10000000U
+#define NCM_TX_PROFILE_SIZE_BINS 4U
+
+struct ncm_tx_profile_stats {
+	u32_t window_start_us;
+	u32_t calls;
+	u32_t success;
+	u32_t errors;
+	u32_t bytes;
+	u32_t single_pbuf;
+	u32_t chained_pbuf;
+	u32_t pbuf_segments;
+	u32_t pbuf_segments_max;
+	u32_t send_ge_1ms;
+	u32_t send_ge_5ms;
+	u32_t send_ge_10ms;
+	u32_t send_ge_20ms;
+	u32_t size_calls[NCM_TX_PROFILE_SIZE_BINS];
+	u32_t size_bytes[NCM_TX_PROFILE_SIZE_BINS];
+	uint64_t size_send_cycles[NCM_TX_PROFILE_SIZE_BINS];
+	u32_t size_send_max_cycles[NCM_TX_PROFILE_SIZE_BINS];
+	uint64_t total_cycles;
+	uint64_t flatten_cycles;
+	uint64_t send_cycles;
+	uint64_t other_cycles;
+	u32_t total_max_cycles;
+	u32_t flatten_max_cycles;
+	u32_t send_max_cycles;
+};
+
+static struct ncm_tx_profile_stats g_ncm_tx_profile;
+
+static u32_t ncm_tx_profile_cycles_to_us(uint64_t cycles)
+{
+	u32_t cycles_per_us = SystemCoreClock / 1000000U;
+	return cycles_per_us ? (u32_t)(cycles / cycles_per_us) : 0U;
+}
+
+static u32_t ncm_tx_profile_size_bin(u32_t bytes)
+{
+	if (bytes <= 128U) {
+		return 0U;
+	}
+	if (bytes <= 512U) {
+		return 1U;
+	}
+	if (bytes <= 1024U) {
+		return 2U;
+	}
+	return 3U;
+}
+
+static void ncm_tx_profile_report(u32_t now)
+{
+	u32_t window;
+	u32_t calls;
+	u32_t segments;
+	u32_t bin;
+
+	if (g_ncm_tx_profile.window_start_us == 0U) {
+		g_ncm_tx_profile.window_start_us = now;
+		return;
+	}
+	window = now - g_ncm_tx_profile.window_start_us;
+	if (window < NCM_TX_PROFILE_WINDOW_US) {
+		return;
+	}
+	calls = g_ncm_tx_profile.calls;
+	segments = g_ncm_tx_profile.pbuf_segments;
+	printf("[NCMTXPROF] window_us=%u calls ok/error=%u/%u bytes=%u pbuf single/chained=%u/%u "
+	       "segments avg/max_x100=%u/%u\n",
+	       (unsigned int)window,
+	       (unsigned int)g_ncm_tx_profile.success,
+	       (unsigned int)g_ncm_tx_profile.errors,
+	       (unsigned int)g_ncm_tx_profile.bytes,
+	       (unsigned int)g_ncm_tx_profile.single_pbuf,
+	       (unsigned int)g_ncm_tx_profile.chained_pbuf,
+	       calls ? (unsigned int)((segments * 100U) / calls) : 0U,
+	       (unsigned int)(g_ncm_tx_profile.pbuf_segments_max * 100U));
+	printf("[NCMTXPROF] phase_us total/flatten/send/other=%u/%u/%u/%u avg=%u/%u/%u/%u "
+	       "max total/flatten/send=%u/%u/%u send_ge_ms 1/5/10/20=%u/%u/%u/%u\n",
+	       (unsigned int)ncm_tx_profile_cycles_to_us(g_ncm_tx_profile.total_cycles),
+	       (unsigned int)ncm_tx_profile_cycles_to_us(g_ncm_tx_profile.flatten_cycles),
+	       (unsigned int)ncm_tx_profile_cycles_to_us(g_ncm_tx_profile.send_cycles),
+	       (unsigned int)ncm_tx_profile_cycles_to_us(g_ncm_tx_profile.other_cycles),
+	       calls ? (unsigned int)ncm_tx_profile_cycles_to_us(g_ncm_tx_profile.total_cycles / calls) : 0U,
+	       calls ? (unsigned int)ncm_tx_profile_cycles_to_us(g_ncm_tx_profile.flatten_cycles / calls) : 0U,
+	       calls ? (unsigned int)ncm_tx_profile_cycles_to_us(g_ncm_tx_profile.send_cycles / calls) : 0U,
+	       calls ? (unsigned int)ncm_tx_profile_cycles_to_us(g_ncm_tx_profile.other_cycles / calls) : 0U,
+	       (unsigned int)ncm_tx_profile_cycles_to_us(g_ncm_tx_profile.total_max_cycles),
+	       (unsigned int)ncm_tx_profile_cycles_to_us(g_ncm_tx_profile.flatten_max_cycles),
+	       (unsigned int)ncm_tx_profile_cycles_to_us(g_ncm_tx_profile.send_max_cycles),
+	       (unsigned int)g_ncm_tx_profile.send_ge_1ms,
+	       (unsigned int)g_ncm_tx_profile.send_ge_5ms,
+	       (unsigned int)g_ncm_tx_profile.send_ge_10ms,
+	       (unsigned int)g_ncm_tx_profile.send_ge_20ms);
+	printf("[NCMTXPROF] size_bins <=128/<=512/<=1024/>1024 calls/bytes/send_avg_us/send_max_us=");
+	for (bin = 0U; bin < NCM_TX_PROFILE_SIZE_BINS; bin++) {
+		printf("%s%u:%u:%u:%u", bin ? "/" : "",
+		       (unsigned int)g_ncm_tx_profile.size_calls[bin],
+		       (unsigned int)g_ncm_tx_profile.size_bytes[bin],
+		       g_ncm_tx_profile.size_calls[bin] ?
+		       (unsigned int)ncm_tx_profile_cycles_to_us(
+			       g_ncm_tx_profile.size_send_cycles[bin] /
+			       g_ncm_tx_profile.size_calls[bin]) : 0U,
+		       (unsigned int)ncm_tx_profile_cycles_to_us(
+			       g_ncm_tx_profile.size_send_max_cycles[bin]));
+	}
+	printf("\n");
+	memset(&g_ncm_tx_profile, 0, sizeof(g_ncm_tx_profile));
+	g_ncm_tx_profile.window_start_us = now;
+}
+
+static void ncm_tx_profile_commit(u32_t bytes, u32_t segments, int result,
+				  u32_t total_cycles, u32_t flatten_cycles,
+				  u32_t send_cycles)
+{
+	u32_t bin = ncm_tx_profile_size_bin(bytes);
+	u32_t send_us = ncm_tx_profile_cycles_to_us(send_cycles);
+	u32_t accounted = flatten_cycles + send_cycles;
+	u32_t other_cycles = total_cycles - accounted;
+	u32_t now = hal_read_curtime_us();
+
+	g_ncm_tx_profile.calls++;
+	if (result == 0) {
+		g_ncm_tx_profile.success++;
+	} else {
+		g_ncm_tx_profile.errors++;
+	}
+	g_ncm_tx_profile.bytes += bytes;
+	if (segments <= 1U) {
+		g_ncm_tx_profile.single_pbuf++;
+	} else {
+		g_ncm_tx_profile.chained_pbuf++;
+	}
+	g_ncm_tx_profile.pbuf_segments += segments;
+	if (segments > g_ncm_tx_profile.pbuf_segments_max) {
+		g_ncm_tx_profile.pbuf_segments_max = segments;
+	}
+	if (send_us >= 1000U) g_ncm_tx_profile.send_ge_1ms++;
+	if (send_us >= 5000U) g_ncm_tx_profile.send_ge_5ms++;
+	if (send_us >= 10000U) g_ncm_tx_profile.send_ge_10ms++;
+	if (send_us >= 20000U) g_ncm_tx_profile.send_ge_20ms++;
+	g_ncm_tx_profile.size_calls[bin]++;
+	g_ncm_tx_profile.size_bytes[bin] += bytes;
+	g_ncm_tx_profile.size_send_cycles[bin] += send_cycles;
+	if (send_cycles > g_ncm_tx_profile.size_send_max_cycles[bin]) {
+		g_ncm_tx_profile.size_send_max_cycles[bin] = send_cycles;
+	}
+	g_ncm_tx_profile.total_cycles += total_cycles;
+	g_ncm_tx_profile.flatten_cycles += flatten_cycles;
+	g_ncm_tx_profile.send_cycles += send_cycles;
+	g_ncm_tx_profile.other_cycles += other_cycles;
+	if (total_cycles > g_ncm_tx_profile.total_max_cycles) {
+		g_ncm_tx_profile.total_max_cycles = total_cycles;
+	}
+	if (flatten_cycles > g_ncm_tx_profile.flatten_max_cycles) {
+		g_ncm_tx_profile.flatten_max_cycles = flatten_cycles;
+	}
+	if (send_cycles > g_ncm_tx_profile.send_max_cycles) {
+		g_ncm_tx_profile.send_max_cycles = send_cycles;
+	}
+	ncm_tx_profile_report(now);
+}
+
+static void ncm_tx_profile_init(void)
+{
+	static u8_t ready;
+
+	if (ready == 0U) {
+		if ((DWT->CTRL & DWT_CTRL_CYCCNTENA_Msk) == 0U) {
+			CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+			DWT->CYCCNT = 0U;
+			DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+		}
+		ready = 1U;
+	}
+}
+#endif /* CONFIG_PLATFORM_8195BHP && CONFIG_NCM_TX_PROFILE */
+
 #if defined(CONFIG_USBH_CDC_ECM)
 extern int usbh_cdc_ecm_send_data(u8 *buf, u32 len);
 #elif defined(CONFIG_USBH_CDC_NCM)
@@ -552,9 +755,8 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
 }
 
 /*for ethernet mii interface*/
-static err_t low_level_output_mii(struct netif *netif, struct pbuf *p)
+static err_t ncm_send_pbuf_sync(struct pbuf *p)
 {
-	(void) netif;
 #if (defined(CONFIG_ETHERNET) && CONFIG_ETHERNET)
 	// printf("[NCM] tx len=%d\n", p->tot_len);
 	struct pbuf *q;
@@ -562,16 +764,41 @@ static err_t low_level_output_mii(struct netif *netif, struct pbuf *p)
 	u8 *tx_data = TX_BUFFER;
 	u32 size = 0;
 	int ret = 0;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
+	u32_t profile_start_cycles;
+	u32_t profile_flatten_start_cycles = 0U;
+	u32_t profile_flatten_cycles = 0U;
+	u32_t profile_send_start_cycles;
+	u32_t profile_send_cycles;
+	u32_t profile_segments = 1U;
+
+	ncm_tx_profile_init();
+	profile_start_cycles = DWT->CYCCNT;
+#endif
 
 	/* ncm_wrap_ntb() consumes the payload synchronously and does not modify it. */
 	if (p->next == NULL) {
 		tx_data = (u8 *)p->payload;
 		size = p->len;
 	} else {
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
+		profile_flatten_start_cycles = DWT->CYCCNT;
+		profile_segments = 0U;
+#endif
 		for (q = p; q != NULL; q = q->next) {
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
+			profile_segments++;
+#endif
 			if (q->len > (MAX_BUFFER_SIZE - size)) {
 				printf("%s chained pbuf too large: %u\n", __func__,
 				       (unsigned int)p->tot_len);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
+				profile_flatten_cycles = DWT->CYCCNT -
+					profile_flatten_start_cycles;
+				ncm_tx_profile_commit((u32_t)p->tot_len, profile_segments,
+					-1, DWT->CYCCNT - profile_start_cycles,
+					profile_flatten_cycles, 0U);
+#endif
 				return ERR_BUF;
 			}
 #if defined(CONFIG_PLATFORM_8195BHP)
@@ -588,12 +815,24 @@ static err_t low_level_output_mii(struct netif *netif, struct pbuf *p)
 			pdata += q->len;
 			size += q->len;
 		}
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
+		profile_flatten_cycles = DWT->CYCCNT - profile_flatten_start_cycles;
+#endif
 	}
 
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
+	profile_send_start_cycles = DWT->CYCCNT;
+#endif
 #if defined(CONFIG_USBH_CDC_ECM)
 	ret = usbh_cdc_ecm_send_data(tx_data, size);
 #elif defined(CONFIG_USBH_CDC_NCM)
 	ret = usbh_cdc_ncm_send_data(tx_data, size);
+#endif
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
+	profile_send_cycles = DWT->CYCCNT - profile_send_start_cycles;
+	ncm_tx_profile_commit(size, profile_segments, ret,
+		DWT->CYCCNT - profile_start_cycles, profile_flatten_cycles,
+		profile_send_cycles);
 #endif
 	if (ret != 0) {
 		printf("%s error = %d\n", __func__, ret);
@@ -602,6 +841,197 @@ static err_t low_level_output_mii(struct netif *netif, struct pbuf *p)
 #endif
 	(void) p;
 	return ERR_OK;
+}
+
+#if defined(CONFIG_PLATFORM_8195BHP) && defined(CONFIG_USBH_CDC_NCM) && \
+	CONFIG_NCM_TX_ASYNC
+#define NCM_TX_ASYNC_QUEUE_LEN       128U
+#define NCM_TX_ASYNC_TASK_STACK      2048U
+#define NCM_TX_ASYNC_REPORT_US       10000000U
+#define NCM_TX_ASYNC_TASK_PRIORITY   TCPIP_THREAD_PRIO
+
+struct ncm_tx_async_item {
+	struct pbuf *p;
+	u32_t enqueue_us;
+};
+
+struct ncm_tx_async_stats {
+	u32_t window_start_us;
+	u32_t enqueued;
+	u32_t sent;
+	u32_t send_errors;
+	u32_t queue_full;
+	u32_t queue_depth_max;
+	u32_t queue_wait_max_us;
+	uint64_t queue_wait_total_us;
+};
+
+static QueueHandle_t g_ncm_tx_async_queue;
+static TaskHandle_t g_ncm_tx_async_task;
+static struct ncm_tx_async_stats g_ncm_tx_async_stats;
+
+static void ncm_tx_async_report(u32_t now)
+{
+#if CONFIG_NCM_TX_ASYNC_PROFILE
+	struct ncm_tx_async_stats snapshot;
+	u32_t window;
+	u32_t sent;
+	u32_t depth_now;
+
+	taskENTER_CRITICAL();
+	if (g_ncm_tx_async_stats.window_start_us == 0U) {
+		g_ncm_tx_async_stats.window_start_us = now;
+		taskEXIT_CRITICAL();
+		return;
+	}
+	window = now - g_ncm_tx_async_stats.window_start_us;
+	if (window < NCM_TX_ASYNC_REPORT_US) {
+		taskEXIT_CRITICAL();
+		return;
+	}
+	snapshot = g_ncm_tx_async_stats;
+	memset(&g_ncm_tx_async_stats, 0, sizeof(g_ncm_tx_async_stats));
+	g_ncm_tx_async_stats.window_start_us = now;
+	taskEXIT_CRITICAL();
+	depth_now = (u32_t)uxQueueMessagesWaiting(g_ncm_tx_async_queue);
+	sent = snapshot.sent;
+	printf("[NCMTXASYNC] window_us=%u mode=single-immediate enqueued/sent/error/full=%u/%u/%u/%u "
+	       "depth_now/max=%u/%u wait_us avg/max=%u/%u queue_payload_copy=0\n",
+	       (unsigned int)window,
+	       (unsigned int)snapshot.enqueued,
+	       (unsigned int)sent,
+	       (unsigned int)snapshot.send_errors,
+	       (unsigned int)snapshot.queue_full,
+	       (unsigned int)depth_now,
+	       (unsigned int)snapshot.queue_depth_max,
+	       sent ? (unsigned int)(snapshot.queue_wait_total_us / sent) : 0U,
+	       (unsigned int)snapshot.queue_wait_max_us);
+#else
+	(void)now;
+#endif
+}
+
+static void ncm_tx_async_worker(void *arg)
+{
+	struct ncm_tx_async_item item;
+
+	(void)arg;
+	for (;;) {
+		if (xQueueReceive(g_ncm_tx_async_queue, &item, portMAX_DELAY) == pdTRUE) {
+			u32_t now = hal_read_curtime_us();
+			u32_t wait_us = now - item.enqueue_us;
+			err_t result = ncm_send_pbuf_sync(item.p);
+
+#if CONFIG_NCM_TX_ASYNC_PROFILE
+			taskENTER_CRITICAL();
+			g_ncm_tx_async_stats.sent++;
+			g_ncm_tx_async_stats.queue_wait_total_us += wait_us;
+			if (wait_us > g_ncm_tx_async_stats.queue_wait_max_us) {
+				g_ncm_tx_async_stats.queue_wait_max_us = wait_us;
+			}
+			if (result != ERR_OK) {
+				g_ncm_tx_async_stats.send_errors++;
+			}
+			taskEXIT_CRITICAL();
+#else
+			(void)wait_us;
+			(void)result;
+#endif
+			/* linkoutput() retained one reference before returning to lwIP. */
+			pbuf_free(item.p);
+			ncm_tx_async_report(hal_read_curtime_us());
+		}
+	}
+}
+
+static int ncm_tx_async_init(void)
+{
+	if (g_ncm_tx_async_task != NULL) {
+		return 1;
+	}
+	if (g_ncm_tx_async_queue == NULL) {
+		g_ncm_tx_async_queue = xQueueCreate(NCM_TX_ASYNC_QUEUE_LEN,
+						 sizeof(struct ncm_tx_async_item));
+		if (g_ncm_tx_async_queue == NULL) {
+			printf("[NCMTXASYNC] ERROR: queue allocation failed; using synchronous NCM TX\n");
+			return 0;
+		}
+	}
+	if (xTaskCreate(ncm_tx_async_worker, "ncm_tx", NCM_TX_ASYNC_TASK_STACK,
+			NULL, NCM_TX_ASYNC_TASK_PRIORITY, &g_ncm_tx_async_task) != pdPASS) {
+		printf("[NCMTXASYNC] ERROR: worker creation failed; using synchronous NCM TX\n");
+		vQueueDelete(g_ncm_tx_async_queue);
+		g_ncm_tx_async_queue = NULL;
+		g_ncm_tx_async_task = NULL;
+		return 0;
+	}
+	printf("[NCMTXASYNC] enabled mode=single-immediate queue=%u priority=%u; "
+	       "pbuf-reference only, no payload copy\n",
+	       (unsigned int)NCM_TX_ASYNC_QUEUE_LEN,
+	       (unsigned int)NCM_TX_ASYNC_TASK_PRIORITY);
+	return 1;
+}
+
+static int ncm_tx_async_enqueue(struct pbuf *p)
+{
+	struct ncm_tx_async_item item;
+
+	if (g_ncm_tx_async_task == NULL || g_ncm_tx_async_queue == NULL) {
+		return 0;
+	}
+	item.p = p;
+	item.enqueue_us = hal_read_curtime_us();
+	/* A network driver may retain a pbuf after linkoutput() only if it owns an
+	 * extra reference and releases that reference after TX completion. */
+	pbuf_ref(p);
+	if (xQueueSend(g_ncm_tx_async_queue, &item, 0) != pdPASS) {
+		pbuf_free(p);
+#if CONFIG_NCM_TX_ASYNC_PROFILE
+		taskENTER_CRITICAL();
+		g_ncm_tx_async_stats.queue_full++;
+		taskEXIT_CRITICAL();
+#endif
+		printf("[NCMTXASYNC] ERROR: queue full len=%u; packet not accepted\n",
+		       (unsigned int)p->tot_len);
+		return -1;
+	}
+#if CONFIG_NCM_TX_ASYNC_PROFILE
+	{
+		u32_t depth;
+
+		taskENTER_CRITICAL();
+		g_ncm_tx_async_stats.enqueued++;
+		depth = (u32_t)uxQueueMessagesWaiting(g_ncm_tx_async_queue);
+		if (depth > g_ncm_tx_async_stats.queue_depth_max) {
+			g_ncm_tx_async_stats.queue_depth_max = depth;
+		}
+		taskEXIT_CRITICAL();
+	}
+#endif
+	return 1;
+}
+#endif
+
+/*for ethernet mii interface*/
+static err_t low_level_output_mii(struct netif *netif, struct pbuf *p)
+{
+	(void)netif;
+#if defined(CONFIG_PLATFORM_8195BHP) && defined(CONFIG_USBH_CDC_NCM) && \
+	CONFIG_NCM_TX_ASYNC
+	{
+		int queued = ncm_tx_async_enqueue(p);
+
+		if (queued > 0) {
+			return ERR_OK;
+		}
+		if (queued < 0) {
+			return ERR_BUF;
+		}
+		/* Initialization failure is the only synchronous fallback.  Never run
+		 * two callers through the closed NCM TX state machine concurrently. */
+	}
+#endif
+	return ncm_send_pbuf_sync(p);
 }
 
 
@@ -834,6 +1264,13 @@ err_t ethernetif_mii_init(struct netif *netif)
 
 	/* initialize the hardware */
 	low_level_init(netif);
+
+#if defined(CONFIG_PLATFORM_8195BHP) && defined(CONFIG_USBH_CDC_NCM) && \
+	CONFIG_NCM_TX_ASYNC
+	/* Start the owner of the closed, synchronous NCM TX API before traffic can
+	 * reach linkoutput().  TCP_IP only retains and queues pbufs after this. */
+	(void)ncm_tx_async_init();
+#endif
 
 	etharp_init();
 

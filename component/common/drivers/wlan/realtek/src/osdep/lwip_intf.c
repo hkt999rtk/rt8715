@@ -90,6 +90,10 @@ extern struct netif xnetif[];			//LWIP netif
 #define CONFIG_TCP_PHASE_PROFILE 1
 #endif
 
+#ifndef CONFIG_TCP_OUTPUT_PROFILE
+#define CONFIG_TCP_OUTPUT_PROFILE 0
+#endif
+
 #ifndef CONFIG_WLAN_RX_RING_GDMA_VERIFY
 #define CONFIG_WLAN_RX_RING_GDMA_VERIFY 0
 #endif
@@ -1532,6 +1536,234 @@ void rltk_tcp_perf_tx_copy(unsigned int b, unsigned int d, unsigned int e)
 { (void)b; (void)d; (void)e; }
 #endif
 
+#if CONFIG_TCP_OUTPUT_PROFILE
+#define TCP_OUTPUT_PROFILE_WINDOW_US 10000000U
+
+typedef struct tcp_output_profile_s {
+	u32 window_start_us;
+	u32 depth;
+	u32 calls;
+	u32 kind[5];
+	u32 segments;
+	u32 bytes;
+	u32 data_packets;
+	u32 control_packets;
+	u32 data_bytes;
+	u32 control_bytes;
+	u32 wlan_calls;
+	u32 wlan_bytes;
+	u32 wlan_errors;
+	u64 total_cycles;
+	u64 prepare_cycles;
+	u64 checksum_cycles;
+	u64 ip_cycles;
+	u64 wlan_alloc_cycles;
+	u64 wlan_copy_cycles;
+	u64 wlan_submit_cycles;
+	u32 total_max_cycles;
+	u32 prepare_max_cycles;
+	u32 checksum_max_cycles;
+	u32 ip_max_cycles;
+	u32 wlan_alloc_max_cycles;
+	u32 wlan_copy_max_cycles;
+	u32 wlan_submit_max_cycles;
+} tcp_output_profile_t;
+
+static tcp_output_profile_t g_tcp_output_profile;
+
+static u32 tcp_output_profile_cycles_to_us(u64 cycles)
+{
+	u32 cycles_per_us = SystemCoreClock / 1000000U;
+	return cycles_per_us ? (u32)(cycles / cycles_per_us) : 0U;
+}
+
+static void tcp_output_profile_report(u32 now)
+{
+	u32 window;
+	u32 calls;
+	u32 lwip_packets;
+
+	if (g_tcp_output_profile.window_start_us == 0U) {
+		g_tcp_output_profile.window_start_us = now;
+		return;
+	}
+	window = now - g_tcp_output_profile.window_start_us;
+	if (window < TCP_OUTPUT_PROFILE_WINDOW_US) {
+		return;
+	}
+	calls = g_tcp_output_profile.calls;
+	lwip_packets = g_tcp_output_profile.data_packets +
+		g_tcp_output_profile.control_packets;
+	printf("[TCPOUTPROF] window_us=%u calls=%u noop/ack/data/deferred/error=%u/%u/%u/%u/%u "
+	       "segments=%u bytes=%u total_us total/avg/max=%u/%u/%u\n",
+	       (unsigned int)window, (unsigned int)calls,
+	       (unsigned int)g_tcp_output_profile.kind[RLTK_TCP_OUTPUT_NOOP],
+	       (unsigned int)g_tcp_output_profile.kind[RLTK_TCP_OUTPUT_EMPTY_ACK],
+	       (unsigned int)g_tcp_output_profile.kind[RLTK_TCP_OUTPUT_DATA],
+	       (unsigned int)g_tcp_output_profile.kind[RLTK_TCP_OUTPUT_DEFERRED],
+	       (unsigned int)g_tcp_output_profile.kind[RLTK_TCP_OUTPUT_ERROR],
+	       (unsigned int)g_tcp_output_profile.segments,
+	       (unsigned int)g_tcp_output_profile.bytes,
+	       (unsigned int)tcp_output_profile_cycles_to_us(g_tcp_output_profile.total_cycles),
+	       calls ? (unsigned int)tcp_output_profile_cycles_to_us(
+		       g_tcp_output_profile.total_cycles / calls) : 0U,
+	       (unsigned int)tcp_output_profile_cycles_to_us(g_tcp_output_profile.total_max_cycles));
+	printf("[TCPOUTPROF] lwip packets data/control=%u/%u bytes=%u/%u phase_us prepare/checksum/ip=%u/%u/%u "
+	       "avg=%u/%u/%u max=%u/%u/%u (ip includes synchronous WLAN)\n",
+	       (unsigned int)g_tcp_output_profile.data_packets,
+	       (unsigned int)g_tcp_output_profile.control_packets,
+	       (unsigned int)g_tcp_output_profile.data_bytes,
+	       (unsigned int)g_tcp_output_profile.control_bytes,
+	       (unsigned int)tcp_output_profile_cycles_to_us(g_tcp_output_profile.prepare_cycles),
+	       (unsigned int)tcp_output_profile_cycles_to_us(g_tcp_output_profile.checksum_cycles),
+	       (unsigned int)tcp_output_profile_cycles_to_us(g_tcp_output_profile.ip_cycles),
+	       lwip_packets ? (unsigned int)tcp_output_profile_cycles_to_us(
+		       g_tcp_output_profile.prepare_cycles / lwip_packets) : 0U,
+	       lwip_packets ? (unsigned int)tcp_output_profile_cycles_to_us(
+		       g_tcp_output_profile.checksum_cycles / lwip_packets) : 0U,
+	       lwip_packets ? (unsigned int)tcp_output_profile_cycles_to_us(
+		       g_tcp_output_profile.ip_cycles / lwip_packets) : 0U,
+	       (unsigned int)tcp_output_profile_cycles_to_us(g_tcp_output_profile.prepare_max_cycles),
+	       (unsigned int)tcp_output_profile_cycles_to_us(g_tcp_output_profile.checksum_max_cycles),
+	       (unsigned int)tcp_output_profile_cycles_to_us(g_tcp_output_profile.ip_max_cycles));
+	printf("[TCPOUTPROF] wlan calls/bytes/error=%u/%u/%u phase_us alloc/copy/submit=%u/%u/%u "
+	       "avg=%u/%u/%u max=%u/%u/%u\n",
+	       (unsigned int)g_tcp_output_profile.wlan_calls,
+	       (unsigned int)g_tcp_output_profile.wlan_bytes,
+	       (unsigned int)g_tcp_output_profile.wlan_errors,
+	       (unsigned int)tcp_output_profile_cycles_to_us(g_tcp_output_profile.wlan_alloc_cycles),
+	       (unsigned int)tcp_output_profile_cycles_to_us(g_tcp_output_profile.wlan_copy_cycles),
+	       (unsigned int)tcp_output_profile_cycles_to_us(g_tcp_output_profile.wlan_submit_cycles),
+	       g_tcp_output_profile.wlan_calls ? (unsigned int)tcp_output_profile_cycles_to_us(
+		       g_tcp_output_profile.wlan_alloc_cycles / g_tcp_output_profile.wlan_calls) : 0U,
+	       g_tcp_output_profile.wlan_calls ? (unsigned int)tcp_output_profile_cycles_to_us(
+		       g_tcp_output_profile.wlan_copy_cycles / g_tcp_output_profile.wlan_calls) : 0U,
+	       g_tcp_output_profile.wlan_calls ? (unsigned int)tcp_output_profile_cycles_to_us(
+		       g_tcp_output_profile.wlan_submit_cycles / g_tcp_output_profile.wlan_calls) : 0U,
+	       (unsigned int)tcp_output_profile_cycles_to_us(g_tcp_output_profile.wlan_alloc_max_cycles),
+	       (unsigned int)tcp_output_profile_cycles_to_us(g_tcp_output_profile.wlan_copy_max_cycles),
+	       (unsigned int)tcp_output_profile_cycles_to_us(g_tcp_output_profile.wlan_submit_max_cycles));
+	rtw_memset(&g_tcp_output_profile, 0, sizeof(g_tcp_output_profile));
+	g_tcp_output_profile.window_start_us = now;
+}
+
+void rltk_tcp_output_profile_begin(void)
+{
+	static u8 dwt_ready;
+
+	if (dwt_ready == 0U) {
+		if ((DWT->CTRL & DWT_CTRL_CYCCNTENA_Msk) == 0U) {
+			CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+			DWT->CYCCNT = 0U;
+			DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+		}
+		dwt_ready = 1U;
+	}
+	g_tcp_output_profile.depth++;
+}
+
+void rltk_tcp_output_profile_end(unsigned int kind, unsigned int segments,
+				 unsigned int bytes, unsigned int cycles)
+{
+	u32 now = hal_read_curtime_us();
+
+	if (kind > RLTK_TCP_OUTPUT_ERROR) {
+		kind = RLTK_TCP_OUTPUT_ERROR;
+	}
+	g_tcp_output_profile.calls++;
+	g_tcp_output_profile.kind[kind]++;
+	g_tcp_output_profile.segments += segments;
+	g_tcp_output_profile.bytes += bytes;
+	g_tcp_output_profile.total_cycles += cycles;
+	if (cycles > g_tcp_output_profile.total_max_cycles) {
+		g_tcp_output_profile.total_max_cycles = cycles;
+	}
+	if (g_tcp_output_profile.depth != 0U) {
+		g_tcp_output_profile.depth--;
+	}
+	/* A callback can output another PCB synchronously.  Never reset shared
+	 * counters while an outer tcp_output() still owns the profiling context. */
+	if (g_tcp_output_profile.depth == 0U) {
+		tcp_output_profile_report(now);
+	}
+}
+
+int rltk_tcp_output_profile_active(void)
+{
+	return g_tcp_output_profile.depth != 0U;
+}
+
+void rltk_tcp_output_profile_lwip(unsigned int control, unsigned int bytes,
+				  unsigned int prepare_cycles,
+				  unsigned int checksum_cycles,
+				  unsigned int ip_cycles)
+{
+	if (g_tcp_output_profile.depth == 0U) {
+		return;
+	}
+	if (control) {
+		g_tcp_output_profile.control_packets++;
+		g_tcp_output_profile.control_bytes += bytes;
+	} else {
+		g_tcp_output_profile.data_packets++;
+		g_tcp_output_profile.data_bytes += bytes;
+	}
+	g_tcp_output_profile.prepare_cycles += prepare_cycles;
+	g_tcp_output_profile.checksum_cycles += checksum_cycles;
+	g_tcp_output_profile.ip_cycles += ip_cycles;
+	if (prepare_cycles > g_tcp_output_profile.prepare_max_cycles) {
+		g_tcp_output_profile.prepare_max_cycles = prepare_cycles;
+	}
+	if (checksum_cycles > g_tcp_output_profile.checksum_max_cycles) {
+		g_tcp_output_profile.checksum_max_cycles = checksum_cycles;
+	}
+	if (ip_cycles > g_tcp_output_profile.ip_max_cycles) {
+		g_tcp_output_profile.ip_max_cycles = ip_cycles;
+	}
+}
+
+void rltk_tcp_output_profile_wlan(unsigned int bytes,
+				  unsigned int alloc_cycles,
+				  unsigned int copy_cycles,
+				  unsigned int submit_cycles,
+				  int result)
+{
+	if (g_tcp_output_profile.depth == 0U) {
+		return;
+	}
+	g_tcp_output_profile.wlan_calls++;
+	g_tcp_output_profile.wlan_bytes += bytes;
+	if (result != 0) {
+		g_tcp_output_profile.wlan_errors++;
+	}
+	g_tcp_output_profile.wlan_alloc_cycles += alloc_cycles;
+	g_tcp_output_profile.wlan_copy_cycles += copy_cycles;
+	g_tcp_output_profile.wlan_submit_cycles += submit_cycles;
+	if (alloc_cycles > g_tcp_output_profile.wlan_alloc_max_cycles) {
+		g_tcp_output_profile.wlan_alloc_max_cycles = alloc_cycles;
+	}
+	if (copy_cycles > g_tcp_output_profile.wlan_copy_max_cycles) {
+		g_tcp_output_profile.wlan_copy_max_cycles = copy_cycles;
+	}
+	if (submit_cycles > g_tcp_output_profile.wlan_submit_max_cycles) {
+		g_tcp_output_profile.wlan_submit_max_cycles = submit_cycles;
+	}
+}
+#else
+void rltk_tcp_output_profile_begin(void) { }
+void rltk_tcp_output_profile_end(unsigned int k, unsigned int s,
+				 unsigned int b, unsigned int c)
+{ (void)k; (void)s; (void)b; (void)c; }
+int rltk_tcp_output_profile_active(void) { return 0; }
+void rltk_tcp_output_profile_lwip(unsigned int c, unsigned int b,
+				  unsigned int p, unsigned int s,
+				  unsigned int i)
+{ (void)c; (void)b; (void)p; (void)s; (void)i; }
+void rltk_tcp_output_profile_wlan(unsigned int b, unsigned int a,
+				  unsigned int c, unsigned int s, int r)
+{ (void)b; (void)a; (void)c; (void)s; (void)r; }
+#endif /* CONFIG_TCP_OUTPUT_PROFILE */
+
 /*
  * This symbol is referenced only by a build-local copy of rtl8195b_recv.o.
  * The original closed WLAN archive remains untouched.  That object has two
@@ -1708,9 +1940,19 @@ int rltk_wlan_send(int idx, struct eth_drv_sg *sg_list, int sg_len, int total_le
 	struct sk_buff *skb = NULL;
 	unsigned int skb_alloc_len = (unsigned int)total_len;
 	int ret = 0;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+	unsigned int profile_active = (unsigned int)rltk_tcp_output_profile_active();
+	u32 profile_start_cycles = profile_active ? DWT->CYCCNT : 0U;
+	u32 profile_alloc_cycles = 0U;
+	u32 profile_copy_cycles = 0U;
+	u32 profile_submit_cycles = 0U;
+#endif
 
 	if(idx == -1){
 		rltk_wlan_dump_netif_down(idx, total_len);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+		rltk_tcp_output_profile_wlan((unsigned int)total_len, 0U, 0U, 0U, -1);
+#endif
 		return -1;
 	}
 	DBG_TRACE("%s is called", __FUNCTION__);
@@ -1721,6 +1963,12 @@ int rltk_wlan_send(int idx, struct eth_drv_sg *sg_list, int sg_len, int total_le
 	} else {
 		restore_flags();
 		rltk_wlan_dump_netif_down(idx, total_len);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+		if (profile_active) {
+			rltk_tcp_output_profile_wlan((unsigned int)total_len,
+				0U, 0U, 0U, -1);
+		}
+#endif
 		return -1;
 	}
 	restore_flags();
@@ -1737,7 +1985,17 @@ int rltk_wlan_send(int idx, struct eth_drv_sg *sg_list, int sg_len, int total_le
 		skb_alloc_len += (2U * NET_GDMA_CACHE_LINE) - 1U;
 	}
 #endif
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+	if (profile_active) {
+		profile_start_cycles = DWT->CYCCNT;
+	}
+#endif
 	skb = rltk_wlan_alloc_skb(skb_alloc_len);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+	if (profile_active) {
+		profile_alloc_cycles = DWT->CYCCNT - profile_start_cycles;
+	}
+#endif
 	if (skb == NULL) {
 		//DBG_ERR("rltk_wlan_alloc_skb() for data len=%d failed!", total_len);
 		ret = -1;
@@ -1754,6 +2012,9 @@ int rltk_wlan_send(int idx, struct eth_drv_sg *sg_list, int sg_len, int total_le
 	}
 #endif
 
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+	profile_start_cycles = profile_active ? DWT->CYCCNT : 0U;
+#endif
 	for (last_sg = &sg_list[sg_len]; sg_list < last_sg; ++sg_list) {
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NET_GDMA_COPY
 		if (net_gdma_copy(&g_net_tx_gdma, skb->tail,
@@ -1764,6 +2025,11 @@ int rltk_wlan_send(int idx, struct eth_drv_sg *sg_list, int sg_len, int total_le
 			kfree_skb(skb);
 			skb = NULL;
 			ret = -1;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+			if (profile_active) {
+				profile_copy_cycles = DWT->CYCCNT - profile_start_cycles;
+			}
+#endif
 			goto exit;
 		}
 #else
@@ -1771,10 +2037,28 @@ int rltk_wlan_send(int idx, struct eth_drv_sg *sg_list, int sg_len, int total_le
 #endif
 		skb_put(skb,  sg_list->len);
 	}
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+	if (profile_active) {
+		profile_copy_cycles = DWT->CYCCNT - profile_start_cycles;
+		profile_start_cycles = DWT->CYCCNT;
+	}
+#endif
 
 	rltk_wlan_send_skb(idx, skb);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+	if (profile_active) {
+		profile_submit_cycles = DWT->CYCCNT - profile_start_cycles;
+	}
+#endif
 
 exit:
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
+	if (profile_active) {
+		rltk_tcp_output_profile_wlan((unsigned int)total_len,
+			profile_alloc_cycles, profile_copy_cycles,
+			profile_submit_cycles, ret);
+	}
+#endif
 	save_and_cli();
 	rltk_wlan_tx_dec(idx);
 	restore_flags();

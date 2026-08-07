@@ -57,6 +57,7 @@
 #include "lwip/ip6_addr.h"
 #if defined(CONFIG_PLATFORM_8195BHP)
 #include "lwip_intf.h"
+#include "cmsis.h"
 #endif
 #if LWIP_ND6_TCP_REACHABILITY_HINTS
 #include "lwip/nd6.h"
@@ -89,6 +90,233 @@ static u8_t recv_flags;
 static struct pbuf *recv_data;
 
 struct tcp_pcb *tcp_input_pcb;
+
+#ifndef CONFIG_TCP_CORE_PHASE_PROFILE
+#define CONFIG_TCP_CORE_PHASE_PROFILE 0
+#endif
+
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+#define TCP_CORE_PROFILE_WINDOW_US 10000000U
+
+enum tcp_core_profile_route {
+  TCP_CORE_ROUTE_UNKNOWN = 0,
+  TCP_CORE_ROUTE_ACTIVE,
+  TCP_CORE_ROUTE_TIMEWAIT,
+  TCP_CORE_ROUTE_LISTEN,
+  TCP_CORE_ROUTE_NO_PCB,
+  TCP_CORE_ROUTE_DROP,
+  TCP_CORE_ROUTE_COUNT
+};
+
+struct tcp_core_profile_sample {
+  u32_t start_cycles;
+  u32_t checksum_cycles;
+  u32_t pre_cycles;
+  u32_t process_cycles;
+  u32_t callback_cycles;
+  u32_t output_cycles;
+  u32_t bytes;
+  u16_t active_lookup_steps;
+  u8_t route;
+  u8_t data;
+  u8_t pure_ack;
+  u8_t in_order;
+  u8_t duplicate;
+  u8_t out_of_order;
+};
+
+struct tcp_core_profile_stats {
+  u32_t window_start_us;
+  u32_t packets;
+  u32_t bytes;
+  u32_t data;
+  u32_t pure_ack;
+  u32_t in_order;
+  u32_t duplicate;
+  u32_t out_of_order;
+  u32_t route[TCP_CORE_ROUTE_COUNT];
+  u32_t lookup_steps;
+  u32_t lookup_max;
+  uint64_t total_cycles;
+  uint64_t header_cycles;
+  uint64_t checksum_cycles;
+  uint64_t process_cycles;
+  uint64_t callback_cycles;
+  uint64_t output_cycles;
+  uint64_t other_cycles;
+  u32_t total_max_cycles;
+  u32_t header_max_cycles;
+  u32_t checksum_max_cycles;
+  u32_t process_max_cycles;
+  u32_t callback_max_cycles;
+  u32_t output_max_cycles;
+};
+
+static struct tcp_core_profile_stats tcp_core_profile;
+
+static void
+tcp_core_profile_begin(struct tcp_core_profile_sample *sample, u32_t bytes)
+{
+  static u8_t dwt_ready;
+
+  if (dwt_ready == 0U) {
+    if ((DWT->CTRL & DWT_CTRL_CYCCNTENA_Msk) == 0U) {
+      CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+      DWT->CYCCNT = 0U;
+      DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    }
+    dwt_ready = 1U;
+  }
+  sample->checksum_cycles = 0U;
+  sample->pre_cycles = 0U;
+  sample->process_cycles = 0U;
+  sample->callback_cycles = 0U;
+  sample->output_cycles = 0U;
+  sample->bytes = bytes;
+  sample->active_lookup_steps = 0U;
+  sample->route = TCP_CORE_ROUTE_UNKNOWN;
+  sample->data = 0U;
+  sample->pure_ack = 0U;
+  sample->in_order = 0U;
+  sample->duplicate = 0U;
+  sample->out_of_order = 0U;
+  sample->start_cycles = DWT->CYCCNT;
+}
+
+static u32_t
+tcp_core_profile_cycles_to_us(uint64_t cycles)
+{
+  if (SystemCoreClock == 0U) {
+    return 0U;
+  }
+  return (u32_t)((cycles * 1000000ULL) / SystemCoreClock);
+}
+
+static u32_t
+tcp_core_profile_pct_x10(uint64_t part, uint64_t total)
+{
+  return total != 0U ? (u32_t)((part * 1000ULL) / total) : 0U;
+}
+
+static void
+tcp_core_profile_commit(struct tcp_core_profile_sample *sample, u32_t end_cycles)
+{
+  struct tcp_core_profile_stats *s = &tcp_core_profile;
+  u32_t now_us = rltk_tcp_perf_now_us();
+  u32_t total = end_cycles - sample->start_cycles;
+  u32_t pre = sample->pre_cycles;
+  u32_t header;
+  u32_t accounted;
+  u32_t other;
+  u32_t window;
+
+  /* Early-drop/listen/time-wait paths do not reach the normal pre-process
+   * marker. Charge their complete cost to header/demux instead of silently
+   * losing it from the phase totals. */
+  if (pre == 0U) {
+    pre = total;
+  }
+  header = pre >= sample->checksum_cycles ?
+    pre - sample->checksum_cycles : 0U;
+  accounted = pre + sample->process_cycles + sample->callback_cycles +
+    sample->output_cycles;
+  other = total >= accounted ? total - accounted : 0U;
+
+  if (s->window_start_us == 0U) {
+    s->window_start_us = now_us;
+  }
+  s->packets++;
+  s->bytes += sample->bytes;
+  s->data += sample->data;
+  s->pure_ack += sample->pure_ack;
+  s->in_order += sample->in_order;
+  s->duplicate += sample->duplicate;
+  s->out_of_order += sample->out_of_order;
+  if (sample->route < TCP_CORE_ROUTE_COUNT) {
+    s->route[sample->route]++;
+  }
+  s->lookup_steps += sample->active_lookup_steps;
+  if (sample->active_lookup_steps > s->lookup_max) {
+    s->lookup_max = sample->active_lookup_steps;
+  }
+  s->total_cycles += total;
+  s->header_cycles += header;
+  s->checksum_cycles += sample->checksum_cycles;
+  s->process_cycles += sample->process_cycles;
+  s->callback_cycles += sample->callback_cycles;
+  s->output_cycles += sample->output_cycles;
+  s->other_cycles += other;
+#define TCP_CORE_PROFILE_MAX(field, value) \
+  do { if ((value) > s->field) { s->field = (value); } } while (0)
+  TCP_CORE_PROFILE_MAX(total_max_cycles, total);
+  TCP_CORE_PROFILE_MAX(header_max_cycles, header);
+  TCP_CORE_PROFILE_MAX(checksum_max_cycles, sample->checksum_cycles);
+  TCP_CORE_PROFILE_MAX(process_max_cycles, sample->process_cycles);
+  TCP_CORE_PROFILE_MAX(callback_max_cycles, sample->callback_cycles);
+  TCP_CORE_PROFILE_MAX(output_max_cycles, sample->output_cycles);
+#undef TCP_CORE_PROFILE_MAX
+
+  window = now_us - s->window_start_us;
+  if (window >= TCP_CORE_PROFILE_WINDOW_US) {
+    uint64_t phase_total = s->header_cycles + s->checksum_cycles +
+      s->process_cycles + s->callback_cycles + s->output_cycles +
+      s->other_cycles;
+    u32_t packet_count = s->packets != 0U ? s->packets : 1U;
+    u32_t header_pct = tcp_core_profile_pct_x10(s->header_cycles, phase_total);
+    u32_t checksum_pct = tcp_core_profile_pct_x10(s->checksum_cycles, phase_total);
+    u32_t process_pct = tcp_core_profile_pct_x10(s->process_cycles, phase_total);
+    u32_t callback_pct = tcp_core_profile_pct_x10(s->callback_cycles, phase_total);
+    u32_t output_pct = tcp_core_profile_pct_x10(s->output_cycles, phase_total);
+    u32_t other_pct = tcp_core_profile_pct_x10(s->other_cycles, phase_total);
+
+    LWIP_PLATFORM_DIAG(("[TCPRXPHASE] window_us=%u packets=%u bytes=%u "
+                        "data/pure_ack=%u/%u seq in_order/dup/ooseq=%u/%u/%u "
+                        "lookup_steps avg/max=%u/%u\n",
+                        (unsigned int)window, (unsigned int)s->packets,
+                        (unsigned int)s->bytes, (unsigned int)s->data,
+                        (unsigned int)s->pure_ack, (unsigned int)s->in_order,
+                        (unsigned int)s->duplicate,
+                        (unsigned int)s->out_of_order,
+                        (unsigned int)(s->lookup_steps / packet_count),
+                        (unsigned int)s->lookup_max));
+    LWIP_PLATFORM_DIAG(("[TCPRXPHASE] route active/timewait/listen/no_pcb/drop=%u/%u/%u/%u/%u "
+                        "total_us total/avg/max=%u/%u/%u\n",
+                        (unsigned int)s->route[TCP_CORE_ROUTE_ACTIVE],
+                        (unsigned int)s->route[TCP_CORE_ROUTE_TIMEWAIT],
+                        (unsigned int)s->route[TCP_CORE_ROUTE_LISTEN],
+                        (unsigned int)s->route[TCP_CORE_ROUTE_NO_PCB],
+                        (unsigned int)s->route[TCP_CORE_ROUTE_DROP],
+                        (unsigned int)tcp_core_profile_cycles_to_us(s->total_cycles),
+                        (unsigned int)tcp_core_profile_cycles_to_us(
+                          s->total_cycles / packet_count),
+                        (unsigned int)tcp_core_profile_cycles_to_us(
+                          s->total_max_cycles)));
+    LWIP_PLATFORM_DIAG(("[TCPRXPHASE] phase_us header/checksum/process/callback/output/other="
+                        "%u/%u/%u/%u/%u/%u pct=%u.%u/%u.%u/%u.%u/%u.%u/%u.%u/%u.%u\n",
+                        (unsigned int)tcp_core_profile_cycles_to_us(s->header_cycles),
+                        (unsigned int)tcp_core_profile_cycles_to_us(s->checksum_cycles),
+                        (unsigned int)tcp_core_profile_cycles_to_us(s->process_cycles),
+                        (unsigned int)tcp_core_profile_cycles_to_us(s->callback_cycles),
+                        (unsigned int)tcp_core_profile_cycles_to_us(s->output_cycles),
+                        (unsigned int)tcp_core_profile_cycles_to_us(s->other_cycles),
+                        header_pct / 10U, header_pct % 10U,
+                        checksum_pct / 10U, checksum_pct % 10U,
+                        process_pct / 10U, process_pct % 10U,
+                        callback_pct / 10U, callback_pct % 10U,
+                        output_pct / 10U, output_pct % 10U,
+                        other_pct / 10U, other_pct % 10U));
+    LWIP_PLATFORM_DIAG(("[TCPRXPHASE] phase_max_us header/checksum/process/callback/output="
+                        "%u/%u/%u/%u/%u\n",
+                        (unsigned int)tcp_core_profile_cycles_to_us(s->header_max_cycles),
+                        (unsigned int)tcp_core_profile_cycles_to_us(s->checksum_max_cycles),
+                        (unsigned int)tcp_core_profile_cycles_to_us(s->process_max_cycles),
+                        (unsigned int)tcp_core_profile_cycles_to_us(s->callback_max_cycles),
+                        (unsigned int)tcp_core_profile_cycles_to_us(s->output_max_cycles)));
+    memset(s, 0, sizeof(*s));
+    s->window_start_us = now_us;
+  }
+}
+#endif /* CONFIG_TCP_CORE_PHASE_PROFILE */
 
 /* Forward declarations. */
 static err_t tcp_process(struct tcp_pcb *pcb);
@@ -128,14 +356,25 @@ tcp_input(struct pbuf *p, struct netif *inp)
 #endif /* SO_REUSE */
   u8_t hdrlen_bytes;
   err_t err;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+  struct tcp_core_profile_sample tcp_core_sample;
+  tcp_core_profile_begin(&tcp_core_sample, p->tot_len);
+#define TCP_CORE_INPUT_DONE() \
+  tcp_core_profile_commit(&tcp_core_sample, DWT->CYCCNT)
+#else
+#define TCP_CORE_INPUT_DONE() do { } while (0)
+#endif
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_PHASE_PROFILE
   unsigned int tcp_perf_start_us = rltk_tcp_perf_now_us();
   unsigned int tcp_perf_bytes = p->tot_len;
   unsigned int tcp_perf_checksum_us = 0;
 #define TCP_PERF_INPUT_DONE() \
-  rltk_tcp_perf_rx_complete(tcp_perf_start_us, tcp_perf_bytes, tcp_perf_checksum_us)
+  do { \
+    rltk_tcp_perf_rx_complete(tcp_perf_start_us, tcp_perf_bytes, tcp_perf_checksum_us); \
+    TCP_CORE_INPUT_DONE(); \
+  } while (0)
 #else
-#define TCP_PERF_INPUT_DONE() do { } while (0)
+#define TCP_PERF_INPUT_DONE() TCP_CORE_INPUT_DONE()
 #endif
 
   LWIP_UNUSED_ARG(inp);
@@ -174,8 +413,14 @@ tcp_input(struct pbuf *p, struct netif *inp)
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_PHASE_PROFILE
     unsigned int checksum_start_us = rltk_tcp_perf_now_us();
 #endif
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+    u32_t checksum_start_cycles = DWT->CYCCNT;
+#endif
     u16_t chksum = ip_chksum_pseudo(p, IP_PROTO_TCP, p->tot_len,
                                     ip_current_src_addr(), ip_current_dest_addr());
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+    tcp_core_sample.checksum_cycles += DWT->CYCCNT - checksum_start_cycles;
+#endif
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_PHASE_PROFILE
     tcp_perf_checksum_us += rltk_tcp_perf_now_us() - checksum_start_us;
 #endif
@@ -251,6 +496,12 @@ tcp_input(struct pbuf *p, struct netif *inp)
 
   flags = TCPH_FLAGS(tcphdr);
   tcplen = p->tot_len;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+  tcp_core_sample.data = p->tot_len != 0U;
+  tcp_core_sample.pure_ack = (p->tot_len == 0U) &&
+    ((flags & TCP_ACK) != 0U) &&
+    ((flags & (TCP_SYN | TCP_FIN | TCP_RST)) == 0U);
+#endif
   if (flags & (TCP_FIN | TCP_SYN)) {
     tcplen++;
     if (tcplen < p->tot_len) {
@@ -266,6 +517,9 @@ tcp_input(struct pbuf *p, struct netif *inp)
   prev = NULL;
 
   for (pcb = tcp_active_pcbs; pcb != NULL; pcb = pcb->next) {
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+    tcp_core_sample.active_lookup_steps++;
+#endif
     LWIP_ASSERT("tcp_input: active pcb->state != CLOSED", pcb->state != CLOSED);
     LWIP_ASSERT("tcp_input: active pcb->state != TIME-WAIT", pcb->state != TIME_WAIT);
     LWIP_ASSERT("tcp_input: active pcb->state != LISTEN", pcb->state != LISTEN);
@@ -323,6 +577,9 @@ tcp_input(struct pbuf *p, struct netif *inp)
                                        tcphdr_opt2, p) == ERR_OK)
 #endif
         {
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+          tcp_core_sample.route = TCP_CORE_ROUTE_TIMEWAIT;
+#endif
           tcp_timewait_input(pcb);
         }
         pbuf_free(p);
@@ -396,6 +653,9 @@ tcp_input(struct pbuf *p, struct netif *inp)
                                      tcphdr_opt1len, tcphdr_opt2, p) == ERR_OK)
 #endif
       {
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+        tcp_core_sample.route = TCP_CORE_ROUTE_LISTEN;
+#endif
         tcp_listen_input(lpcb);
       }
       pbuf_free(p);
@@ -418,6 +678,10 @@ tcp_input(struct pbuf *p, struct netif *inp)
     TCP_PERF_INPUT_DONE();
     return;
   }
+#endif
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+  tcp_core_sample.route = pcb != NULL ? TCP_CORE_ROUTE_ACTIVE :
+    TCP_CORE_ROUTE_NO_PCB;
 #endif
   if (pcb != NULL) {
     /* The incoming segment belongs to a connection. */
@@ -456,7 +720,25 @@ tcp_input(struct pbuf *p, struct netif *inp)
       }
     }
     tcp_input_pcb = pcb;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+    if (p->tot_len != 0U) {
+      if (seqno == pcb->rcv_nxt) {
+        tcp_core_sample.in_order = 1U;
+      } else if (TCP_SEQ_LT(seqno, pcb->rcv_nxt)) {
+        tcp_core_sample.duplicate = 1U;
+      } else {
+        tcp_core_sample.out_of_order = 1U;
+      }
+    }
+    tcp_core_sample.pre_cycles = DWT->CYCCNT - tcp_core_sample.start_cycles;
+    {
+      u32_t phase_start_cycles = DWT->CYCCNT;
+#endif
     err = tcp_process(pcb);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+      tcp_core_sample.process_cycles += DWT->CYCCNT - phase_start_cycles;
+    }
+#endif
     /* A return value of ERR_ABRT means that tcp_abort() was called
        and that the pcb has been freed. If so, we don't do anything. */
     if (err != ERR_ABRT) {
@@ -486,7 +768,15 @@ tcp_input(struct pbuf *p, struct netif *inp)
           {
             acked16 = recv_acked;
 #endif
-            TCP_EVENT_SENT(pcb, (u16_t)acked16, err);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+            {
+              u32_t phase_start_cycles = DWT->CYCCNT;
+#endif
+              TCP_EVENT_SENT(pcb, (u16_t)acked16, err);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+              tcp_core_sample.callback_cycles += DWT->CYCCNT - phase_start_cycles;
+            }
+#endif
             if (err == ERR_ABRT) {
               goto aborted;
             }
@@ -519,7 +809,15 @@ tcp_input(struct pbuf *p, struct netif *inp)
           }
 
           /* Notify application that data has been received. */
-          TCP_EVENT_RECV(pcb, recv_data, ERR_OK, err);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+          {
+            u32_t phase_start_cycles = DWT->CYCCNT;
+#endif
+            TCP_EVENT_RECV(pcb, recv_data, ERR_OK, err);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+            tcp_core_sample.callback_cycles += DWT->CYCCNT - phase_start_cycles;
+          }
+#endif
           if (err == ERR_ABRT) {
 #if TCP_QUEUE_OOSEQ && LWIP_WND_SCALE
             if (rest != NULL) {
@@ -559,7 +857,15 @@ tcp_input(struct pbuf *p, struct netif *inp)
             if (pcb->rcv_wnd != TCP_WND_MAX(pcb)) {
               pcb->rcv_wnd++;
             }
-            TCP_EVENT_CLOSED(pcb, err);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+            {
+              u32_t phase_start_cycles = DWT->CYCCNT;
+#endif
+              TCP_EVENT_CLOSED(pcb, err);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+              tcp_core_sample.callback_cycles += DWT->CYCCNT - phase_start_cycles;
+            }
+#endif
             if (err == ERR_ABRT) {
               goto aborted;
             }
@@ -571,7 +877,15 @@ tcp_input(struct pbuf *p, struct netif *inp)
           goto aborted;
         }
         /* Try to send something out. */
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+        {
+          u32_t phase_start_cycles = DWT->CYCCNT;
+#endif
         tcp_output(pcb);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+          tcp_core_sample.output_cycles += DWT->CYCCNT - phase_start_cycles;
+        }
+#endif
 #if TCP_INPUT_DEBUG
 #if TCP_DEBUG
         tcp_debug_print_state(pcb->state);
@@ -608,11 +922,15 @@ aborted:
   TCP_PERF_INPUT_DONE();
   return;
 dropped:
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_CORE_PHASE_PROFILE
+  tcp_core_sample.route = TCP_CORE_ROUTE_DROP;
+#endif
   TCP_STATS_INC(tcp.drop);
   MIB2_STATS_INC(mib2.tcpinerrs);
   pbuf_free(p);
   TCP_PERF_INPUT_DONE();
 #undef TCP_PERF_INPUT_DONE
+#undef TCP_CORE_INPUT_DONE
 }
 
 /** Called from tcp_input to check for TF_CLOSED flag. This results in closing

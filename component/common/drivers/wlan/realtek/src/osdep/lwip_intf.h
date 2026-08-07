@@ -85,6 +85,28 @@ void rltk_tcp_perf_rx_complete(unsigned int start_us, unsigned int bytes,
 void rltk_tcp_perf_tx_complete(unsigned int start_us, unsigned int bytes);
 void rltk_tcp_perf_tx_copy(unsigned int bytes, unsigned int dma_bytes,
 			   unsigned int elapsed_us);
+
+/* tcp_output() profiling categories. Keep these numeric values stable so the
+ * lwIP core and the WLAN glue can share a small, dependency-free interface. */
+#define RLTK_TCP_OUTPUT_NOOP       0U
+#define RLTK_TCP_OUTPUT_EMPTY_ACK  1U
+#define RLTK_TCP_OUTPUT_DATA       2U
+#define RLTK_TCP_OUTPUT_DEFERRED   3U
+#define RLTK_TCP_OUTPUT_ERROR      4U
+void rltk_tcp_output_profile_begin(void);
+void rltk_tcp_output_profile_end(unsigned int kind, unsigned int segments,
+				 unsigned int bytes, unsigned int cycles);
+int rltk_tcp_output_profile_active(void);
+void rltk_tcp_output_profile_lwip(unsigned int control,
+				  unsigned int bytes,
+				  unsigned int prepare_cycles,
+				  unsigned int checksum_cycles,
+				  unsigned int ip_cycles);
+void rltk_tcp_output_profile_wlan(unsigned int bytes,
+				  unsigned int alloc_cycles,
+				  unsigned int copy_cycles,
+				  unsigned int submit_cycles,
+				  int result);
 int rltk_network_gdma_benchmark_init(void);
 void rltk_network_gdma_benchmark_print_status(unsigned int sequence);
 int rltk_network_gdma_benchmark_copy(

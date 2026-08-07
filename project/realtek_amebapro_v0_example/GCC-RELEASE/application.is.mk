@@ -814,12 +814,40 @@ NET_GDMA_BENCH ?= 0
 NET_GDMA_STATS ?= 0
 NET_GDMA_OWNER_BOOST_PRIORITY ?= 11
 TCP_PHASE_PROFILE ?= 1
+# Detailed 10-second breakdown of tcp_input() processing. This is independent
+# of the compact 5-second TCP_PERF throughput/checksum summary above.
+TCP_CORE_PHASE_PROFILE ?= 1
+# Ten-second breakdown of tcp_output() and its synchronous WLAN transmit path.
+# This distinguishes ACK/data traffic and separates lwIP preparation/checksum/IP
+# time from skb allocation, scatter-gather copy, and closed-driver submission.
+TCP_OUTPUT_PROFILE ?= 1
+# Ten-second timing of the en3 CDC-NCM transmit path.  The closed NCM library
+# waits synchronously for USB completion, so measure that wait separately from
+# any lwIP pbuf-chain flattening done by ethernetif.c.
+NCM_TX_PROFILE ?= 1
+# Stage 1: move the closed synchronous NCM send/wait out of TCP_IP.  This is
+# intentionally single-packet/immediate; packet/NTB aggregation is a later step.
+NCM_TX_ASYNC ?= 1
+NCM_TX_ASYNC_PROFILE ?= 1
 PC_PROFILER ?= 1
-MEMCPY_TASK_PROFILE ?= 1
+MEMCPY_TASK_PROFILE ?= 0
 LARGE_MEMCPY_GDMA ?= 1
 LARGE_MEMCPY_GDMA_THRESHOLD ?= 4096
 LARGE_MEMCPY_GDMA_OWNER_BOOST_PRIORITY ?= 11
-SOCKET_RECV_PROFILE ?= 1
+# Temporary correctness check for the new fragmented socket-recv DMA path.
+# Every completed DMA batch is compared by M33 before its pbufs are released;
+# mismatch prints the exact byte and forces a full CPU recopy of that batch.
+LARGE_MEMCPY_GDMA_COPYV_VERIFY ?= 0
+SOCKET_RECV_PROFILE ?= 0
+# Gather fragmented TCP pbuf payloads into one linked-GDMA submission when a
+# recv() batch exceeds 4 KiB.  Sources may be non-contiguous; caller output is
+# contiguous.  Cache-line edges remain on the M33 path.
+SOCKET_RECV_GDMA ?= 1
+SOCKET_RECV_GDMA_PROFILE ?= 1
+SOCKET_RECV_GDMA_THRESHOLD ?= 4096
+# TCP core does not copy payload into a second socket buffer.  This probe
+# measures the pbuf-pointer handoff into recvmbox and the socket wakeup event.
+TCP_SOCKET_HANDOFF_PROFILE ?= 0
 # Channels 4 and 5 are the only linked-list-capable channels on each HP GDMA.
 # Keep them out of the ordinary single-block allocator so a later socket recv
 # linked-list implementation can claim one deterministically.
@@ -838,21 +866,47 @@ SCREEN_TCP_BUFFER_PROFILE ?= 0
 SCREEN_TIMESTAMP_PROFILE ?= 0
 USB_HCD_PROFILE ?= 1
 NET_QUEUE_PROFILE ?= 1
+# Stage 1 validates the preallocated pbuf-pointer mailbox path without
+# aggregation, delay, or GTimer.  Each WLAN packet is still posted immediately.
+TCPIP_RX_BATCH_STAGE1 ?= 1
+# Stage 2 arms an independent 1 ms one-shot GTimer under WLAN traffic. Its
+# callback records timing only; it never touches pbufs or the TCP/IP mailbox.
+TCPIP_RX_BATCH_TIMER_PROBE ?= 1
+# Stage 2B validates GTimer ISR -> TCP/IP mailbox dispatch using a fixed
+# diagnostic message. No packet pointer is carried by this message.
+TCPIP_RX_BATCH_TIMER_MBOX_PROBE ?= 1
+# Stage 3 enables the first real aggregation path after Stage 1/2/2B have
+# independently validated ownership, timer timing, and ISR mailbox dispatch.
+TCPIP_RX_BATCH_STAGE3 ?= 1
+TCPIP_RX_BATCH_MAX_PACKETS ?= 8
+TCPIP_RX_BATCH_TIMEOUT_US ?= 1000
+# Diagnostic counters/logs only; aggregation remains enabled when this is 0.
+TCPIP_RX_BATCH_PROFILE ?= 0
 CRYPTO_ENGINE_PROFILE ?= 0
 CARBOX_CRYPTO_OWNER_BOOST_PRIORITY ?= 11
 SYS_PLL_OVERCLOCK ?= 1
-SYS_PLL_TARGET_HZ ?= 350000000
+SYS_PLL_TARGET_HZ ?= 340000000
 GCCFLAGS += -DCONFIG_NET_GDMA_COPY=$(NET_GDMA_COPY)
 GCCFLAGS += -DCONFIG_NET_GDMA_BENCH=$(NET_GDMA_BENCH)
 GCCFLAGS += -DCONFIG_NET_GDMA_STATS=$(NET_GDMA_STATS)
 GCCFLAGS += -DNET_GDMA_OWNER_BOOST_PRIORITY=$(NET_GDMA_OWNER_BOOST_PRIORITY)
 GCCFLAGS += -DCONFIG_TCP_PHASE_PROFILE=$(TCP_PHASE_PROFILE)
+GCCFLAGS += -DCONFIG_TCP_CORE_PHASE_PROFILE=$(TCP_CORE_PHASE_PROFILE)
+GCCFLAGS += -DCONFIG_TCP_OUTPUT_PROFILE=$(TCP_OUTPUT_PROFILE)
+GCCFLAGS += -DCONFIG_NCM_TX_PROFILE=$(NCM_TX_PROFILE)
+GCCFLAGS += -DCONFIG_NCM_TX_ASYNC=$(NCM_TX_ASYNC)
+GCCFLAGS += -DCONFIG_NCM_TX_ASYNC_PROFILE=$(NCM_TX_ASYNC_PROFILE)
 GCCFLAGS += -DCONFIG_PC_PROFILER=$(PC_PROFILER)
 GCCFLAGS += -DCONFIG_MEMCPY_TASK_PROFILE=$(MEMCPY_TASK_PROFILE)
 GCCFLAGS += -DCONFIG_LARGE_MEMCPY_GDMA=$(LARGE_MEMCPY_GDMA)
 GCCFLAGS += -DLARGE_MEMCPY_GDMA_THRESHOLD=$(LARGE_MEMCPY_GDMA_THRESHOLD)
 GCCFLAGS += -DLARGE_MEMCPY_GDMA_OWNER_BOOST_PRIORITY=$(LARGE_MEMCPY_GDMA_OWNER_BOOST_PRIORITY)
+GCCFLAGS += -DLARGE_MEMCPY_GDMA_COPYV_VERIFY=$(LARGE_MEMCPY_GDMA_COPYV_VERIFY)
 GCCFLAGS += -DCONFIG_SOCKET_RECV_PROFILE=$(SOCKET_RECV_PROFILE)
+GCCFLAGS += -DCONFIG_SOCKET_RECV_GDMA=$(SOCKET_RECV_GDMA)
+GCCFLAGS += -DCONFIG_SOCKET_RECV_GDMA_PROFILE=$(SOCKET_RECV_GDMA_PROFILE)
+GCCFLAGS += -DSOCKET_RECV_GDMA_THRESHOLD=$(SOCKET_RECV_GDMA_THRESHOLD)
+GCCFLAGS += -DCONFIG_TCP_SOCKET_HANDOFF_PROFILE=$(TCP_SOCKET_HANDOFF_PROFILE)
 GCCFLAGS += -DCONFIG_GDMA_RESERVE_MULTIBLOCK_CHANNELS=$(GDMA_RESERVE_MULTIBLOCK_CHANNELS)
 GCCFLAGS += -DCONFIG_GCD_SYNC_PROFILE=$(GCD_SYNC_PROFILE)
 GCCFLAGS += -DCONFIG_GCD_WORK_PRIORITY=$(GCD_WORK_PRIORITY)
@@ -862,6 +916,13 @@ GCCFLAGS += -DCONFIG_SCREEN_TCP_BUFFER_PROFILE=$(SCREEN_TCP_BUFFER_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_PROFILE=$(SCREEN_TIMESTAMP_PROFILE)
 GCCFLAGS += -DCONFIG_USB_HCD_PROFILE=$(USB_HCD_PROFILE)
 GCCFLAGS += -DCONFIG_NET_QUEUE_PROFILE=$(NET_QUEUE_PROFILE)
+GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_STAGE1=$(TCPIP_RX_BATCH_STAGE1)
+GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_TIMER_PROBE=$(TCPIP_RX_BATCH_TIMER_PROBE)
+GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_TIMER_MBOX_PROBE=$(TCPIP_RX_BATCH_TIMER_MBOX_PROBE)
+GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_STAGE3=$(TCPIP_RX_BATCH_STAGE3)
+GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_MAX_PACKETS=$(TCPIP_RX_BATCH_MAX_PACKETS)
+GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_TIMEOUT_US=$(TCPIP_RX_BATCH_TIMEOUT_US)
+GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_PROFILE=$(TCPIP_RX_BATCH_PROFILE)
 GCCFLAGS += -DCONFIG_CRYPTO_ENGINE_PROFILE=$(CRYPTO_ENGINE_PROFILE)
 GCCFLAGS += -DCARBOX_CRYPTO_OWNER_BOOST_PRIORITY=$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
 GCCFLAGS += -DCONFIG_SYS_PLL_OVERCLOCK=$(SYS_PLL_OVERCLOCK)

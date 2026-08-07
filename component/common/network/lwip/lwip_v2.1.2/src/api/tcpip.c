@@ -50,6 +50,43 @@
 #include "lwip/etharp.h"
 #include "netif/ethernet.h"
 
+#ifndef CONFIG_TCPIP_RX_BATCH_STAGE1
+#define CONFIG_TCPIP_RX_BATCH_STAGE1 0
+#endif
+
+#ifndef CONFIG_TCPIP_RX_BATCH_TIMER_PROBE
+#define CONFIG_TCPIP_RX_BATCH_TIMER_PROBE 0
+#endif
+
+#ifndef CONFIG_TCPIP_RX_BATCH_TIMER_MBOX_PROBE
+#define CONFIG_TCPIP_RX_BATCH_TIMER_MBOX_PROBE 0
+#endif
+
+#ifndef CONFIG_TCPIP_RX_BATCH_STAGE3
+#define CONFIG_TCPIP_RX_BATCH_STAGE3 0
+#endif
+
+#ifndef CONFIG_TCPIP_RX_BATCH_MAX_PACKETS
+#define CONFIG_TCPIP_RX_BATCH_MAX_PACKETS 8U
+#endif
+
+#ifndef CONFIG_TCPIP_RX_BATCH_TIMEOUT_US
+#define CONFIG_TCPIP_RX_BATCH_TIMEOUT_US 1000U
+#endif
+
+#ifndef CONFIG_TCPIP_RX_BATCH_PROFILE
+#define CONFIG_TCPIP_RX_BATCH_PROFILE 0
+#endif
+
+#if CONFIG_TCPIP_RX_BATCH_STAGE1 && !LWIP_TCPIP_CORE_LOCKING_INPUT
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+#if CONFIG_TCPIP_RX_BATCH_TIMER_PROBE
+#include "hal_timer.h"
+#endif
+#endif
+
 #ifndef CONFIG_NET_QUEUE_PROFILE
 #define CONFIG_NET_QUEUE_PROFILE 0
 #endif
@@ -70,6 +107,285 @@
 static tcpip_init_done_fn tcpip_init_done;
 static void *tcpip_init_done_arg;
 static sys_mbox_t tcpip_mbox;
+
+#if CONFIG_TCPIP_RX_BATCH_STAGE1 && !LWIP_TCPIP_CORE_LOCKING_INPUT
+#define TCPIP_RX_STAGE1_POOL_SIZE 128U
+#define TCPIP_RX_STAGE1_INVALID_INDEX 0xffffU
+#if CONFIG_TCPIP_RX_BATCH_MAX_PACKETS == 0 || \
+    CONFIG_TCPIP_RX_BATCH_MAX_PACKETS > TCPIP_RX_STAGE1_POOL_SIZE
+#error "CONFIG_TCPIP_RX_BATCH_MAX_PACKETS must be in range 1..128"
+#endif
+
+enum tcpip_rx_stage1_state {
+  TCPIP_RX_STAGE1_FREE = 0,
+  TCPIP_RX_STAGE1_QUEUED
+};
+
+struct tcpip_rx_stage1_msg {
+  struct tcpip_msg msg;
+  struct pbuf *p;
+  struct netif *netif;
+  netif_input_fn input_fn;
+  u32_t sequence;
+  u32_t enqueue_cycles;
+  u16_t batch_count;
+  u16_t next_free;
+  u16_t next_pending;
+  u8_t state;
+};
+
+static struct tcpip_rx_stage1_msg
+  tcpip_rx_stage1_pool[TCPIP_RX_STAGE1_POOL_SIZE];
+static u16_t tcpip_rx_stage1_free_head = TCPIP_RX_STAGE1_INVALID_INDEX;
+static u32_t tcpip_rx_stage1_sequence;
+static u32_t tcpip_rx_stage1_in_use;
+#if CONFIG_TCPIP_RX_BATCH_STAGE3
+static u16_t tcpip_rx_batch_head = TCPIP_RX_STAGE1_INVALID_INDEX;
+static u16_t tcpip_rx_batch_tail = TCPIP_RX_STAGE1_INVALID_INDEX;
+static volatile u32_t tcpip_rx_batch_count;
+
+static int
+tcpip_rx_batch_post_task_locked(u32_t trigger)
+{
+  u16_t head = tcpip_rx_batch_head;
+  u16_t tail = tcpip_rx_batch_tail;
+  u32_t count = tcpip_rx_batch_count;
+  struct tcpip_rx_stage1_msg *head_entry;
+  struct tcpip_msg *msg;
+
+  if (head == TCPIP_RX_STAGE1_INVALID_INDEX || count == 0U) {
+    return 1;
+  }
+  head_entry = &tcpip_rx_stage1_pool[head];
+  head_entry->batch_count = (u16_t)count;
+  head_entry->msg.type = TCPIP_MSG_INPKT_BATCH;
+  head_entry->msg.msg.inp_stage1 = head_entry;
+  msg = &head_entry->msg;
+  tcpip_rx_batch_head = TCPIP_RX_STAGE1_INVALID_INDEX;
+  tcpip_rx_batch_tail = TCPIP_RX_STAGE1_INVALID_INDEX;
+  tcpip_rx_batch_count = 0U;
+  if (xQueueSend(tcpip_mbox, &msg, 0) != pdPASS) {
+    tcpip_rx_batch_head = head;
+    tcpip_rx_batch_tail = tail;
+    tcpip_rx_batch_count = count;
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+    net_queue_profiler_rx_batch_post_fail(trigger);
+#endif
+    return 0;
+  }
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+  net_queue_profiler_rx_batch_post(trigger);
+#endif
+  return 1;
+}
+#endif
+
+#if CONFIG_TCPIP_RX_BATCH_TIMER_PROBE
+#if CONFIG_TCPIP_RX_BATCH_STAGE3
+#define TCPIP_RX_TIMER_PROBE_US CONFIG_TCPIP_RX_BATCH_TIMEOUT_US
+#else
+#define TCPIP_RX_TIMER_PROBE_US 1000U
+#endif
+static hal_timer_adapter_t tcpip_rx_timer_probe;
+static volatile u32_t tcpip_rx_timer_probe_armed;
+static volatile u32_t tcpip_rx_timer_probe_start_cycles;
+static u32_t tcpip_rx_timer_probe_available;
+static timer_id_t tcpip_rx_timer_probe_id = MaxGTimerNum;
+#if CONFIG_TCPIP_RX_BATCH_TIMER_MBOX_PROBE
+static struct tcpip_msg tcpip_rx_timer_probe_msg;
+#endif
+
+static void
+tcpip_rx_timer_probe_callback(void *arg)
+{
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+  u32_t elapsed_cycles = DWT->CYCCNT - tcpip_rx_timer_probe_start_cycles;
+  u32_t elapsed_us = SystemCoreClock != 0U ?
+    (u32_t)(((uint64_t)elapsed_cycles * 1000000U) / SystemCoreClock) : 0U;
+#endif
+#if CONFIG_TCPIP_RX_BATCH_TIMER_MBOX_PROBE || CONFIG_TCPIP_RX_BATCH_STAGE3
+  struct tcpip_msg *msg;
+  BaseType_t task_woken = pdFALSE;
+#endif
+
+  LWIP_UNUSED_ARG(arg);
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+  net_queue_profiler_rx_timer_fire(elapsed_us);
+#endif
+#if CONFIG_TCPIP_RX_BATCH_STAGE3
+  {
+    u16_t head = tcpip_rx_batch_head;
+    u16_t tail = tcpip_rx_batch_tail;
+    u32_t count = tcpip_rx_batch_count;
+
+  tcpip_rx_timer_probe_armed = 0U;
+  if (head != TCPIP_RX_STAGE1_INVALID_INDEX && count != 0U) {
+    struct tcpip_rx_stage1_msg *head_entry = &tcpip_rx_stage1_pool[head];
+
+    head_entry->batch_count = (u16_t)count;
+    head_entry->msg.type = TCPIP_MSG_INPKT_BATCH;
+    head_entry->msg.msg.inp_stage1 = head_entry;
+    msg = &head_entry->msg;
+    tcpip_rx_batch_head = TCPIP_RX_STAGE1_INVALID_INDEX;
+    tcpip_rx_batch_tail = TCPIP_RX_STAGE1_INVALID_INDEX;
+    tcpip_rx_batch_count = 0U;
+    if (xQueueSendFromISR(tcpip_mbox, &msg, &task_woken) == pdPASS) {
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+      net_queue_profiler_rx_batch_post(1U);
+#endif
+      portYIELD_FROM_ISR(task_woken);
+    } else {
+      tcpip_rx_batch_head = head;
+      tcpip_rx_batch_tail = tail;
+      tcpip_rx_batch_count = count;
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+      net_queue_profiler_rx_batch_post_fail(1U);
+#endif
+    }
+  } else {
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+    net_queue_profiler_rx_batch_timer_empty();
+#endif
+  }
+  }
+#elif CONFIG_TCPIP_RX_BATCH_TIMER_MBOX_PROBE
+  msg = &tcpip_rx_timer_probe_msg;
+  if (xQueueSendFromISR(tcpip_mbox, &msg, &task_woken) == pdPASS) {
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+    net_queue_profiler_rx_timer_mbox_post(task_woken != pdFALSE);
+#endif
+    portYIELD_FROM_ISR(task_woken);
+  } else {
+    tcpip_rx_timer_probe_armed = 0U;
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+    net_queue_profiler_rx_timer_mbox_fail();
+#endif
+  }
+#else
+  tcpip_rx_timer_probe_armed = 0U;
+#endif
+}
+
+static void
+tcpip_rx_timer_probe_arm_locked(void)
+{
+  if (tcpip_rx_timer_probe_available == 0U) {
+    return;
+  }
+  if (tcpip_rx_timer_probe_armed != 0U) {
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+    net_queue_profiler_rx_timer_skip();
+#endif
+    return;
+  }
+  tcpip_rx_timer_probe_armed = 1U;
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+  tcpip_rx_timer_probe_start_cycles = DWT->CYCCNT;
+  net_queue_profiler_rx_timer_arm();
+#endif
+  hal_timer_start_one_shot(&tcpip_rx_timer_probe, TCPIP_RX_TIMER_PROBE_US,
+                           tcpip_rx_timer_probe_callback, NULL);
+}
+
+static void
+tcpip_rx_timer_probe_init(void)
+{
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+#endif
+  tcpip_rx_timer_probe_id = hal_timer_allocate(NULL);
+  if (tcpip_rx_timer_probe_id >= MaxGTimerNum ||
+      hal_timer_init(&tcpip_rx_timer_probe, tcpip_rx_timer_probe_id) != HAL_OK) {
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+    net_queue_profiler_rx_timer_init((u32_t)tcpip_rx_timer_probe_id, 0U);
+#endif
+    LWIP_PLATFORM_DIAG(("[RXBATCH2] ERROR: no GTimer available; probe disabled\n"));
+    return;
+  }
+  tcpip_rx_timer_probe_available = 1U;
+#if CONFIG_TCPIP_RX_BATCH_TIMER_MBOX_PROBE
+  tcpip_rx_timer_probe_msg.type = TCPIP_MSG_RX_TIMER_PROBE;
+#endif
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+  net_queue_profiler_rx_timer_init((u32_t)tcpip_rx_timer_probe_id, 1U);
+#endif
+  LWIP_PLATFORM_DIAG(("[RXBATCH2] enabled timer=%u delay_us=%u; callback=%s\n",
+                      (unsigned)tcpip_rx_timer_probe_id,
+                      (unsigned)TCPIP_RX_TIMER_PROBE_US,
+#if CONFIG_TCPIP_RX_BATCH_STAGE3
+                      "batch-dispatch"
+#else
+                      "diagnostic-only"
+#endif
+                      ));
+}
+#endif
+
+static int
+tcpip_rx_stage1_eligible(const struct netif *inp)
+{
+  /* Stage 1 only replaces the WLAN mailbox envelope.  NCM and every other
+   * netif retain the original MEMP_TCPIP_MSG_INPKT path. */
+  return inp != NULL &&
+         ((inp->name[0] == 'a' && inp->name[1] == 'p') ||
+          (inp->name[0] == 'w' && inp->name[1] == 'l'));
+}
+
+static struct tcpip_rx_stage1_msg *
+tcpip_rx_stage1_alloc_locked(void)
+{
+  struct tcpip_rx_stage1_msg *entry;
+  u16_t index = tcpip_rx_stage1_free_head;
+
+  if (index == TCPIP_RX_STAGE1_INVALID_INDEX) {
+    return NULL;
+  }
+  entry = &tcpip_rx_stage1_pool[index];
+  tcpip_rx_stage1_free_head = entry->next_free;
+  entry->next_free = TCPIP_RX_STAGE1_INVALID_INDEX;
+  entry->state = TCPIP_RX_STAGE1_QUEUED;
+  tcpip_rx_stage1_in_use++;
+  return entry;
+}
+
+static void
+tcpip_rx_stage1_free_locked(struct tcpip_rx_stage1_msg *entry)
+{
+  u16_t index = (u16_t)(entry - tcpip_rx_stage1_pool);
+
+  entry->state = TCPIP_RX_STAGE1_FREE;
+  entry->next_free = tcpip_rx_stage1_free_head;
+  tcpip_rx_stage1_free_head = index;
+  if (tcpip_rx_stage1_in_use > 0U) {
+    tcpip_rx_stage1_in_use--;
+  }
+}
+
+static void
+tcpip_rx_stage1_init(void)
+{
+  u32_t i;
+
+  for (i = 0U; i < TCPIP_RX_STAGE1_POOL_SIZE; i++) {
+    tcpip_rx_stage1_pool[i].state = TCPIP_RX_STAGE1_FREE;
+    tcpip_rx_stage1_pool[i].next_pending = TCPIP_RX_STAGE1_INVALID_INDEX;
+    tcpip_rx_stage1_pool[i].next_free =
+      (i + 1U < TCPIP_RX_STAGE1_POOL_SIZE) ?
+      (u16_t)(i + 1U) : TCPIP_RX_STAGE1_INVALID_INDEX;
+  }
+  tcpip_rx_stage1_free_head = 0U;
+#if CONFIG_TCPIP_RX_BATCH_STAGE3
+  LWIP_PLATFORM_DIAG(("[RXBATCH3] enabled pool=%u max_packets=%u timeout_us=%u; pointer-only, no payload copy\n",
+                      (unsigned)TCPIP_RX_STAGE1_POOL_SIZE,
+                      (unsigned)CONFIG_TCPIP_RX_BATCH_MAX_PACKETS,
+                      (unsigned)CONFIG_TCPIP_RX_BATCH_TIMEOUT_US));
+#else
+  LWIP_PLATFORM_DIAG(("[RXBATCH1] enabled mode=single-immediate pool=%u; no aggregation, delay, or timer\n",
+                      (unsigned)TCPIP_RX_STAGE1_POOL_SIZE));
+#endif
+}
+#endif
 
 #if LWIP_TCPIP_CORE_LOCKING
 /** The global semaphore to lock the stack. */
@@ -244,6 +560,166 @@ tcpip_thread_handle_msg(struct tcpip_msg *msg)
 #endif /* !LWIP_TCPIP_CORE_LOCKING */
 
 #if !LWIP_TCPIP_CORE_LOCKING_INPUT
+    case TCPIP_MSG_INPKT_BATCH:
+#if CONFIG_TCPIP_RX_BATCH_STAGE3
+    {
+      struct tcpip_rx_stage1_msg *head_entry =
+        (struct tcpip_rx_stage1_msg *)msg->msg.inp_stage1;
+      u16_t index;
+      u32_t packets;
+      u32_t processed = 0U;
+      u32_t pending_remaining;
+      u32_t oldest_age_us = 0U;
+
+      if (head_entry == NULL ||
+          (uintptr_t)head_entry < (uintptr_t)&tcpip_rx_stage1_pool[0] ||
+          (uintptr_t)head_entry >=
+            (uintptr_t)&tcpip_rx_stage1_pool[TCPIP_RX_STAGE1_POOL_SIZE]) {
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+        net_queue_profiler_rx_stage1_state_error();
+#endif
+        LWIP_ASSERT("Invalid sealed RX batch", 0);
+        break;
+      }
+      index = (u16_t)(head_entry - tcpip_rx_stage1_pool);
+      packets = head_entry->batch_count;
+      if (packets == 0U || packets > CONFIG_TCPIP_RX_BATCH_MAX_PACKETS) {
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+        net_queue_profiler_rx_stage1_state_error();
+#endif
+        LWIP_ASSERT("Invalid sealed RX batch count", 0);
+        break;
+      }
+      taskENTER_CRITICAL();
+      pending_remaining = tcpip_rx_batch_count;
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+      if (SystemCoreClock != 0U) {
+        u32_t age_cycles = DWT->CYCCNT -
+          head_entry->enqueue_cycles;
+        oldest_age_us = (u32_t)(((uint64_t)age_cycles * 1000000U) /
+                                SystemCoreClock);
+      }
+#endif
+      taskEXIT_CRITICAL();
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+      net_queue_profiler_rx_batch_dispatch(packets, oldest_age_us,
+                                           pending_remaining);
+#else
+      LWIP_UNUSED_ARG(packets);
+      LWIP_UNUSED_ARG(oldest_age_us);
+      LWIP_UNUSED_ARG(pending_remaining);
+#endif
+
+      while (index != TCPIP_RX_STAGE1_INVALID_INDEX && processed < packets) {
+        struct tcpip_rx_stage1_msg *entry = &tcpip_rx_stage1_pool[index];
+        u16_t next = entry->next_pending;
+        struct pbuf *p = entry->p;
+        struct netif *netif = entry->netif;
+        u32_t sequence = entry->sequence;
+        u32_t in_use;
+
+        if (entry->state != TCPIP_RX_STAGE1_QUEUED) {
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+          net_queue_profiler_rx_stage1_state_error();
+#endif
+          LWIP_ASSERT("Invalid sealed RX entry state", 0);
+          break;
+        }
+
+#if CONFIG_NET_QUEUE_PROFILE
+        net_queue_profiler_rx_consume(tcpip_queue_profile_netif_id(netif),
+                                      p->tot_len,
+                                      uxQueueMessagesWaiting(tcpip_mbox));
+#endif
+        if (entry->input_fn(p, netif) != ERR_OK) {
+          pbuf_free(p);
+        }
+        taskENTER_CRITICAL();
+        tcpip_rx_stage1_free_locked(entry);
+        in_use = tcpip_rx_stage1_in_use;
+        taskEXIT_CRITICAL();
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+        net_queue_profiler_rx_stage1_consume(sequence, in_use);
+#else
+        LWIP_UNUSED_ARG(sequence);
+        LWIP_UNUSED_ARG(in_use);
+#endif
+        index = next;
+        processed++;
+      }
+      if (processed != packets || index != TCPIP_RX_STAGE1_INVALID_INDEX) {
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+        net_queue_profiler_rx_stage1_state_error();
+#endif
+        LWIP_ASSERT("Sealed RX batch length mismatch", 0);
+      }
+      break;
+    }
+#else
+      LWIP_ASSERT("RX batch message while disabled", 0);
+      break;
+#endif
+
+    case TCPIP_MSG_RX_TIMER_PROBE:
+#if CONFIG_TCPIP_RX_BATCH_TIMER_PROBE && CONFIG_TCPIP_RX_BATCH_TIMER_MBOX_PROBE
+      /* Stage 2B deliberately carries no packet. It validates only that a
+       * one-shot GTimer ISR can wake and dispatch through tcpip_mbox. */
+      tcpip_rx_timer_probe_armed = 0U;
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+      net_queue_profiler_rx_timer_mbox_dispatch();
+#endif
+#else
+      LWIP_ASSERT("RX timer probe message while disabled", 0);
+#endif
+      break;
+
+    case TCPIP_MSG_INPKT_STAGE1:
+#if CONFIG_TCPIP_RX_BATCH_STAGE1
+    {
+      struct tcpip_rx_stage1_msg *entry =
+        (struct tcpip_rx_stage1_msg *)msg->msg.inp_stage1;
+      struct pbuf *p;
+      struct netif *netif;
+      netif_input_fn input_fn;
+      u32_t sequence;
+      u32_t in_use;
+
+      if (entry == NULL || entry->state != TCPIP_RX_STAGE1_QUEUED) {
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+        net_queue_profiler_rx_stage1_state_error();
+#endif
+        LWIP_ASSERT("Invalid stage-1 RX message", 0);
+        break;
+      }
+      p = entry->p;
+      netif = entry->netif;
+      input_fn = entry->input_fn;
+      sequence = entry->sequence;
+#if CONFIG_NET_QUEUE_PROFILE
+      net_queue_profiler_rx_consume(tcpip_queue_profile_netif_id(netif),
+                                    p->tot_len,
+                                    uxQueueMessagesWaiting(tcpip_mbox));
+#endif
+      if (input_fn(p, netif) != ERR_OK) {
+        pbuf_free(p);
+      }
+      taskENTER_CRITICAL();
+      tcpip_rx_stage1_free_locked(entry);
+      in_use = tcpip_rx_stage1_in_use;
+      taskEXIT_CRITICAL();
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+      net_queue_profiler_rx_stage1_consume(sequence, in_use);
+#else
+      LWIP_UNUSED_ARG(sequence);
+      LWIP_UNUSED_ARG(in_use);
+#endif
+      break;
+    }
+#else
+      LWIP_ASSERT("Stage-1 RX message while disabled", 0);
+      break;
+#endif
+
     case TCPIP_MSG_INPKT:
       LWIP_DEBUGF(TCPIP_DEBUG, ("tcpip_thread: PACKET %p\n", (void *)msg));
 #if CONFIG_NET_QUEUE_PROFILE
@@ -335,6 +811,114 @@ tcpip_inpkt(struct pbuf *p, struct netif *inp, netif_input_fn input_fn)
 #endif
 
   LWIP_ASSERT("Invalid mbox", sys_mbox_valid_val(tcpip_mbox));
+
+#if CONFIG_TCPIP_RX_BATCH_STAGE1
+  if (tcpip_rx_stage1_eligible(inp)) {
+    struct tcpip_rx_stage1_msg *entry;
+    struct tcpip_msg *stage1_msg;
+    u32_t sequence;
+    u32_t in_use;
+
+    taskENTER_CRITICAL();
+    entry = tcpip_rx_stage1_alloc_locked();
+    if (entry != NULL) {
+      sequence = ++tcpip_rx_stage1_sequence;
+      entry->p = p;
+      entry->netif = inp;
+      entry->input_fn = input_fn;
+      entry->sequence = sequence;
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+      entry->enqueue_cycles = DWT->CYCCNT;
+#else
+      entry->enqueue_cycles = 0U;
+#endif
+      entry->next_pending = TCPIP_RX_STAGE1_INVALID_INDEX;
+      entry->msg.type = TCPIP_MSG_INPKT_STAGE1;
+      entry->msg.msg.inp_stage1 = entry;
+      stage1_msg = &entry->msg;
+#if CONFIG_NET_QUEUE_PROFILE
+      net_queue_profiler_rx_post_begin(netq_if_id);
+#endif
+#if CONFIG_TCPIP_RX_BATCH_STAGE3
+      if (tcpip_rx_timer_probe_available != 0U) {
+        u16_t entry_index = (u16_t)(entry - tcpip_rx_stage1_pool);
+
+        if (tcpip_rx_batch_tail == TCPIP_RX_STAGE1_INVALID_INDEX) {
+          tcpip_rx_batch_head = entry_index;
+        } else {
+          tcpip_rx_stage1_pool[tcpip_rx_batch_tail].next_pending = entry_index;
+        }
+        tcpip_rx_batch_tail = entry_index;
+        tcpip_rx_batch_count++;
+        in_use = tcpip_rx_stage1_in_use;
+#if CONFIG_NET_QUEUE_PROFILE
+        net_queue_profiler_rx_post_commit(
+          netq_if_id, netq_bytes, uxQueueMessagesWaiting(tcpip_mbox));
+#endif
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+        net_queue_profiler_rx_stage1_post(sequence, in_use);
+        net_queue_profiler_rx_batch_enqueue(tcpip_rx_batch_count);
+#else
+        LWIP_UNUSED_ARG(in_use);
+#endif
+        if (tcpip_rx_batch_count >= CONFIG_TCPIP_RX_BATCH_MAX_PACKETS) {
+          (void)tcpip_rx_batch_post_task_locked(0U);
+        }
+        tcpip_rx_timer_probe_arm_locked();
+        taskEXIT_CRITICAL();
+        return ERR_OK;
+      }
+#endif
+      if (xQueueSend(tcpip_mbox, &stage1_msg, 0) == pdPASS) {
+#if CONFIG_TCPIP_RX_BATCH_TIMER_PROBE && !CONFIG_TCPIP_RX_BATCH_STAGE3
+        tcpip_rx_timer_probe_arm_locked();
+#endif
+        in_use = tcpip_rx_stage1_in_use;
+#if CONFIG_NET_QUEUE_PROFILE
+        net_queue_profiler_rx_post_commit(
+          netq_if_id, netq_bytes, uxQueueMessagesWaiting(tcpip_mbox));
+#endif
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+        net_queue_profiler_rx_stage1_post(sequence, in_use);
+#else
+        LWIP_UNUSED_ARG(in_use);
+#endif
+        taskEXIT_CRITICAL();
+        return ERR_OK;
+      }
+#if CONFIG_NET_QUEUE_PROFILE
+      net_queue_profiler_rx_post_abort(netq_if_id);
+#endif
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+      net_queue_profiler_rx_stage1_post_fail();
+#endif
+      /* The producer is still inside the critical section, so no later
+       * stage-1 message can have consumed this sequence value yet.  Reclaim
+       * it to keep a queue-full failure from looking like message loss. */
+      tcpip_rx_stage1_sequence--;
+      tcpip_rx_stage1_free_locked(entry);
+      taskEXIT_CRITICAL();
+      return ERR_MEM;
+    }
+#if CONFIG_TCPIP_RX_BATCH_STAGE3
+    /* Preserve FIFO order if the fixed entry pool is ever exhausted: queue
+     * the older accumulated packets before falling back to lwIP's envelope. */
+    if (tcpip_rx_batch_count != 0U) {
+      if (!tcpip_rx_batch_post_task_locked(0U)) {
+        taskEXIT_CRITICAL();
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+        net_queue_profiler_rx_stage1_pool_fallback();
+#endif
+        return ERR_MEM;
+      }
+    }
+#endif
+    taskEXIT_CRITICAL();
+#if CONFIG_TCPIP_RX_BATCH_PROFILE
+    net_queue_profiler_rx_stage1_pool_fallback();
+#endif
+  }
+#endif
 
   msg = (struct tcpip_msg *)memp_malloc(MEMP_TCPIP_MSG_INPKT);
   if (msg == NULL) {
@@ -706,6 +1290,12 @@ tcpip_init(tcpip_init_done_fn initfunc, void *arg)
   if (sys_mbox_new(&tcpip_mbox, TCPIP_MBOX_SIZE) != ERR_OK) {
     LWIP_ASSERT("failed to create tcpip_thread mbox", 0);
   }
+#if CONFIG_TCPIP_RX_BATCH_STAGE1 && !LWIP_TCPIP_CORE_LOCKING_INPUT
+  tcpip_rx_stage1_init();
+#if CONFIG_TCPIP_RX_BATCH_TIMER_PROBE
+  tcpip_rx_timer_probe_init();
+#endif
+#endif
 #if LWIP_TCPIP_CORE_LOCKING
   if (sys_mutex_new(&lock_tcpip_core) != ERR_OK) {
     LWIP_ASSERT("failed to create lock_tcpip_core", 0);

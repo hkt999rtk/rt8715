@@ -53,6 +53,9 @@
 #include "lwip/dns.h"
 #include "lwip/mld6.h"
 #include "lwip/priv/tcpip_priv.h"
+#if defined(CONFIG_PLATFORM_8195BHP)
+#include "lwip_intf.h"
+#endif
 
 #include <string.h>
 
@@ -109,6 +112,78 @@ lwip_netconn_is_deallocated_msg(void *msg)
 const u8_t netconn_aborted = 0;
 const u8_t netconn_reset = 0;
 const u8_t netconn_closed = 0;
+
+#ifndef CONFIG_TCP_SOCKET_HANDOFF_PROFILE
+#define CONFIG_TCP_SOCKET_HANDOFF_PROFILE 0
+#endif
+
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_SOCKET_HANDOFF_PROFILE
+#define TCP_SOCKET_HANDOFF_WINDOW_US 10000000U
+
+struct tcp_socket_handoff_profile {
+  u32_t window_start_us;
+  u32_t calls;
+  u32_t data_calls;
+  u32_t bytes;
+  u32_t post_fail;
+  u32_t post_us;
+  u32_t post_max_us;
+  u32_t event_us;
+  u32_t event_max_us;
+};
+
+static struct tcp_socket_handoff_profile tcp_socket_handoff_profile;
+
+static void
+tcp_socket_handoff_profile_record(u16_t len, u32_t post_us,
+                                  u32_t event_us, int post_failed)
+{
+  struct tcp_socket_handoff_profile *s = &tcp_socket_handoff_profile;
+  u32_t now = rltk_tcp_perf_now_us();
+  u32_t window;
+
+  if (s->window_start_us == 0U) {
+    s->window_start_us = now;
+  }
+  s->calls++;
+  if (len != 0U) {
+    s->data_calls++;
+    s->bytes += len;
+  }
+  if (post_failed) {
+    s->post_fail++;
+  }
+  s->post_us += post_us;
+  if (post_us > s->post_max_us) {
+    s->post_max_us = post_us;
+  }
+  s->event_us += event_us;
+  if (event_us > s->event_max_us) {
+    s->event_max_us = event_us;
+  }
+
+  window = now - s->window_start_us;
+  if (window >= TCP_SOCKET_HANDOFF_WINDOW_US) {
+    u32_t calls = s->calls != 0U ? s->calls : 1U;
+
+    LWIP_PLATFORM_DIAG(("[TCPRXSOCK] window_us=%u calls/data=%u/%u bytes=%u "
+                        "payload_copy=0B post_fail=%u "
+                        "recvmbox_post_us total/avg/max=%u/%u/%u "
+                        "rcvplus_event_us total/avg/max=%u/%u/%u\n",
+                        (unsigned int)window, (unsigned int)s->calls,
+                        (unsigned int)s->data_calls, (unsigned int)s->bytes,
+                        (unsigned int)s->post_fail,
+                        (unsigned int)s->post_us,
+                        (unsigned int)(s->post_us / calls),
+                        (unsigned int)s->post_max_us,
+                        (unsigned int)s->event_us,
+                        (unsigned int)(s->event_us / calls),
+                        (unsigned int)s->event_max_us));
+    memset(s, 0, sizeof(*s));
+    s->window_start_us = now;
+  }
+}
+#endif
 
 /** Translate an error to a unique void* passed via an mbox */
 static void *
@@ -295,6 +370,11 @@ recv_tcp(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err)
   struct netconn *conn;
   u16_t len;
   void *msg;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_SOCKET_HANDOFF_PROFILE
+  u32_t phase_start_us;
+  u32_t post_us;
+  u32_t event_us = 0U;
+#endif
 
   LWIP_UNUSED_ARG(pcb);
   LWIP_ASSERT("recv_tcp must have a pcb argument", pcb != NULL);
@@ -328,16 +408,36 @@ recv_tcp(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err)
     len = 0;
   }
 
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_SOCKET_HANDOFF_PROFILE
+  phase_start_us = rltk_tcp_perf_now_us();
+#endif
   if (sys_mbox_trypost(&conn->recvmbox, msg) != ERR_OK) {
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_SOCKET_HANDOFF_PROFILE
+    post_us = rltk_tcp_perf_now_us() - phase_start_us;
+    tcp_socket_handoff_profile_record(len, post_us, 0U, 1);
+#endif
     /* don't deallocate p: it is presented to us later again from tcp_fasttmr! */
     return ERR_MEM;
   } else {
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_SOCKET_HANDOFF_PROFILE
+    post_us = rltk_tcp_perf_now_us() - phase_start_us;
+#endif
 #if LWIP_SO_RCVBUF
     SYS_ARCH_INC(conn->recv_avail, len);
 #endif /* LWIP_SO_RCVBUF */
     /* Register event with callback */
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_SOCKET_HANDOFF_PROFILE
+    phase_start_us = rltk_tcp_perf_now_us();
+#endif
     API_EVENT(conn, NETCONN_EVT_RCVPLUS, len);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_SOCKET_HANDOFF_PROFILE
+    event_us = rltk_tcp_perf_now_us() - phase_start_us;
+#endif
   }
+
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_SOCKET_HANDOFF_PROFILE
+  tcp_socket_handoff_profile_record(len, post_us, event_us, 0);
+#endif
 
   return ERR_OK;
 }
