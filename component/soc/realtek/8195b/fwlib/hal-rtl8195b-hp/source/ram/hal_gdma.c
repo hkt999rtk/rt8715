@@ -30,6 +30,10 @@
 #include "hal_cache.h"
 #include "memory.h"
 
+#ifndef CONFIG_GDMA_RESERVE_MULTIBLOCK_CHANNELS
+#define CONFIG_GDMA_RESERVE_MULTIBLOCK_CHANNELS 0
+#endif
+
 /**
  *   \addtogroup hs_hal_gdma GDMA
  *   @{
@@ -47,10 +51,12 @@ const hal_gdma_chnl_t gdma_chnl_option[] = {
         {1,2},
         {0,3},
         {1,3},
+#if !CONFIG_GDMA_RESERVE_MULTIBLOCK_CHANNELS
         {0,4},
         {1,4},
         {0,5},
         {1,5},
+#endif
         {0xff,0}    // end
 };
 
@@ -359,4 +365,3 @@ void hal_gdma_chnl_free (phal_gdma_adaptor_t phal_gdma_adaptor)
 /** *@} */ /* End of group hs_hal_gdma_ram_func */
 
 /** *@} */ /* End of group hs_hal_gdma */
-

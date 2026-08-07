@@ -66,6 +66,11 @@
 #endif
 
 #include <string.h>
+#include <stdint.h>
+
+#ifndef CONFIG_SOCKET_RECV_PROFILE
+#define CONFIG_SOCKET_RECV_PROFILE 0
+#endif
 
 #ifdef LWIP_HOOK_FILENAME
 #include LWIP_HOOK_FILENAME
@@ -1024,6 +1029,328 @@ lwip_listen(int s, int backlog)
 
 #if LWIP_TCP
 #if defined(CONFIG_PLATFORM_8195BHP)
+#if CONFIG_SOCKET_RECV_PROFILE
+#define LWIP_RECV_PROFILE_WINDOW_US       10000000U
+#define LWIP_RECV_PROFILE_LINK_BLOCKS     16U
+#define LWIP_RECV_PROFILE_DMA_MIN_LEN     1024U
+#define LWIP_RECV_PROFILE_CACHE_LINE      32U
+#define LWIP_RECV_PROFILE_SIZE_BINS       6U
+
+struct lwip_recv_profile_sample {
+  u32_t requested;
+  u32_t wall_start_us;
+  u32_t wait_calls;
+  u32_t wait_us;
+  u32_t wait_max_us;
+  u32_t copy_calls;
+  u32_t copy_us;
+  u32_t copy_max_us;
+  u32_t pbuf_groups;
+  u32_t lastdata_hits;
+  u32_t segments;
+  u32_t segment_bytes;
+  u32_t chain_max;
+  u32_t src_align[4];
+  u32_t dst_align[4];
+  u32_t same_align;
+  u32_t eligible_blocks;
+  u32_t eligible_bytes;
+  u32_t chain_linked_groups;
+  u32_t chain_linked_blocks;
+  u32_t chain_linked_bytes;
+  u32_t chain_linked_batches;
+  u32_t linked_groups;
+  u32_t linked_blocks;
+  u32_t linked_bytes;
+  u32_t linked_batches;
+};
+
+struct lwip_recv_profile_stats {
+  u32_t window_start_us;
+  u32_t calls;
+  u32_t ok;
+  u32_t zero;
+  u32_t errors;
+  u32_t full;
+  u32_t requested_bytes;
+  u32_t returned_bytes;
+  u32_t requested_max;
+  u32_t returned_max;
+  u32_t wall_us;
+  u32_t wall_max_us;
+  u32_t wait_calls;
+  u32_t wait_us;
+  u32_t wait_max_us;
+  u32_t copy_calls;
+  u32_t copy_us;
+  u32_t copy_max_us;
+  u32_t pbuf_groups;
+  u32_t lastdata_hits;
+  u32_t segments;
+  u32_t segment_bytes;
+  u32_t chain_max;
+  u32_t src_align[4];
+  u32_t dst_align[4];
+  u32_t same_align;
+  u32_t chain_linked_groups;
+  u32_t chain_linked_blocks;
+  u32_t chain_linked_bytes;
+  u32_t chain_linked_batches;
+  u32_t linked_groups;
+  u32_t linked_blocks;
+  u32_t linked_bytes;
+  u32_t linked_batches;
+  u32_t size_calls[LWIP_RECV_PROFILE_SIZE_BINS];
+  u32_t size_bytes[LWIP_RECV_PROFILE_SIZE_BINS];
+};
+
+static struct lwip_recv_profile_stats lwip_recv_profile;
+
+/* Do not call the wrapped memset() while holding SYS_ARCH_PROTECT: the
+ * application memory profiler has its own critical section.  Volatile byte
+ * stores also guarantee that the compiler cannot fold this back into memset. */
+static void
+lwip_recv_profile_zero_volatile(void *ptr, size_t len)
+{
+  volatile u8_t *p = (volatile u8_t *)ptr;
+
+  while (len-- != 0U) {
+    *p++ = 0U;
+  }
+}
+
+static u32_t
+lwip_recv_profile_size_bin(u32_t len)
+{
+  if (len < 1024U) {
+    return 0U;
+  }
+  if (len < 4096U) {
+    return 1U;
+  }
+  if (len < 16384U) {
+    return 2U;
+  }
+  if (len < 32768U) {
+    return 3U;
+  }
+  if (len < 65536U) {
+    return 4U;
+  }
+  return 5U;
+}
+
+/* Estimate the bytes that the board-validated GDMA path could safely copy.
+ * The destination edge remains on the CPU so cache invalidation cannot touch
+ * caller bytes outside recv()'s range.  Source and destination must reach
+ * four-byte alignment after applying the same prefix. */
+static u32_t
+lwip_recv_profile_dma_body(const void *dst, const void *src, u32_t len)
+{
+  uintptr_t dst_addr = (uintptr_t)dst;
+  uintptr_t src_addr = (uintptr_t)src;
+  u32_t prefix = (u32_t)((LWIP_RECV_PROFILE_CACHE_LINE -
+                    (dst_addr & (LWIP_RECV_PROFILE_CACHE_LINE - 1U))) &
+                   (LWIP_RECV_PROFILE_CACHE_LINE - 1U));
+  u32_t body;
+
+  if (prefix >= len || ((src_addr + prefix) & 3U) != 0U) {
+    return 0U;
+  }
+  body = (len - prefix) & ~(LWIP_RECV_PROFILE_CACHE_LINE - 1U);
+  return body >= LWIP_RECV_PROFILE_DMA_MIN_LEN ? body : 0U;
+}
+
+static void
+lwip_recv_profile_init_sample(struct lwip_recv_profile_sample *sample,
+                              size_t requested)
+{
+  lwip_recv_profile_zero_volatile(sample, sizeof(*sample));
+  sample->requested = requested > 0xFFFFFFFFUL ? 0xFFFFFFFFUL : (u32_t)requested;
+  sample->wall_start_us = rltk_tcp_perf_now_us();
+}
+
+static void
+lwip_recv_profile_commit(struct lwip_recv_profile_sample *sample,
+                         ssize_t result)
+{
+  struct lwip_recv_profile_stats snapshot;
+  u32_t now = rltk_tcp_perf_now_us();
+  u32_t wall_us = now - sample->wall_start_us;
+  u32_t returned = result > 0 ? (u32_t)result : 0U;
+  u32_t bin = lwip_recv_profile_size_bin(returned);
+  u32_t window;
+  int report = 0;
+  SYS_ARCH_DECL_PROTECT(lev);
+
+  SYS_ARCH_PROTECT(lev);
+  if (lwip_recv_profile.window_start_us == 0U) {
+    lwip_recv_profile.window_start_us = now;
+  }
+  lwip_recv_profile.calls++;
+  if (result > 0) {
+    lwip_recv_profile.ok++;
+  } else if (result == 0) {
+    lwip_recv_profile.zero++;
+  } else {
+    lwip_recv_profile.errors++;
+  }
+  if (result >= 0 && returned == sample->requested) {
+    lwip_recv_profile.full++;
+  }
+  lwip_recv_profile.requested_bytes += sample->requested;
+  lwip_recv_profile.returned_bytes += returned;
+  if (sample->requested > lwip_recv_profile.requested_max) {
+    lwip_recv_profile.requested_max = sample->requested;
+  }
+  if (returned > lwip_recv_profile.returned_max) {
+    lwip_recv_profile.returned_max = returned;
+  }
+  lwip_recv_profile.wall_us += wall_us;
+  if (wall_us > lwip_recv_profile.wall_max_us) {
+    lwip_recv_profile.wall_max_us = wall_us;
+  }
+  lwip_recv_profile.wait_calls += sample->wait_calls;
+  lwip_recv_profile.wait_us += sample->wait_us;
+  if (sample->wait_max_us > lwip_recv_profile.wait_max_us) {
+    lwip_recv_profile.wait_max_us = sample->wait_max_us;
+  }
+  lwip_recv_profile.copy_calls += sample->copy_calls;
+  lwip_recv_profile.copy_us += sample->copy_us;
+  if (sample->copy_max_us > lwip_recv_profile.copy_max_us) {
+    lwip_recv_profile.copy_max_us = sample->copy_max_us;
+  }
+  lwip_recv_profile.pbuf_groups += sample->pbuf_groups;
+  lwip_recv_profile.lastdata_hits += sample->lastdata_hits;
+  lwip_recv_profile.segments += sample->segments;
+  lwip_recv_profile.segment_bytes += sample->segment_bytes;
+  if (sample->chain_max > lwip_recv_profile.chain_max) {
+    lwip_recv_profile.chain_max = sample->chain_max;
+  }
+  lwip_recv_profile.src_align[0] += sample->src_align[0];
+  lwip_recv_profile.src_align[1] += sample->src_align[1];
+  lwip_recv_profile.src_align[2] += sample->src_align[2];
+  lwip_recv_profile.src_align[3] += sample->src_align[3];
+  lwip_recv_profile.dst_align[0] += sample->dst_align[0];
+  lwip_recv_profile.dst_align[1] += sample->dst_align[1];
+  lwip_recv_profile.dst_align[2] += sample->dst_align[2];
+  lwip_recv_profile.dst_align[3] += sample->dst_align[3];
+  lwip_recv_profile.same_align += sample->same_align;
+  lwip_recv_profile.chain_linked_groups += sample->chain_linked_groups;
+  lwip_recv_profile.chain_linked_blocks += sample->chain_linked_blocks;
+  lwip_recv_profile.chain_linked_bytes += sample->chain_linked_bytes;
+  lwip_recv_profile.chain_linked_batches += sample->chain_linked_batches;
+  /* This is an upper bound for an implementation which first gathers all
+   * pbufs returned by one recv() call, then submits up to 16 descriptors. */
+  if (sample->eligible_blocks >= 2U) {
+    lwip_recv_profile.linked_groups++;
+    lwip_recv_profile.linked_blocks += sample->eligible_blocks;
+    lwip_recv_profile.linked_bytes += sample->eligible_bytes;
+    lwip_recv_profile.linked_batches +=
+      (sample->eligible_blocks + LWIP_RECV_PROFILE_LINK_BLOCKS - 1U) /
+      LWIP_RECV_PROFILE_LINK_BLOCKS;
+  }
+  lwip_recv_profile.size_calls[bin]++;
+  lwip_recv_profile.size_bytes[bin] += returned;
+
+  window = now - lwip_recv_profile.window_start_us;
+  if (window >= LWIP_RECV_PROFILE_WINDOW_US) {
+    snapshot = lwip_recv_profile;
+    lwip_recv_profile_zero_volatile(&lwip_recv_profile,
+                                    sizeof(lwip_recv_profile));
+    lwip_recv_profile.window_start_us = now;
+    report = 1;
+  }
+  SYS_ARCH_UNPROTECT(lev);
+
+  if (report) {
+    u32_t calls = snapshot.calls != 0U ? snapshot.calls : 1U;
+    u32_t segments = snapshot.segments != 0U ? snapshot.segments : 1U;
+    u32_t groups = snapshot.pbuf_groups != 0U ? snapshot.pbuf_groups : 1U;
+    u32_t wait_calls = snapshot.wait_calls != 0U ? snapshot.wait_calls : 1U;
+    u32_t copy_calls = snapshot.copy_calls != 0U ? snapshot.copy_calls : 1U;
+    u32_t coverage_x10 = snapshot.segment_bytes != 0U ?
+      (u32_t)(((uint64_t)snapshot.linked_bytes * 1000ULL) /
+              snapshot.segment_bytes) : 0U;
+    u32_t chain_coverage_x10 = snapshot.segment_bytes != 0U ?
+      (u32_t)(((uint64_t)snapshot.chain_linked_bytes * 1000ULL) /
+              snapshot.segment_bytes) : 0U;
+
+    LWIP_PLATFORM_DIAG(("[RECVPROF] window_us=%u calls=%u ok/zero/error/full=%u/%u/%u/%u "
+                        "request_avg/max=%u/%uB return_avg/max=%u/%uB\n",
+                        (unsigned int)window, (unsigned int)snapshot.calls,
+                        (unsigned int)snapshot.ok, (unsigned int)snapshot.zero,
+                        (unsigned int)snapshot.errors, (unsigned int)snapshot.full,
+                        (unsigned int)(snapshot.requested_bytes / calls),
+                        (unsigned int)snapshot.requested_max,
+                        (unsigned int)(snapshot.returned_bytes / calls),
+                        (unsigned int)snapshot.returned_max));
+    LWIP_PLATFORM_DIAG(("[RECVPROF] wall_us avg/max=%u/%u wait=%u avg/max=%u/%u "
+                        "copy=%u avg/max=%u/%u\n",
+                        (unsigned int)(snapshot.wall_us / calls),
+                        (unsigned int)snapshot.wall_max_us,
+                        (unsigned int)snapshot.wait_calls,
+                        (unsigned int)(snapshot.wait_us / wait_calls),
+                        (unsigned int)snapshot.wait_max_us,
+                        (unsigned int)snapshot.copy_calls,
+                        (unsigned int)(snapshot.copy_us / copy_calls),
+                        (unsigned int)snapshot.copy_max_us));
+    LWIP_PLATFORM_DIAG(("[RECVPROF] pbuf groups/segments=%u/%u lastdata_hits=%u "
+                        "seg_per_call_x100=%u "
+                        "seg_per_group_x100=%u chain_max=%u seg_len_avg=%uB\n",
+                        (unsigned int)snapshot.pbuf_groups,
+                        (unsigned int)snapshot.segments,
+                        (unsigned int)snapshot.lastdata_hits,
+                        (unsigned int)((snapshot.segments * 100U) / calls),
+                        (unsigned int)((snapshot.segments * 100U) / groups),
+                        (unsigned int)snapshot.chain_max,
+                        (unsigned int)(snapshot.segment_bytes / segments)));
+    LWIP_PLATFORM_DIAG(("[RECVPROF] align src_mod4=%u/%u/%u/%u dst_mod4=%u/%u/%u/%u "
+                        "same_mod4=%u/%u\n",
+                        (unsigned int)snapshot.src_align[0],
+                        (unsigned int)snapshot.src_align[1],
+                        (unsigned int)snapshot.src_align[2],
+                        (unsigned int)snapshot.src_align[3],
+                        (unsigned int)snapshot.dst_align[0],
+                        (unsigned int)snapshot.dst_align[1],
+                        (unsigned int)snapshot.dst_align[2],
+                        (unsigned int)snapshot.dst_align[3],
+                        (unsigned int)snapshot.same_align,
+                        (unsigned int)snapshot.segments));
+    LWIP_PLATFORM_DIAG(("[RECVPROF] linked_chain groups/blocks/bytes/batches16=%u/%u/%u/%u "
+                        "coverage=%u.%u%%\n",
+                        (unsigned int)snapshot.chain_linked_groups,
+                        (unsigned int)snapshot.chain_linked_blocks,
+                        (unsigned int)snapshot.chain_linked_bytes,
+                        (unsigned int)snapshot.chain_linked_batches,
+                        (unsigned int)(chain_coverage_x10 / 10U),
+                        (unsigned int)(chain_coverage_x10 % 10U)));
+    LWIP_PLATFORM_DIAG(("[RECVPROF] linked_gather calls/blocks/bytes/batches16=%u/%u/%u/%u "
+                        "coverage=%u.%u%%\n",
+                        (unsigned int)snapshot.linked_groups,
+                        (unsigned int)snapshot.linked_blocks,
+                        (unsigned int)snapshot.linked_bytes,
+                        (unsigned int)snapshot.linked_batches,
+                        (unsigned int)(coverage_x10 / 10U),
+                        (unsigned int)(coverage_x10 % 10U)));
+    LWIP_PLATFORM_DIAG(("[RECVPROF] return_bins <1K/1-4K/4-16K/16-32K/32-64K/>=64K "
+                        "calls=%u/%u/%u/%u/%u/%u bytes=%u/%u/%u/%u/%u/%u\n",
+                        (unsigned int)snapshot.size_calls[0],
+                        (unsigned int)snapshot.size_calls[1],
+                        (unsigned int)snapshot.size_calls[2],
+                        (unsigned int)snapshot.size_calls[3],
+                        (unsigned int)snapshot.size_calls[4],
+                        (unsigned int)snapshot.size_calls[5],
+                        (unsigned int)snapshot.size_bytes[0],
+                        (unsigned int)snapshot.size_bytes[1],
+                        (unsigned int)snapshot.size_bytes[2],
+                        (unsigned int)snapshot.size_bytes[3],
+                        (unsigned int)snapshot.size_bytes[4],
+                        (unsigned int)snapshot.size_bytes[5]));
+  }
+}
+#endif /* CONFIG_SOCKET_RECV_PROFILE */
+
 /*
  * Copy only TCP socket payloads through GDMA. pbuf_copy_partial() is also
  * used by small DNS/DHCP headers and TCP output, where global DMA routing
@@ -1033,9 +1360,18 @@ lwip_listen(int s, int backlog)
  * actual return range.
  */
 static u16_t
-lwip_recv_tcp_copy(const struct pbuf *p, void *dst, u16_t len)
+lwip_recv_tcp_copy(const struct pbuf *p, void *dst, u16_t len
+#if CONFIG_SOCKET_RECV_PROFILE
+                   , struct lwip_recv_profile_sample *profile
+#endif
+                   )
 {
   u16_t copied = 0;
+#if CONFIG_SOCKET_RECV_PROFILE
+  u32_t chain_segments = 0;
+  u32_t linked_blocks = 0;
+  u32_t linked_bytes = 0;
+#endif
 
   while ((p != NULL) && (copied < len)) {
     u16_t copylen = p->len;
@@ -1043,6 +1379,27 @@ lwip_recv_tcp_copy(const struct pbuf *p, void *dst, u16_t len)
     if (copylen > (u16_t)(len - copied)) {
       copylen = (u16_t)(len - copied);
     }
+#if CONFIG_SOCKET_RECV_PROFILE
+    profile->segments++;
+    profile->segment_bytes += copylen;
+    profile->src_align[(uintptr_t)p->payload & 3U]++;
+    profile->dst_align[((uintptr_t)dst + copied) & 3U]++;
+    if (((uintptr_t)p->payload & 3U) ==
+        (((uintptr_t)dst + copied) & 3U)) {
+      profile->same_align++;
+    }
+    {
+      u32_t dma_body = lwip_recv_profile_dma_body((u8_t *)dst + copied,
+                                                   p->payload, copylen);
+      if (dma_body != 0U) {
+        linked_blocks++;
+        linked_bytes += dma_body;
+        profile->eligible_blocks++;
+        profile->eligible_bytes += dma_body;
+      }
+    }
+    chain_segments++;
+#endif
     if (rltk_network_gdma_copy_socket_rx((u8_t *)dst + copied,
                                          p->payload, copylen) != 0) {
       return copied;
@@ -1050,6 +1407,20 @@ lwip_recv_tcp_copy(const struct pbuf *p, void *dst, u16_t len)
     copied = (u16_t)(copied + copylen);
     p = p->next;
   }
+#if CONFIG_SOCKET_RECV_PROFILE
+  profile->pbuf_groups++;
+  if (chain_segments > profile->chain_max) {
+    profile->chain_max = chain_segments;
+  }
+  if (linked_blocks >= 2U) {
+    profile->chain_linked_groups++;
+    profile->chain_linked_blocks += linked_blocks;
+    profile->chain_linked_bytes += linked_bytes;
+    profile->chain_linked_batches +=
+      (linked_blocks + LWIP_RECV_PROFILE_LINK_BLOCKS - 1U) /
+      LWIP_RECV_PROFILE_LINK_BLOCKS;
+  }
+#endif
   return copied;
 }
 #endif
@@ -1064,6 +1435,11 @@ lwip_recv_tcp(struct lwip_sock *sock, void *mem, size_t len, int flags)
   u8_t apiflags = NETCONN_NOAUTORCVD;
   ssize_t recvd = 0;
   ssize_t recv_left = (len <= SSIZE_MAX) ? (ssize_t)len : SSIZE_MAX;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_SOCKET_RECV_PROFILE
+  struct lwip_recv_profile_sample recv_profile;
+
+  lwip_recv_profile_init_sample(&recv_profile, len);
+#endif
 
   LWIP_ASSERT("no socket given", sock != NULL);
   LWIP_ASSERT("this should be checked internally", NETCONNTYPE_GROUP(netconn_type(sock->conn)) == NETCONN_TCP);
@@ -1084,10 +1460,26 @@ lwip_recv_tcp(struct lwip_sock *sock, void *mem, size_t len, int flags)
     /* Check if there is data left from the last recv operation. */
     if (sock->lastdata.pbuf) {
       p = sock->lastdata.pbuf;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_SOCKET_RECV_PROFILE
+      recv_profile.lastdata_hits++;
+#endif
     } else {
       /* No data was left from the previous operation, so we try to get
          some from the network. */
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_SOCKET_RECV_PROFILE
+      {
+        u32_t wait_start_us = rltk_tcp_perf_now_us();
+#endif
       err = netconn_recv_tcp_pbuf_flags(sock->conn, &p, apiflags);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_SOCKET_RECV_PROFILE
+        u32_t wait_us = rltk_tcp_perf_now_us() - wait_start_us;
+        recv_profile.wait_calls++;
+        recv_profile.wait_us += wait_us;
+        if (wait_us > recv_profile.wait_max_us) {
+          recv_profile.wait_max_us = wait_us;
+        }
+      }
+#endif
       LWIP_DEBUGF(SOCKETS_DEBUG, ("lwip_recv_tcp: netconn_recv err=%d, pbuf=%p\n",
                                   err, (void *)p));
 
@@ -1102,8 +1494,14 @@ lwip_recv_tcp(struct lwip_sock *sock, void *mem, size_t len, int flags)
                                     lwip_strerr(err)));
         sock_set_errno(sock, err_to_errno(err));
         if (err == ERR_CLSD) {
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_SOCKET_RECV_PROFILE
+          lwip_recv_profile_commit(&recv_profile, 0);
+#endif
           return 0;
         } else {
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_SOCKET_RECV_PROFILE
+          lwip_recv_profile_commit(&recv_profile, -1);
+#endif
           return -1;
         }
       }
@@ -1127,7 +1525,23 @@ lwip_recv_tcp(struct lwip_sock *sock, void *mem, size_t len, int flags)
     /* copy the contents of the received buffer into
     the supplied memory pointer mem */
 #if defined(CONFIG_PLATFORM_8195BHP)
+#if CONFIG_SOCKET_RECV_PROFILE
+    {
+      u32_t copy_start_us = rltk_tcp_perf_now_us();
+      u32_t copy_us;
+
+      copied = lwip_recv_tcp_copy(p, (u8_t *)mem + recvd, copylen,
+                                  &recv_profile);
+      copy_us = rltk_tcp_perf_now_us() - copy_start_us;
+      recv_profile.copy_calls++;
+      recv_profile.copy_us += copy_us;
+      if (copy_us > recv_profile.copy_max_us) {
+        recv_profile.copy_max_us = copy_us;
+      }
+    }
+#else
     copied = lwip_recv_tcp_copy(p, (u8_t *)mem + recvd, copylen);
+#endif
     LWIP_ASSERT("lwip_recv_tcp: short GDMA copy", copied == copylen);
 #else
     pbuf_copy_partial(p, (u8_t *)mem + recvd, copylen, 0);
@@ -1164,6 +1578,9 @@ lwip_recv_tcp_done:
     netconn_tcp_recvd(sock->conn, (size_t)recvd);
   }
   sock_set_errno(sock, 0);
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_SOCKET_RECV_PROFILE
+  lwip_recv_profile_commit(&recv_profile, recvd);
+#endif
   return recvd;
 }
 #endif
@@ -4068,6 +4485,61 @@ lwip_ioctl(int s, long cmd, void *argp)
   done_socket(sock);
   return -1;
 }
+
+#if defined(CONFIG_SCREEN_TCP_BUFFER_PROFILE) && CONFIG_SCREEN_TCP_BUFFER_PROFILE
+/*
+ * Diagnostic-only, read-only snapshot of a TCP socket.  Keeping this inside
+ * sockets.c lets the profiler use the same descriptor lifetime protection as
+ * the socket API instead of guessing at private lwip_sock/netconn layouts.
+ * The TCPIP core lock makes the multi-field snapshot internally consistent.
+ */
+int
+lwip_diag_tcp_buffer_state(int s, struct lwip_tcp_buffer_diag *diag)
+{
+  struct lwip_sock *sock;
+  struct tcp_pcb *pcb;
+  int recv_avail = 0;
+
+  if (diag == NULL) {
+    return -1;
+  }
+  sock = get_socket(s);
+  if ((sock == NULL) || (sock->conn == NULL) ||
+      (NETCONNTYPE_GROUP(netconn_type(sock->conn)) != NETCONN_TCP)) {
+    if (sock != NULL) {
+      done_socket(sock);
+    }
+    return -1;
+  }
+
+  LOCK_TCPIP_CORE();
+  pcb = sock->conn->pcb.tcp;
+  if (pcb == NULL) {
+    UNLOCK_TCPIP_CORE();
+    done_socket(sock);
+    return -1;
+  }
+#if LWIP_SO_RCVBUF
+  SYS_ARCH_GET(sock->conn->recv_avail, recv_avail);
+  if (recv_avail < 0) {
+    recv_avail = 0;
+  }
+  if (sock->lastdata.netbuf != NULL) {
+    recv_avail += sock->lastdata.pbuf->tot_len;
+  }
+#endif
+  diag->rx_pending_bytes = (u32_t)recv_avail;
+  diag->rx_window_capacity = (u32_t)TCP_WND_MAX(pcb);
+  diag->rx_window_available = (u32_t)pcb->rcv_wnd;
+  diag->tx_buffer_capacity = (u32_t)TCP_SND_BUF;
+  diag->tx_buffer_available = (u32_t)pcb->snd_buf;
+  diag->tx_queue_len = (u32_t)pcb->snd_queuelen;
+  diag->tx_queue_capacity = (u32_t)TCP_SND_QUEUELEN;
+  UNLOCK_TCPIP_CORE();
+  done_socket(sock);
+  return 0;
+}
+#endif
 
 /** A minimal implementation of fcntl.
  * Currently only the commands F_GETFL and F_SETFL are implemented.

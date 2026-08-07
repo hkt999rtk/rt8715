@@ -660,6 +660,20 @@ int lwip_fcntl(int s, int cmd, int val);
 const char *lwip_inet_ntop(int af, const void *src, char *dst, socklen_t size);
 int lwip_inet_pton(int af, const char *src, void *dst);
 
+#if defined(CONFIG_SCREEN_TCP_BUFFER_PROFILE) && CONFIG_SCREEN_TCP_BUFFER_PROFILE
+/* Read-only TCP queue snapshot used by the CarPlay diagnostic profiler. */
+struct lwip_tcp_buffer_diag {
+  u32_t rx_pending_bytes;
+  u32_t rx_window_capacity;
+  u32_t rx_window_available;
+  u32_t tx_buffer_capacity;
+  u32_t tx_buffer_available;
+  u32_t tx_queue_len;
+  u32_t tx_queue_capacity;
+};
+int lwip_diag_tcp_buffer_state(int s, struct lwip_tcp_buffer_diag *diag);
+#endif
+
 #if LWIP_COMPAT_SOCKETS
 #if LWIP_COMPAT_SOCKETS != 2
 /** @ingroup socket */

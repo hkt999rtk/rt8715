@@ -29,6 +29,8 @@
 #include <dma_api.h>
 #include <hal_gdma.h>
 #include <hal_timer.h>
+#include <FreeRTOS.h>
+#include <task.h>
 #include <stdint.h>
 #include <stdio.h>
 #endif
@@ -66,6 +68,22 @@ extern struct netif xnetif[];			//LWIP netif
  */
 #ifndef CONFIG_NET_GDMA_LATENCY_PROFILE
 #define CONFIG_NET_GDMA_LATENCY_PROFILE 1
+#endif
+
+/*
+ * Match the crypto-engine ownership policy: once a task has claimed a network
+ * GDMA channel, keep that owner runnable at a high priority until the transfer
+ * completes or error recovery finishes.  Otherwise the DMA IRQ can complete
+ * promptly while a low-priority owner remains unable to run and release the
+ * channel.  This has no effect when CONFIG_NET_GDMA_COPY is disabled, or when
+ * a caller loses the non-blocking channel claim and falls back to CPU memcpy.
+ */
+#ifndef NET_GDMA_OWNER_BOOST_PRIORITY
+#define NET_GDMA_OWNER_BOOST_PRIORITY 11
+#endif
+
+#if NET_GDMA_OWNER_BOOST_PRIORITY >= configMAX_PRIORITIES
+#error "NET_GDMA_OWNER_BOOST_PRIORITY must be below configMAX_PRIORITIES"
 #endif
 
 #ifndef CONFIG_TCP_PHASE_PROFILE
@@ -159,6 +177,48 @@ static u8 g_net_gdma_initialized;
 #if CONFIG_NET_GDMA_LATENCY_PROFILE
 static u8 g_net_gdma_latency_ready;
 #endif
+
+typedef struct net_gdma_priority_guard_s {
+	TaskHandle_t task;
+	UBaseType_t original_priority;
+	u8 boosted;
+} net_gdma_priority_guard_t;
+
+static void net_gdma_priority_enter(net_gdma_priority_guard_t *guard)
+{
+	UBaseType_t priority;
+
+	guard->task = NULL;
+	guard->original_priority = 0;
+	guard->boosted = 0;
+
+	if (NET_GDMA_OWNER_BOOST_PRIORITY == 0 || rtw_in_interrupt()) {
+		return;
+	}
+
+	guard->task = xTaskGetCurrentTaskHandle();
+	if (guard->task == NULL) {
+		return;
+	}
+
+	priority = uxTaskPriorityGet(guard->task);
+	guard->original_priority = priority;
+	if (priority < NET_GDMA_OWNER_BOOST_PRIORITY) {
+		vTaskPrioritySet(guard->task, NET_GDMA_OWNER_BOOST_PRIORITY);
+		guard->boosted = 1;
+	}
+}
+
+static void net_gdma_priority_leave(net_gdma_priority_guard_t *guard)
+{
+	if (guard->boosted && guard->task != NULL &&
+	    uxTaskPriorityGet(guard->task) != guard->original_priority) {
+		vTaskPrioritySet(guard->task, guard->original_priority);
+	}
+
+	guard->task = NULL;
+	guard->boosted = 0;
+}
 
 static void net_gdma_done_from_isr(net_gdma_context_t *ctx)
 {
@@ -752,6 +812,7 @@ static void net_gdma_account(net_gdma_context_t *ctx, int used_dma, u32 len)
 static int net_gdma_copy(net_gdma_context_t *ctx, void *dst, const void *src,
 			 u32 len, const void *allocation_end, u32 *dma_len)
 {
+	net_gdma_priority_guard_t priority_guard;
 #if CONFIG_NET_GDMA_LATENCY_PROFILE
 	u32 latency_start_cycles;
 	u32 latency_submit_done_cycles;
@@ -808,8 +869,17 @@ static int net_gdma_copy(net_gdma_context_t *ctx, void *dst, const void *src,
 	ctx->busy = 1;
 	restore_flags();
 
+	/*
+	 * Boost only after this task owns the channel.  Keep the boost across the
+	 * one-time self-test, DMA completion wait and timeout recovery, then release
+	 * channel ownership before restoring the exact original task priority.
+	 * The polling benchmark deliberately bypasses this production path.
+	 */
+	net_gdma_priority_enter(&priority_guard);
+
 	if (net_gdma_ensure_tested(ctx) != 0) {
 		ctx->busy = 0;
+		net_gdma_priority_leave(&priority_guard);
 		rtw_memcpy(dst, (void *)src, len);
 		net_gdma_account(ctx, 0, len);
 		return 0;
@@ -833,6 +903,7 @@ static int net_gdma_copy(net_gdma_context_t *ctx, void *dst, const void *src,
 	if (net_gdma_wait(ctx) != 0) {
 		/* Destination may be partially written.  Caller must drop the packet. */
 		ctx->busy = 0;
+		net_gdma_priority_leave(&priority_guard);
 		return -1;
 	}
 #if CONFIG_NET_GDMA_LATENCY_PROFILE
@@ -846,6 +917,7 @@ static int net_gdma_copy(net_gdma_context_t *ctx, void *dst, const void *src,
 #endif
 
 	ctx->busy = 0;
+	net_gdma_priority_leave(&priority_guard);
 	net_gdma_account(ctx, 1, len);
 	if (dma_len != NULL) {
 		*dma_len = len;

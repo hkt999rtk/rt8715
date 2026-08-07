@@ -255,6 +255,16 @@ SECTIONS
 			.text.opus_encode_native
 			.text.celt_encode_with_ec
 		)
+
+		/*
+		 * CDC-NCM TX runs synchronously in the TCP_IP output path.  Keep only
+		 * the three per-packet functions in ITCM; the rest of lib_usbsmart is
+		 * placed in LPDDR below so no USB code falls back to NOR XIP.
+		 */
+		*lib_usbsmart.a:usbh_cdc_ncm_hal.o(.text.usbh_cdc_ncm_send_data)
+		*lib_usbsmart.a:ncm.o(.text.ncm_wrap_ntb)
+		*lib_usbsmart.a:usbh_cdc_ncm.o(.text.usbh_cdc_ncm_bulk_send)
+
 		*(.haac.text*)
 		*(.faac.text*)
 		*(.hmp3.text*)
@@ -299,6 +309,12 @@ SECTIONS
 		*lib_usbsmart.a:usbh_hal.o(.text*)
 		*lib_usbsmart.a:usb_hal.o(.text*)
 		*lib_usbsmart.a:usb_os.o(.text*)
+		/*
+		 * Keep the complete USB stack out of NOR XIP.  Sections selected for
+		 * ITCM above have already been consumed; every remaining USB function
+		 * executes from LPDDR.
+		 */
+		*lib_usbsmart.a:*(.text*)
 
 		/*
 		 * Sustained CarPlay screen/audio processing must not compete with
@@ -341,6 +357,7 @@ SECTIONS
 		*lib_usbsmart.a:usbh_hal.o(.rodata*)
 		*lib_usbsmart.a:usb_hal.o(.rodata*)
 		*lib_usbsmart.a:usb_os.o(.rodata*)
+		*lib_usbsmart.a:*(.rodata*)
 
 		/* Keep hot codec/crypto lookup tables with their LPDDR text. */
 		*lib_CarPlay.a:*(.rodata*)

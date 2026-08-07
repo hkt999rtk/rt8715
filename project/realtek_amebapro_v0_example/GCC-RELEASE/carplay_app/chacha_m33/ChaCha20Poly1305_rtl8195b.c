@@ -13,6 +13,7 @@
 #include "rtl8195bhp_crypto_ctrl.h"
 #include "device_lock.h"
 #include "osdep_service.h"
+#include "crypto_priority_lock.h"
 
 #ifndef CARBOX_CHACHA_HW_IRQ_TIMEOUT_MS
 #define CARBOX_CHACHA_HW_IRQ_TIMEOUT_MS 1000u
@@ -982,7 +983,7 @@ static int chacha_rtl_run(
   result = chacha_rtl_validate(input_len, aad_len);
   if (result != CHACHA_RTL_OK) return result;
 
-  device_mutex_lock(RT_DEV_LOCK_CRYPTO);
+  carbox_crypto_chacha_device_lock(RT_DEV_LOCK_CRYPTO);
   result = chacha_rtl_prepare_locked();
   if (result == CHACHA_RTL_OK) {
     chacha_rtl_stage_parameters(key, nonce, aad, aad_len);
@@ -1022,7 +1023,7 @@ static int chacha_rtl_run(
     }
   }
   chacha_rtl_clear_key_material();
-  device_mutex_unlock(RT_DEV_LOCK_CRYPTO);
+  carbox_crypto_chacha_device_unlock(RT_DEV_LOCK_CRYPTO);
   return result;
 }
 
@@ -1058,7 +1059,7 @@ int chacha_rtl8195b_chacha_xor(
 
   if (result != CHACHA_RTL_OK) return result;
 
-  device_mutex_lock(RT_DEV_LOCK_CRYPTO);
+  carbox_crypto_chacha_device_lock(RT_DEV_LOCK_CRYPTO);
   result = chacha_rtl_prepare_locked();
   if (result == CHACHA_RTL_OK) {
     chacha_rtl_stage_parameters(key, nonce, NULL, 0u);
@@ -1083,7 +1084,7 @@ int chacha_rtl8195b_chacha_xor(
     }
   }
   chacha_rtl_clear_key_material();
-  device_mutex_unlock(RT_DEV_LOCK_CRYPTO);
+  carbox_crypto_chacha_device_unlock(RT_DEV_LOCK_CRYPTO);
   return result;
 }
 
@@ -1096,7 +1097,7 @@ int chacha_rtl8195b_poly1305(
 
   if (result != CHACHA_RTL_OK) return result;
 
-  device_mutex_lock(RT_DEV_LOCK_CRYPTO);
+  carbox_crypto_chacha_device_lock(RT_DEV_LOCK_CRYPTO);
   result = chacha_rtl_prepare_locked();
   if (result == CHACHA_RTL_OK) {
     memcpy(g_chacha_hw_key, poly_key, 32);
@@ -1114,7 +1115,7 @@ int chacha_rtl8195b_poly1305(
     }
   }
   chacha_rtl_clear_key_material();
-  device_mutex_unlock(RT_DEV_LOCK_CRYPTO);
+  carbox_crypto_chacha_device_unlock(RT_DEV_LOCK_CRYPTO);
   return result;
 }
 

@@ -8,6 +8,7 @@
 #include "carbox_vfs_compat.h"
 
 #include "carbox/carbox_diag.h"
+#include "carbox/large_memcpy_gdma.h"
 #include "carbox/pc_profiler.h"
 #include "carbox/system_overclock.h"
 #if defined(CONFIG_MEMCHECK)
@@ -530,6 +531,7 @@ void main(void)
 	}
 	/* init diagnostic tracing before any task creation */
 	carbox_diag_init();
+	carbox_large_memcpy_gdma_init();
 	carbox_diag_trace_enter("main");
 	carbox_pc_profiler_start();
 

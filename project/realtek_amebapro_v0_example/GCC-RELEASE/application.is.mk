@@ -490,10 +490,14 @@ ITCM_C += ../../../component/common/network/sntp/sntp.c
 # scheduler and codec hot paths in rtl8195bhp_ram_is.ld.
 CODEC_ITCM_RECLAIM_NETWORK ?= 1
 ifeq ($(CODEC_ITCM_RECLAIM_NETWORK),1)
-NETWORK_STACK_ITCM_C := $(filter \
+LWIP_CHECKSUM_ITCM_C := ../../../component/common/network/lwip/lwip_v2.1.2/src/core/inet_chksum.c
+# Keep the sustained checksum hot path in ITCM.  It accounts for a measurable
+# part of TCP_IP CPU time, whereas the remainder of lwIP is deliberately kept
+# in LPDDR to preserve ITCM for scheduler and codec hot paths.
+NETWORK_STACK_ITCM_C := $(filter-out $(LWIP_CHECKSUM_ITCM_C),$(filter \
 	../../../component/common/network/% \
 	../../../component/common/drivers/wlan/realtek/src/osdep/lwip_intf.c,\
-	$(ITCM_C))
+	$(ITCM_C)))
 ITCM_C := $(filter-out $(NETWORK_STACK_ITCM_C),$(ITCM_C))
 ERAM_C += $(NETWORK_STACK_ITCM_C)
 endif
@@ -747,6 +751,14 @@ SRAM_C += ../../../component/common/file_system/fatfs/disk_if/src/flash_fatfs.c
 SRAM_C += ../src/carbox/vfs_compat/carbox_littlefs.c
 SRAM_C += ../../../component/soc/realtek/8195b/fwlib/hal-rtl8195b-hp/source/ram_s/hal_flash.c
 SRAM_C += ../src/carbox/system_overclock.c
+# This wrapper intercepts every device lock, including FLASH locks used before
+# external RAM is ready, so it must execute from internal SRAM.
+SRAM_C += ../src/carbox/crypto_engine_profiler.c
+# Scheduler-facing transaction API; keep it off XIP and available during
+# crypto initialization. Only CarPlay AES/ChaCha archive members call it.
+SRAM_C += ../src/carbox/crypto_priority_lock.c
+SRAM_C += ../src/carbox/memcpy_task_profiler.c
+SRAM_C += ../src/carbox/large_memcpy_gdma.c
 
 #ERAM
 # -------------------------------------------------------------------
@@ -800,27 +812,58 @@ GCCFLAGS += -DV8M_STKOVF -DARM_MATH_CM7 -DCONFIG_FATFS_WRAPPER=1
 NET_GDMA_COPY ?= 0
 NET_GDMA_BENCH ?= 0
 NET_GDMA_STATS ?= 0
+NET_GDMA_OWNER_BOOST_PRIORITY ?= 11
 TCP_PHASE_PROFILE ?= 1
 PC_PROFILER ?= 1
+MEMCPY_TASK_PROFILE ?= 1
+LARGE_MEMCPY_GDMA ?= 1
+LARGE_MEMCPY_GDMA_THRESHOLD ?= 4096
+LARGE_MEMCPY_GDMA_OWNER_BOOST_PRIORITY ?= 11
+SOCKET_RECV_PROFILE ?= 1
+# Channels 4 and 5 are the only linked-list-capable channels on each HP GDMA.
+# Keep them out of the ordinary single-block allocator so a later socket recv
+# linked-list implementation can claim one deterministically.
+GDMA_RESERVE_MULTIBLOCK_CHANNELS ?= 1
 GCD_SYNC_PROFILE ?= 0
 # Diagnostic A/B switch.  The production default preserves DispatchLite's
 # requested worker priority; set this to a non-negative value only for testing.
 GCD_WORK_PRIORITY ?= -1
 SCREEN_QUEUE_PROFILE ?= 0
+# Keep the expensive, already-concluded diagnostic probes independently
+# switchable.  The normal screen timing/backlog profiler does not need them.
+SCREEN_FRAME_FORMAT_PROFILE ?= 0
+SCREEN_TCP_BUFFER_PROFILE ?= 0
+# When SCREEN_QUEUE_PROFILE is enabled, correlate the local tick used to
+# generate each outgoing screen NTP timestamp with that frame's receive time.
+SCREEN_TIMESTAMP_PROFILE ?= 0
 USB_HCD_PROFILE ?= 1
 NET_QUEUE_PROFILE ?= 1
+CRYPTO_ENGINE_PROFILE ?= 0
+CARBOX_CRYPTO_OWNER_BOOST_PRIORITY ?= 11
 SYS_PLL_OVERCLOCK ?= 1
-SYS_PLL_TARGET_HZ ?= 360000000
+SYS_PLL_TARGET_HZ ?= 350000000
 GCCFLAGS += -DCONFIG_NET_GDMA_COPY=$(NET_GDMA_COPY)
 GCCFLAGS += -DCONFIG_NET_GDMA_BENCH=$(NET_GDMA_BENCH)
 GCCFLAGS += -DCONFIG_NET_GDMA_STATS=$(NET_GDMA_STATS)
+GCCFLAGS += -DNET_GDMA_OWNER_BOOST_PRIORITY=$(NET_GDMA_OWNER_BOOST_PRIORITY)
 GCCFLAGS += -DCONFIG_TCP_PHASE_PROFILE=$(TCP_PHASE_PROFILE)
 GCCFLAGS += -DCONFIG_PC_PROFILER=$(PC_PROFILER)
+GCCFLAGS += -DCONFIG_MEMCPY_TASK_PROFILE=$(MEMCPY_TASK_PROFILE)
+GCCFLAGS += -DCONFIG_LARGE_MEMCPY_GDMA=$(LARGE_MEMCPY_GDMA)
+GCCFLAGS += -DLARGE_MEMCPY_GDMA_THRESHOLD=$(LARGE_MEMCPY_GDMA_THRESHOLD)
+GCCFLAGS += -DLARGE_MEMCPY_GDMA_OWNER_BOOST_PRIORITY=$(LARGE_MEMCPY_GDMA_OWNER_BOOST_PRIORITY)
+GCCFLAGS += -DCONFIG_SOCKET_RECV_PROFILE=$(SOCKET_RECV_PROFILE)
+GCCFLAGS += -DCONFIG_GDMA_RESERVE_MULTIBLOCK_CHANNELS=$(GDMA_RESERVE_MULTIBLOCK_CHANNELS)
 GCCFLAGS += -DCONFIG_GCD_SYNC_PROFILE=$(GCD_SYNC_PROFILE)
 GCCFLAGS += -DCONFIG_GCD_WORK_PRIORITY=$(GCD_WORK_PRIORITY)
 GCCFLAGS += -DCONFIG_SCREEN_QUEUE_PROFILE=$(SCREEN_QUEUE_PROFILE)
+GCCFLAGS += -DCONFIG_SCREEN_FRAME_FORMAT_PROFILE=$(SCREEN_FRAME_FORMAT_PROFILE)
+GCCFLAGS += -DCONFIG_SCREEN_TCP_BUFFER_PROFILE=$(SCREEN_TCP_BUFFER_PROFILE)
+GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_PROFILE=$(SCREEN_TIMESTAMP_PROFILE)
 GCCFLAGS += -DCONFIG_USB_HCD_PROFILE=$(USB_HCD_PROFILE)
 GCCFLAGS += -DCONFIG_NET_QUEUE_PROFILE=$(NET_QUEUE_PROFILE)
+GCCFLAGS += -DCONFIG_CRYPTO_ENGINE_PROFILE=$(CRYPTO_ENGINE_PROFILE)
+GCCFLAGS += -DCARBOX_CRYPTO_OWNER_BOOST_PRIORITY=$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
 GCCFLAGS += -DCONFIG_SYS_PLL_OVERCLOCK=$(SYS_PLL_OVERCLOCK)
 GCCFLAGS += -DCONFIG_SYS_PLL_TARGET_HZ=$(SYS_PLL_TARGET_HZ)
 # Avoid FreeRTOS-Plus-POSIX vs newlib type conflicts (mode_t, clockid_t, timer_t)
@@ -880,11 +923,28 @@ LFLAGS += -Wl,--wrap=AirPlayScreen_SendVideo
 LFLAGS += -Wl,--wrap=CVector_push_back -Wl,--wrap=CVector_erase
 LFLAGS += -Wl,--wrap=CVector_delete
 LFLAGS += -Wl,--wrap=lwip_recv -Wl,--wrap=lwip_write
+LFLAGS += -Wl,--wrap=lwip_select
+ifeq ($(SCREEN_TIMESTAMP_PROFILE),1)
+LFLAGS += -Wl,--wrap=UpTicksToNTP
+endif
 endif
 ifeq ($(USB_HCD_PROFILE),1)
 LFLAGS += -Wl,--wrap=usbh_hcd_hc_submit_request
 LFLAGS += -Wl,--wrap=usbh_hcd_hc_get_urb_state
 LFLAGS += -Wl,--wrap=usbh_hcd_hc_get_transfer_size
+endif
+ifeq ($(CRYPTO_ENGINE_PROFILE),1)
+LFLAGS += -Wl,--wrap=device_mutex_lock -Wl,--wrap=device_mutex_unlock
+LFLAGS += -Wl,--wrap=rtw_down_timeout_sema -Wl,--wrap=rtw_up_sema_from_isr
+LFLAGS += -Wl,--wrap=g_crypto_handler
+LFLAGS += -Wl,--wrap=crypto_aes_ecb_encrypt -Wl,--wrap=crypto_aes_ecb_decrypt
+LFLAGS += -Wl,--wrap=crypto_aes_cbc_encrypt -Wl,--wrap=crypto_aes_cbc_decrypt
+LFLAGS += -Wl,--wrap=crypto_aes_ctr_encrypt -Wl,--wrap=crypto_aes_ctr_decrypt
+LFLAGS += -Wl,--wrap=crypto_aes_gcm_encrypt -Wl,--wrap=crypto_aes_gcm_decrypt
+LFLAGS += -Wl,--wrap=rtl_crypto_chacha_encrypt -Wl,--wrap=rtl_crypto_chacha_decrypt
+LFLAGS += -Wl,--wrap=rtl_crypto_poly1305 -Wl,--wrap=rtl_crypto_poly1305_process
+LFLAGS += -Wl,--wrap=rtl_crypto_chacha_poly1305_encrypt
+LFLAGS += -Wl,--wrap=rtl_crypto_chacha_poly1305_decrypt
 endif
 ifeq ($(FDK_AAC_PROFILE),1)
 LFLAGS += -Wl,--wrap=aacEncEncode -Wl,--wrap=aacDecoder_DecodeFrame
@@ -967,10 +1027,13 @@ CARBOX_CARPLAY_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_chacha_
 $(CARBOX_CARPLAY_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/ChaCha20Poly1305.c \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/ChaCha20Poly1305.h \
+		$(CARBOX_CARPLAY_CHACHA_DIR)/ChaCha20Poly1305_rtl8195b.c \
+		../src/carbox/crypto_priority_lock.h \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/Makefile
 	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) replacement \
 		CHACHA_MODE=2 CHACHA_HW_MIN_LEN=4096 \
-		CHACHA_STATS_INTERVAL_MS=5000 CHACHA_HW_SELFTEST=0
+		CHACHA_STATS_INTERVAL_MS=0 CHACHA_HW_SELFTEST=0 \
+		CRYPTO_OWNER_BOOST_PRIORITY=$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
 application: $(CARBOX_CARPLAY_ARCHIVE)
 LFLAGS += -Wl,--no-warn-mismatch
 LIBFLAGS += -Wl,--whole-archive
@@ -1091,6 +1154,11 @@ CARBOX_OTA_FATFS_BIN ?= application_is/ota_fatfs.bin
 CARBOX_OTA_ALL_BIN ?= application_is/ota_all.bin
 CARBOX_OTA_FW_VER ?= $(shell date +%y%m%d%H%M)
 CARBOX_RAW_SECTION_BIN ?= application_is/raw_section.bin
+CARBOX_LP_AXF ?= application_lp/Debug/bin/application_lp.axf
+CARBOX_FW_BIN ?= application_is/firmware_is.bin
+# A valid CarBox image is currently about 3.8 MiB.  Keep the threshold well
+# below that, but high enough to reject elf2bin's silent empty/4-byte output.
+CARBOX_MIN_FIRMWARE_SIZE ?= 1048576
 CARBOX_FLASH_LAYOUT_H := ../inc/carbox_flash_layout.h
 CARBOX_FATFS_BASE := $(shell awk '/^\#define CARBOX_FATFS_BASE /{print $$3}' $(CARBOX_FLASH_LAYOUT_H))
 CARBOX_FATFS_SIZE := $(shell awk '/^\#define CARBOX_FATFS_SIZE /{print $$3}' $(CARBOX_FLASH_LAYOUT_H))
@@ -1105,6 +1173,11 @@ manipulate_images:	partition.json | application
 	@echo ===========================================================
 	@echo Image manipulating
 	@echo ===========================================================
+	@if [ ! -s "$(CARBOX_LP_AXF)" ]; then \
+		echo "ERROR: missing LP firmware input: $(CARBOX_LP_AXF)"; \
+		echo "       Build ram_lp before ram_is (or run make all)."; \
+		exit 1; \
+	fi
 	@if [ -d $(VFSDIR) ]; then \
 		$(VFSTOOL) -t FATFS -s 512 -c $(FATFS_SECTORS) -dir $(VFSDIR) -out application_is/fatfs.bin >/dev/null 2>&1; \
 	fi	
@@ -1116,6 +1189,19 @@ manipulate_images:	partition.json | application
 	@$(FLASH_TOOLDIR)/set_fw_json_serial.sh amebapro_firmware_is.json amebapro_firmware_is.serial.json >/dev/null 2>&1
 	@echo "  ELF2BIN  convert amebapro_firmware_is.serial.json"
 	@$(ELF2BIN) convert amebapro_firmware_is.serial.json FIRMWARE secure_bit=0 >/dev/null 2>&1
+	@if [ ! -f "$(CARBOX_FW_BIN)" ]; then \
+		echo "ERROR: elf2bin did not create $(CARBOX_FW_BIN)"; \
+		exit 1; \
+	else \
+		size=$$(stat -c %s "$(CARBOX_FW_BIN)"); \
+		min=$$(( $(CARBOX_MIN_FIRMWARE_SIZE) )); \
+		if [ $$size -lt $$min ]; then \
+			echo "ERROR: invalid firmware image: $(CARBOX_FW_BIN) is $$size bytes (minimum $$min)"; \
+			echo "       elf2bin may be missing application_lp.axf or required input sections."; \
+			exit 1; \
+		fi; \
+		echo "  VERIFY $(CARBOX_FW_BIN): $$size bytes (minimum $$min)"; \
+	fi
 	@cp ../../../component/soc/realtek/8195b/misc/bsp/image/bootloader.axf $(BOOT_BIN_DIR)/bootloader.axf
 	@echo "  ELF2BIN  convert amebapro_bootloader.json"
 	@$(ELF2BIN) convert amebapro_bootloader.json BOOTLOADER secure_bit=0 >/dev/null 2>&1

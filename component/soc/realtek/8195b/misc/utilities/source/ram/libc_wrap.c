@@ -36,6 +36,64 @@
 #include "semphr.h"
 #include <reent.h>
 
+#include "large_memcpy_gdma.h"
+
+#ifndef CONFIG_MEMCPY_TASK_PROFILE
+#define CONFIG_MEMCPY_TASK_PROFILE 0
+#endif
+
+#if CONFIG_MEMCPY_TASK_PROFILE
+#include "memcpy_task_profiler.h"
+extern void * volatile pxCurrentTCB;
+
+/* Avoid including the full platform cmsis.h here: it imports newlib string.h,
+ * which conflicts with this legacy file's static strproc.h declarations. */
+#define CARBOX_DWT_CTRL_REG     (*(volatile uint32_t *)0xE0001000UL)
+#define CARBOX_DWT_CYCCNT_REG   (*(volatile uint32_t *)0xE0001004UL)
+#define CARBOX_DWT_CYCCNTENA    1UL
+
+typedef struct carbox_memprof_guard_s {
+	void *task;
+	uintptr_t caller;
+	uint32_t start_cycles;
+	uint8_t active;
+	uint8_t cycles_valid;
+} carbox_memprof_guard_t;
+
+static __attribute__((always_inline)) inline void
+carbox_memprof_begin(carbox_memprof_guard_t *guard, uintptr_t caller)
+{
+	guard->task = pxCurrentTCB;
+	guard->caller = caller & ~(uintptr_t)1U;
+	guard->active = guard->task != NULL &&
+		(guard->task == carbox_memcpy_profile_targets[0] ||
+		 guard->task == carbox_memcpy_profile_targets[1]);
+	if (guard->active) {
+		uint32_t ipsr;
+		__asm volatile("mrs %0, ipsr" : "=r" (ipsr));
+		guard->active = ipsr == 0U;
+	}
+	guard->cycles_valid = guard->active &&
+		((CARBOX_DWT_CTRL_REG & CARBOX_DWT_CYCCNTENA) != 0U);
+	guard->start_cycles = guard->cycles_valid ? CARBOX_DWT_CYCCNT_REG : 0U;
+}
+
+static __attribute__((always_inline)) inline void
+carbox_memprof_finish(const carbox_memprof_guard_t *guard,
+		       const void *dst, const void *src, size_t length,
+		       unsigned int operation)
+{
+	uint32_t cycles;
+
+	if (!guard->active)
+		return;
+	cycles = guard->cycles_valid ?
+		CARBOX_DWT_CYCCNT_REG - guard->start_cycles : 0U;
+	carbox_memcpy_task_profiler_record(guard->task, guard->caller,
+		dst, src, length, operation, cycles, guard->cycles_valid);
+}
+#endif
+
 #ifndef ENOMEM
 #define ENOMEM 12
 #endif
@@ -600,6 +658,28 @@ void *__wrap_memcpy(void *s1, const void *s2, size_t n)
 	uint8_t *dst = (uint8_t *)s1;
 	const uint8_t *src = (const uint8_t *)s2;
 	void *result = s1;
+#if CONFIG_MEMCPY_TASK_PROFILE
+	carbox_memprof_guard_t profile_guard;
+	size_t profile_len = n;
+	carbox_memprof_begin(&profile_guard,
+		(uintptr_t)__builtin_return_address(0));
+#define CARBOX_MEMCPY_PROFILE_FINISH() do { \
+	carbox_memprof_finish(&profile_guard, s1, s2, profile_len, \
+		CARBOX_MEMOP_MEMCPY); \
+} while (0)
+#else
+#define CARBOX_MEMCPY_PROFILE_FINISH() do { } while (0)
+#endif
+
+	/* Large task-context copies use one of two persistent linked GDMA channels.
+	 * The helper deliberately refuses ISR, unaligned, busy and unavailable
+	 * cases; those continue through the board-tuned M33 implementation below. */
+	if (carbox_large_memcpy_gdma_try(s1, s2, n)) {
+		/* MEMPROF measures CPU memory routines.  A completed GDMA transfer is
+		 * intentionally excluded rather than charging semaphore wait time to
+		 * memcpy CPU cost. */
+		return result;
+	}
 
 	if ((((uintptr_t)dst ^ (uintptr_t)src) & 3U) != 0U) {
 		while (n >= 32U) {
@@ -645,6 +725,7 @@ void *__wrap_memcpy(void *s1, const void *s2, size_t n)
 		while (n-- != 0U) {
 			*dst++ = *src++;
 		}
+		CARBOX_MEMCPY_PROFILE_FINISH();
 		return result;
 	}
 
@@ -690,17 +771,41 @@ void *__wrap_memcpy(void *s1, const void *s2, size_t n)
 	while (n-- != 0U) {
 		*dst++ = *src++;
 	}
+	CARBOX_MEMCPY_PROFILE_FINISH();
 	return result;
+#undef CARBOX_MEMCPY_PROFILE_FINISH
 }
 
 void *__wrap_memmove (void *destaddr, const void *sourceaddr, unsigned length)
 {
-	return __real_memmove(destaddr, sourceaddr, length);
+	void *result;
+#if CONFIG_MEMCPY_TASK_PROFILE
+	carbox_memprof_guard_t profile_guard;
+	carbox_memprof_begin(&profile_guard,
+		(uintptr_t)__builtin_return_address(0));
+#endif
+	result = __real_memmove(destaddr, sourceaddr, length);
+#if CONFIG_MEMCPY_TASK_PROFILE
+	carbox_memprof_finish(&profile_guard, destaddr, sourceaddr, length,
+		CARBOX_MEMOP_MEMMOVE);
+#endif
+	return result;
 }
 
 void *__wrap_memset(void *dst0, int val, size_t length)
 {
-	return __real_memset(dst0, val, length);
+	void *result;
+#if CONFIG_MEMCPY_TASK_PROFILE
+	carbox_memprof_guard_t profile_guard;
+	carbox_memprof_begin(&profile_guard,
+		(uintptr_t)__builtin_return_address(0));
+#endif
+	result = __real_memset(dst0, val, length);
+#if CONFIG_MEMCPY_TASK_PROFILE
+	carbox_memprof_finish(&profile_guard, dst0, NULL, length,
+		CARBOX_MEMOP_MEMSET);
+#endif
+	return result;
 }
 // define in AmebaPro utilites/include/strporc.h
 // replace by linking command

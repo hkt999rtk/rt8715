@@ -326,8 +326,14 @@ inet_cksum_pseudo_base(struct pbuf *p, u8_t proto, u16_t proto_len, u32_t acc)
     acc = SWAP_BYTES_IN_WORD(acc);
   }
 
-  acc += (u32_t)lwip_htons((u16_t)proto);
-  acc += (u32_t)lwip_htons(proto_len);
+  /*
+   * PP_HTONS accepts runtime values and compiles to an inline REV16 on M33.
+   * Do not call lwip_htons() here: the checksum hot path is in ITCM while
+   * that out-of-line helper resides in LPDDR and otherwise needs two veneers
+   * for every TCP/UDP packet.
+   */
+  acc += (u32_t)PP_HTONS((u16_t)proto);
+  acc += (u32_t)PP_HTONS(proto_len);
 
   /* Fold 32-bit sum to 16 bits
      calling this twice is probably faster than if statements... */
@@ -472,8 +478,9 @@ inet_cksum_pseudo_partial_base(struct pbuf *p, u8_t proto, u16_t proto_len,
     acc = SWAP_BYTES_IN_WORD(acc);
   }
 
-  acc += (u32_t)lwip_htons((u16_t)proto);
-  acc += (u32_t)lwip_htons(proto_len);
+  /* Keep the partial-checksum path free of the same LPDDR helper calls. */
+  acc += (u32_t)PP_HTONS((u16_t)proto);
+  acc += (u32_t)PP_HTONS(proto_len);
 
   /* Fold 32-bit sum to 16 bits
      calling this twice is probably faster than if statements... */

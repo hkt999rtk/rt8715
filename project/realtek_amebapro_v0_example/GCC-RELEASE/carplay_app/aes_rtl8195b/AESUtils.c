@@ -64,6 +64,7 @@
 	#include "rtl8195bhp_crypto_ctrl.h"
 	#include "device_lock.h"
 	#include "osdep_service.h"
+	#include "crypto_priority_lock.h"
 #endif
 
 #include "AESUtils.h"
@@ -80,6 +81,7 @@
 	#include "rtl8195bhp_crypto_ctrl.h"
 	#include "device_lock.h"
 	#include "osdep_service.h"
+	#include "crypto_priority_lock.h"
 #endif
 
 
@@ -448,7 +450,7 @@ static int	_AES_RTL_Begin( const uint8_t inKey[ 16 ] )
 	rtw_mutex_get( &gAESRTLLock );
 	if( gAESRTLHWState < 0 ) return( -1 );
 
-	device_mutex_lock( RT_DEV_LOCK_CRYPTO );
+	carbox_crypto_aes_device_lock( RT_DEV_LOCK_CRYPTO );
 		if( gAESRTLHWState == 0 )
 		{
 			err = crypto_init();
@@ -476,7 +478,7 @@ static int	_AES_RTL_Begin( const uint8_t inKey[ 16 ] )
 		}
 	if( gAESRTLHWState < 0 )
 	{
-		device_mutex_unlock( RT_DEV_LOCK_CRYPTO );
+		carbox_crypto_aes_device_unlock( RT_DEV_LOCK_CRYPTO );
 		return( -1 );
 	}
 
@@ -486,7 +488,7 @@ static int	_AES_RTL_Begin( const uint8_t inKey[ 16 ] )
 
 static void	_AES_RTL_End( Boolean inDeviceLocked )
 {
-	if( inDeviceLocked ) device_mutex_unlock( RT_DEV_LOCK_CRYPTO );
+	if( inDeviceLocked ) carbox_crypto_aes_device_unlock( RT_DEV_LOCK_CRYPTO );
 	rtw_mutex_put( &gAESRTLLock );
 }
 
@@ -681,7 +683,7 @@ static int
 					break;
 				}
 				#if( AES_UTILS_RTL_VERIFY_SW )
-				device_mutex_unlock( RT_DEV_LOCK_CRYPTO );
+				carbox_crypto_aes_device_unlock( RT_DEV_LOCK_CRYPTO );
 				deviceLocked = false;
 				_AES_RTL_SW_ECB( inKey, inEncrypt, gAESRTLVerifyInput, n, gAESRTLVerifySW );
 				if( !_AES_RTL_VerifyResult( inEncrypt ? "ECB-ENC" : "ECB-DEC",
@@ -697,14 +699,14 @@ static int
 				#if( AES_UTILS_RTL_VERIFY_SW )
 				if( inLen > 0 )
 				{
-					device_mutex_lock( RT_DEV_LOCK_CRYPTO );
+					carbox_crypto_aes_device_lock( RT_DEV_LOCK_CRYPTO );
 					deviceLocked = true;
 					err = crypto_aes_ecb_init( gAESRTLKey, 16 );
 					if( err != 0 )
 					{
 						hwOK = false;
 						_AES_RTL_DisableHW( "ECB re-init", err, false );
-						device_mutex_unlock( RT_DEV_LOCK_CRYPTO );
+						carbox_crypto_aes_device_unlock( RT_DEV_LOCK_CRYPTO );
 						deviceLocked = false;
 					}
 				}
@@ -714,7 +716,7 @@ static int
 		else
 		{
 			_AES_RTL_DisableHW( "ECB init", err, false );
-			device_mutex_unlock( RT_DEV_LOCK_CRYPTO );
+			carbox_crypto_aes_device_unlock( RT_DEV_LOCK_CRYPTO );
 			deviceLocked = false;
 		}
 	}
@@ -770,7 +772,7 @@ static int
 			{
 				hwOK = false;
 				_AES_RTL_DisableHW( "CBC init", err, false );
-				device_mutex_unlock( RT_DEV_LOCK_CRYPTO );
+				carbox_crypto_aes_device_unlock( RT_DEV_LOCK_CRYPTO );
 				deviceLocked = false;
 			}
 	}
@@ -798,7 +800,7 @@ static int
 			break;
 		}
 		#if( AES_UTILS_RTL_VERIFY_SW )
-		device_mutex_unlock( RT_DEV_LOCK_CRYPTO );
+		carbox_crypto_aes_device_unlock( RT_DEV_LOCK_CRYPTO );
 		deviceLocked = false;
 		_AES_RTL_SW_CBC( inKey, inEncrypt, gAESRTLVerifyInput, n, swIV, gAESRTLVerifySW );
 		if( !_AES_RTL_VerifyResult( inEncrypt ? "CBC-ENC" : "CBC-DEC",
@@ -816,14 +818,14 @@ static int
 		#if( AES_UTILS_RTL_VERIFY_SW )
 		if( inLen > 0 )
 		{
-			device_mutex_lock( RT_DEV_LOCK_CRYPTO );
+			carbox_crypto_aes_device_lock( RT_DEV_LOCK_CRYPTO );
 			deviceLocked = true;
 			err = crypto_aes_cbc_init( gAESRTLKey, 16 );
 			if( err != 0 )
 			{
 				hwOK = false;
 				_AES_RTL_DisableHW( "CBC re-init", err, false );
-				device_mutex_unlock( RT_DEV_LOCK_CRYPTO );
+				carbox_crypto_aes_device_unlock( RT_DEV_LOCK_CRYPTO );
 				deviceLocked = false;
 			}
 		}
@@ -954,7 +956,7 @@ static int
 			{
 				hwOK = false;
 				_AES_RTL_DisableHW( "CTR init", err, false );
-				device_mutex_unlock( RT_DEV_LOCK_CRYPTO );
+				carbox_crypto_aes_device_unlock( RT_DEV_LOCK_CRYPTO );
 				deviceLocked = false;
 			}
 	}
@@ -978,7 +980,7 @@ static int
 			break;
 		}
 		#if( AES_UTILS_RTL_VERIFY_SW )
-		device_mutex_unlock( RT_DEV_LOCK_CRYPTO );
+		carbox_crypto_aes_device_unlock( RT_DEV_LOCK_CRYPTO );
 		deviceLocked = false;
 		_AES_RTL_SW_CTR( inKey, swCounter, gAESRTLVerifyInput, n, gAESRTLVerifySW );
 		if( !_AES_RTL_VerifyResult( "CTR", ( 1U << 4 ), offset, inSrc, inDst, gAESRTLVerifySW, n ) )
@@ -996,14 +998,14 @@ static int
 		#if( AES_UTILS_RTL_VERIFY_SW )
 		if( inLen > 0 )
 		{
-			device_mutex_lock( RT_DEV_LOCK_CRYPTO );
+			carbox_crypto_aes_device_lock( RT_DEV_LOCK_CRYPTO );
 			deviceLocked = true;
 			err = crypto_aes_ctr_init( gAESRTLKey, 16 );
 			if( err != 0 )
 			{
 				hwOK = false;
 				_AES_RTL_DisableHW( "CTR re-init", err, false );
-				device_mutex_unlock( RT_DEV_LOCK_CRYPTO );
+				carbox_crypto_aes_device_unlock( RT_DEV_LOCK_CRYPTO );
 				deviceLocked = false;
 			}
 		}

@@ -11,6 +11,7 @@ endif
 CC := $(CROSS_COMPILE)gcc
 AR := $(CROSS_COMPILE)ar
 NM := $(CROSS_COMPILE)nm
+OBJCOPY := $(CROSS_COMPILE)objcopy
 
 OUTPUT_DIR ?= build
 VENDOR_CARPLAY_LIB ?= ../lib_CarPlay.a
@@ -22,12 +23,14 @@ CHACHA_HW_MIN_LEN ?= 4096
 CHACHA_NONALIGNED_SW_POLY ?= 0
 CHACHA_STATS_INTERVAL_MS ?= 5000
 CHACHA_HW_SELFTEST ?= 0
+CRYPTO_OWNER_BOOST_PRIORITY ?= 11
 OPT_FLAGS ?= -O3
 
 OPT_TAG := $(patsubst -%,%,$(firstword $(OPT_FLAGS)))
-OBJ_DIR := $(OUTPUT_DIR)/obj-mode$(CHACHA_MODE)-clear$(CHACHA_ENABLE_CLEAR)-min$(CHACHA_HW_MIN_LEN)-naswp$(CHACHA_NONALIGNED_SW_POLY)-stats$(CHACHA_STATS_INTERVAL_MS)-selftest$(CHACHA_HW_SELFTEST)-$(OPT_TAG)
+OBJ_DIR := $(OUTPUT_DIR)/obj-mode$(CHACHA_MODE)-clear$(CHACHA_ENABLE_CLEAR)-min$(CHACHA_HW_MIN_LEN)-naswp$(CHACHA_NONALIGNED_SW_POLY)-stats$(CHACHA_STATS_INTERVAL_MS)-selftest$(CHACHA_HW_SELFTEST)-prio$(CRYPTO_OWNER_BOOST_PRIORITY)-$(OPT_TAG)
 CORE_OBJ := $(OBJ_DIR)/ChaCha20Poly1305.o
 RTL_OBJ := $(OBJ_DIR)/ChaCha20Poly1305_rtl8195b.o
+AES_PATCHED_OBJ := $(OBJ_DIR)/AESUtils.o
 OBJS := $(CORE_OBJ) \
 	$(OBJ_DIR)/ChaCha20Poly1305_rtl8195b.o
 
@@ -47,6 +50,7 @@ RTL_INCLUDES := \
 	-I$(SDK_ROOT)/component/soc/realtek/8195b/fwlib/hal-rtl8195b-hp/lib/include/usb_otg \
 	-I$(SDK_ROOT)/component/common/mbed/hal_ext \
 	-I$(SDK_ROOT)/component/common/api/platform \
+	-I$(SDK_ROOT)/project/realtek_amebapro_v0_example/src/carbox \
 	-I$(SDK_ROOT)/component/os/freertos \
 	-I$(SDK_ROOT)/component/os/freertos/freertos_v10.0.0/include \
 	-I$(SDK_ROOT)/component/os/freertos/freertos_v10.0.0/portable/GCC/ARM_RTL8195B \
@@ -61,6 +65,7 @@ CFLAGS += $(COMMON_FLAGS) -DCHACHA_ENABLE_CLEAR=$(CHACHA_ENABLE_CLEAR) \
 	-DCARBOX_CHACHA_NONALIGNED_SW_POLY=$(CHACHA_NONALIGNED_SW_POLY) \
 	-DCARBOX_CHACHA_STATS_INTERVAL_MS=$(CHACHA_STATS_INTERVAL_MS) \
 	-DCARBOX_CHACHA_HW_SELFTEST=$(CHACHA_HW_SELFTEST) \
+	-DCARBOX_CRYPTO_OWNER_BOOST_PRIORITY=$(CRYPTO_OWNER_BOOST_PRIORITY) \
 	$(RTL_INCLUDES)
 
 .PHONY: all replacement standalone check clean print-config host-check FORCE
@@ -80,16 +85,25 @@ $(OBJ_DIR)/ChaCha20Poly1305.o: ChaCha20Poly1305.c ChaCha20Poly1305.h | $(OBJ_DIR
 $(OBJ_DIR)/ChaCha20Poly1305_rtl8195b.o: ChaCha20Poly1305_rtl8195b.c ChaCha20Poly1305_rtl8195b.h ChaCha20Poly1305.h | $(OBJ_DIR)
 	$(CC) $(CFLAGS) -Wno-unused-parameter -c $< -o $@
 
+# The customer archive contains AESUtils.o built from aes_rtl8195b/AESUtils.c,
+# but its proprietary support headers are not shipped in this workspace. Keep
+# that exact object and redirect only its crypto lock calls to the API-level
+# priority-aware lock used by the matching source. Other members are unchanged.
+$(AES_PATCHED_OBJ): $(VENDOR_CARPLAY_LIB) Makefile | $(OBJ_DIR)
+	cd $(OBJ_DIR) && $(abspath $(AR)) x $(abspath $(VENDOR_CARPLAY_LIB)) AESUtils.o
+	$(OBJCOPY) \
+		--redefine-sym device_mutex_lock=carbox_crypto_aes_device_lock \
+		--redefine-sym device_mutex_unlock=carbox_crypto_aes_device_unlock $@
+
 $(STANDALONE_LIB): $(OBJS)
 	$(AR) rcs $@ $^
 
-$(REPLACEMENT_CARPLAY_LIB): $(VENDOR_CARPLAY_LIB) $(CORE_OBJ) Makefile | $(OUTPUT_DIR)
+$(REPLACEMENT_CARPLAY_LIB): $(VENDOR_CARPLAY_LIB) $(CORE_OBJ) $(RTL_OBJ) $(AES_PATCHED_OBJ) Makefile | $(OUTPUT_DIR)
 	cp -f $(VENDOR_CARPLAY_LIB) $@
 	chmod u+w $@
-	# Preserve the customer's hardware object.  Only replace the protocol
-	# object whose local copy helper previously used a byte-at-a-time loop.
-	$(AR) d $@ ChaCha20Poly1305.o chacha_m33_asm.o
-	$(AR) rcs $@ $(CORE_OBJ)
+	# Replace only the CarPlay crypto API members; no global lock wrapper.
+	$(AR) d $@ ChaCha20Poly1305.o ChaCha20Poly1305_rtl8195b.o AESUtils.o chacha_m33_asm.o
+	$(AR) rcs $@ $(CORE_OBJ) $(RTL_OBJ) $(AES_PATCHED_OBJ)
 
 FORCE:
 
@@ -97,6 +111,12 @@ check: $(REPLACEMENT_CARPLAY_LIB)
 	@set -e; \
 	test "$$($(AR) t $< | grep -c '^ChaCha20Poly1305[.]o$$')" -eq 1; \
 	test "$$($(AR) t $< | grep -c '^chacha_m33_asm[.]o$$')" -eq 0; \
+	$(NM) -A -u $< | grep 'AESUtils[.]o:.* carbox_crypto_aes_device_lock$$' >/dev/null || { \
+		echo "Missing priority-aware AES lock"; exit 1; \
+	}; \
+	$(NM) -A -u $< | grep 'ChaCha20Poly1305_rtl8195b[.]o:.* carbox_crypto_chacha_device_lock$$' >/dev/null || { \
+		echo "Missing priority-aware ChaCha lock"; exit 1; \
+	}; \
 	for symbol in \
 		chacha20_poly1305_init_64x64 \
 		chacha20_poly1305_add_aad \
@@ -127,6 +147,7 @@ print-config:
 	@echo "CHACHA_NONALIGNED_SW_POLY=$(CHACHA_NONALIGNED_SW_POLY)"
 	@echo "CHACHA_STATS_INTERVAL_MS=$(CHACHA_STATS_INTERVAL_MS)"
 	@echo "CHACHA_HW_SELFTEST=$(CHACHA_HW_SELFTEST)"
+	@echo "CRYPTO_OWNER_BOOST_PRIORITY=$(CRYPTO_OWNER_BOOST_PRIORITY)"
 	@echo "VENDOR_CARPLAY_LIB=$(VENDOR_CARPLAY_LIB)"
 	@echo "REPLACEMENT_CARPLAY_LIB=$(REPLACEMENT_CARPLAY_LIB)"
 

@@ -3,6 +3,8 @@
 #include "screen_queue_profiler.h"
 #include "usb_hcd_profiler.h"
 #include "net_queue_profiler.h"
+#include "crypto_engine_profiler.h"
+#include "memcpy_task_profiler.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -352,6 +354,30 @@ static const char *pcprof_task_name(TaskHandle_t handle, UBaseType_t task_count)
 	return "<deleted>";
 }
 
+static TaskHandle_t pcprof_task_handle(const char *name, UBaseType_t task_count)
+{
+	UBaseType_t i;
+
+	for (i = 0; i < task_count; ++i) {
+		if (strcmp(pcprof_tasks[i].pcTaskName, name) == 0)
+			return pcprof_tasks[i].xHandle;
+	}
+	return NULL;
+}
+
+static UBaseType_t pcprof_task_priority(TaskHandle_t handle,
+				       UBaseType_t task_count)
+{
+	UBaseType_t i;
+
+	for (i = 0; i < task_count; ++i) {
+		if (pcprof_tasks[i].xHandle == handle) {
+			return pcprof_tasks[i].uxCurrentPriority;
+		}
+	}
+	return 0U;
+}
+
 static void pcprof_report(uint32_t sequence, uint32_t buffer, uint32_t count,
 			  uint32_t invalid, uint32_t nested, uint32_t late,
 			  uint32_t dropped, uint32_t isr_cycles,
@@ -406,6 +432,9 @@ static void pcprof_report(uint32_t sequence, uint32_t buffer, uint32_t count,
 
 	task_count = uxTaskGetSystemState(pcprof_tasks,
 					  PCPROF_MAX_TASK_SNAPSHOT, NULL);
+	carbox_memcpy_task_profiler_set_targets(
+		pcprof_task_handle("ScreenThread", task_count),
+		pcprof_task_handle("AirPlayScreenReceiver", task_count));
 	overhead_10000 = window_cycles != 0U ?
 		(uint32_t)(((uint64_t)isr_cycles * 10000U) / window_cycles) : 0U;
 	rt_printf("[PCPROF][%lu] window_ms=%u attempts=%lu samples=%lu "
@@ -434,10 +463,12 @@ static void pcprof_report(uint32_t sequence, uint32_t buffer, uint32_t count,
 			(uint32_t)(((uint64_t)task_top[i].hits * 10000U) / count) : 0U;
 
 		task_printed_hits += task_top[i].hits;
-		rt_printf("[PCPROF][%lu][TASK] #%02lu task=%-24s hits=%lu "
+		rt_printf("[PCPROF][%lu][TASK] #%02lu task=%-24s p=%lu hits=%lu "
 			  "pct=%lu.%02lu%%\r\n",
 			  (unsigned long)sequence, (unsigned long)(i + 1U),
 			  pcprof_task_name(task_top[i].task, task_count),
+			  (unsigned long)pcprof_task_priority(task_top[i].task,
+							 task_count),
 			  (unsigned long)task_top[i].hits,
 			  (unsigned long)(pct_100 / 100U),
 			  (unsigned long)(pct_100 % 100U));
@@ -458,10 +489,12 @@ static void pcprof_report(uint32_t sequence, uint32_t buffer, uint32_t count,
 			(uint32_t)(((uint64_t)top[i].hits * 10000U) / count) : 0U;
 
 		printed_hits += top[i].hits;
-		rt_printf("[PCPROF][%lu][PC] #%02lu task=%-24s pc=0x%08lx "
+		rt_printf("[PCPROF][%lu][PC] #%02lu task=%-24s p=%lu pc=0x%08lx "
 			  "lr=0x%08lx raw=0x%08lx hits=%lu pct=%lu.%02lu%%\r\n",
 			  (unsigned long)sequence, (unsigned long)(i + 1U),
 			  pcprof_task_name(top[i].task, task_count),
+			  (unsigned long)pcprof_task_priority(top[i].task,
+							 task_count),
 			  (unsigned long)top[i].pc, (unsigned long)top[i].lr,
 			  (unsigned long)top[i].raw_pc, (unsigned long)top[i].hits,
 			  (unsigned long)(pct_100 / 100U),
@@ -577,6 +610,9 @@ static void pcprof_task(void *arg)
 		screen_queue_profiler_report(sequence);
 		usb_hcd_profiler_report(sequence);
 		net_queue_profiler_report(sequence);
+		crypto_engine_profiler_report(sequence);
+		carbox_memcpy_task_profiler_report(sequence,
+						 PCPROF_REPORT_PERIOD_MS);
 	}
 }
 

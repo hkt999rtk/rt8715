@@ -316,7 +316,7 @@ extern unsigned int sys_now(void);
 #define	LWIP_WND_SCALE                  1
 
 #undef	TCP_RCV_SCALE
-#define	TCP_RCV_SCALE                   1
+#define	TCP_RCV_SCALE                   2
 
 #undef MEM_SIZE
 #define MEM_SIZE (32*1024)
@@ -378,12 +378,13 @@ extern unsigned int sys_now(void);
 #define MEMP_NUM_TCP_SEG TCP_SND_QUEUELEN
 
 /*
- * TCP_WND: receive window. Raised to 65535*2 (~131KB) matching COM3.
- * Larger window allows the iPhone to push data in bigger bursts
- * before waiting for ACKs, which is critical over NCM USB latency.
+ * TCP_WND: per-connection receive window.  Board profiling observed short
+ * bursts reaching about 80% of the former 128-KiB window.  Keep twice that
+ * headroom so those bursts do not throttle the sender.  TCP_RCV_SCALE must
+ * be 2: a scale of 1 can advertise at most 65535*2 bytes on the wire.
  */
 #undef TCP_WND
-#define TCP_WND (65535 * 2)
+#define TCP_WND (65535 * 4)
 
 /*
  * CONFIG_ETHERNET lowered MEMP_NUM_NETCONN to 10 above;
