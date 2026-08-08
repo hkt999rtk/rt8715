@@ -65,6 +65,14 @@ static screen_tx_direct_slot_t screen_tx_slots[SCREEN_TX_DIRECT_SLOTS];
 static screen_tx_direct_stats_t screen_tx_stats;
 static uint8_t screen_tx_enabled = 1U;
 
+static __attribute__((always_inline)) inline int screen_tx_in_isr(void)
+{
+	uint32_t ipsr;
+
+	__asm volatile("mrs %0, ipsr" : "=r" (ipsr));
+	return ipsr != 0U;
+}
+
 static screen_tx_direct_slot_t *screen_tx_find_task_locked(TaskHandle_t task)
 {
 	uint32_t i;
@@ -247,6 +255,12 @@ int carbox_screen_tx_crypto_begin(void *alias_source, size_t length,
 	if (direct_source != NULL) {
 		*direct_source = alias_source;
 	}
+	/* These APIs are linked globally, but direct-screen transaction state is
+	 * task-owned and protected by taskENTER_CRITICAL().  An ISR must retain the
+	 * original crypto operation without inspecting that state. */
+	if (screen_tx_in_isr()) {
+		return 0;
+	}
 	taskENTER_CRITICAL();
 	slot = screen_tx_find_destination_locked(task, destination, length);
 	if ((slot != NULL) && screen_tx_enabled &&
@@ -286,6 +300,9 @@ int carbox_screen_tx_crypto_active(void *destination, size_t length,
 
 	if (direct_source != NULL) {
 		*direct_source = destination;
+	}
+	if (screen_tx_in_isr()) {
+		return 0;
 	}
 	taskENTER_CRITICAL();
 	slot = screen_tx_find_destination_locked(task, destination, length);

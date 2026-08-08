@@ -876,7 +876,7 @@ VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES ?= 4096
 # AES or ChaCha writes ciphertext directly into wireBuffer + 128.
 # Diagnose handover ownership independently first.  Enable this only after the
 # Phase-B pointer swap passes start/stop/reconnect and long-run testing.
-SCREEN_TX_DIRECT_CRYPTO ?= 0
+SCREEN_TX_DIRECT_CRYPTO ?= 1
 SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES ?= 4096
 # Keep the expensive, already-concluded diagnostic probes independently
 # switchable.  The normal screen timing/backlog profiler does not need them.
