@@ -207,6 +207,11 @@ typedef struct screenprof_stats_s {
 	uint32_t rx_window_ge75;
 	uint32_t rx_window_ge90;
 	uint32_t rx_window_full;
+	uint64_t rx_window_advertised_sum;
+	uint32_t rx_window_advertised_last;
+	uint32_t rx_window_advertised_min;
+	uint32_t rx_window_advertised_max;
+	uint32_t rx_window_advertised_zero;
 
 	uint32_t select_calls;
 	uint32_t select_ready;
@@ -521,6 +526,24 @@ static void screenprof_record_rx_buffer(
 	}
 	if ((capacity != 0U) && (used >= capacity)) {
 		screenprof_live.rx_window_full++;
+	}
+	screenprof_live.rx_window_advertised_sum +=
+		diag->rx_window_advertised;
+	screenprof_live.rx_window_advertised_last =
+		diag->rx_window_advertised;
+	if ((screenprof_live.rx_buffer_samples == 1U) ||
+	    (diag->rx_window_advertised <
+	     screenprof_live.rx_window_advertised_min)) {
+		screenprof_live.rx_window_advertised_min =
+			diag->rx_window_advertised;
+	}
+	if (diag->rx_window_advertised >
+	    screenprof_live.rx_window_advertised_max) {
+		screenprof_live.rx_window_advertised_max =
+			diag->rx_window_advertised;
+	}
+	if (diag->rx_window_advertised == 0U) {
+		screenprof_live.rx_window_advertised_zero++;
 	}
 	screenprof_record_probe_time(probe_us);
 	taskEXIT_CRITICAL();
@@ -2150,6 +2173,29 @@ void screen_queue_profiler_report(uint32_t sequence)
 			  (unsigned long)screenprof_copy.rx_window_full,
 			  (unsigned long)(rx100 / 10U),
 			  (unsigned long)(rx100 % 10U));
+		{
+			uint32_t ann_zero = screenprof_ratio_x10(
+				screenprof_copy.rx_window_advertised_zero,
+				screenprof_copy.rx_buffer_samples);
+
+			rt_printf("[BUFPROF][%lu] RX advertised_window "
+				  "last/min/avg/max=%lu/%lu/%lu/%luB "
+				  "zero=%lu(%lu.%lu%%)\r\n",
+				  (unsigned long)sequence,
+				  (unsigned long)
+					screenprof_copy.rx_window_advertised_last,
+				  (unsigned long)
+					screenprof_copy.rx_window_advertised_min,
+				  (unsigned long)screenprof_average(
+					screenprof_copy.rx_window_advertised_sum,
+					screenprof_copy.rx_buffer_samples),
+				  (unsigned long)
+					screenprof_copy.rx_window_advertised_max,
+				  (unsigned long)
+					screenprof_copy.rx_window_advertised_zero,
+				  (unsigned long)(ann_zero / 10U),
+				  (unsigned long)(ann_zero % 10U));
+		}
 		rt_printf("[BUFPROF][%lu] TX samples/error=%lu/%lu "
 			  "used_last/avg/max/cap=%lu/%lu/%lu/%luB "
 			  "ge75/ge90/full=%lu(%lu.%lu%%)/%lu(%lu.%lu%%)/"
@@ -2249,9 +2295,304 @@ void screen_queue_profiler_report(uint32_t sequence)
 
 #else
 
+#if CONFIG_SCREEN_TCP_BUFFER_PROFILE
+
+/*
+ * Lightweight mode: identify only the inbound AirPlay video socket without
+ * enabling the full frame/queue profiler.  The closed screen receiver reads
+ * its control socket in <=64-byte units, a fixed screen header in 128-byte
+ * units, and the encrypted frame body as one large exact-read request.  A
+ * >40-KiB request from AirPlayScreenReceiver therefore provides a simple,
+ * high-confidence one-time binding to the video fd.  Once bound, sample the
+ * PCB at each subsequent 128-byte header request (one sample per frame) so
+ * small video frames remain represented without probing every body read.
+ */
+#define VIDRX_BIND_MIN_BYTES       (40U * 1024U)
+
+typedef struct vidrx_window_stats_s {
+	TaskHandle_t task;
+	int socket;
+	uint32_t generation;
+	uint32_t samples;
+	uint32_t errors;
+	uint64_t pending_sum;
+	uint32_t pending_last;
+	uint32_t pending_max;
+	uint64_t available_sum;
+	uint32_t available_last;
+	uint32_t available_min;
+	uint32_t available_max;
+	uint64_t advertised_sum;
+	uint32_t advertised_last;
+	uint32_t advertised_min;
+	uint32_t advertised_max;
+	uint32_t advertised_zero;
+	uint64_t used_sum;
+	uint32_t used_last;
+	uint32_t used_max;
+	uint32_t capacity;
+	uint32_t ge75;
+	uint32_t ge90;
+	uint32_t full;
+	uint64_t probe_time_sum_us;
+	uint32_t probe_time_max_us;
+} vidrx_window_stats_t;
+
+static vidrx_window_stats_t vidrx_live = {
+	.socket = -1
+};
+static vidrx_window_stats_t vidrx_copy;
+
+extern ssize_t __real_lwip_recv(int socket, void *buffer, size_t bytes,
+				int flags);
+
+static int vidrx_name_equal(const char *left, const char *right)
+{
+	if ((left == NULL) || (right == NULL)) {
+		return 0;
+	}
+	while (*left == *right) {
+		if (*left == '\0') {
+			return 1;
+		}
+		left++;
+		right++;
+	}
+	return 0;
+}
+
+static int vidrx_is_receiver_task(TaskHandle_t task)
+{
+	return vidrx_name_equal(pcTaskGetName(task),
+				"AirPlayScreenReceiver");
+}
+
+static void vidrx_bind(TaskHandle_t task, int socket)
+{
+	taskENTER_CRITICAL();
+	if ((vidrx_live.task != task) || (vidrx_live.socket != socket)) {
+		uint32_t generation = vidrx_live.generation + 1U;
+
+		vidrx_live = (vidrx_window_stats_t){
+			.task = task,
+			.socket = socket,
+			.generation = generation
+		};
+	}
+	taskEXIT_CRITICAL();
+}
+
+static int vidrx_is_bound(TaskHandle_t task, int socket)
+{
+	int bound;
+
+	taskENTER_CRITICAL();
+	bound = (vidrx_live.task == task) &&
+		(vidrx_live.socket == socket);
+	taskEXIT_CRITICAL();
+	return bound;
+}
+
+static void vidrx_record_snapshot(const struct lwip_tcp_buffer_diag *diag,
+				  uint32_t probe_us)
+{
+	uint32_t capacity = diag->rx_window_capacity;
+	uint32_t available = diag->rx_window_available;
+	uint32_t advertised = diag->rx_window_advertised;
+	uint32_t used = (available < capacity) ? capacity - available : 0U;
+
+	taskENTER_CRITICAL();
+	vidrx_live.samples++;
+	vidrx_live.pending_sum += diag->rx_pending_bytes;
+	vidrx_live.pending_last = diag->rx_pending_bytes;
+	if (diag->rx_pending_bytes > vidrx_live.pending_max) {
+		vidrx_live.pending_max = diag->rx_pending_bytes;
+	}
+	vidrx_live.available_sum += available;
+	vidrx_live.available_last = available;
+	if ((vidrx_live.samples == 1U) ||
+	    (available < vidrx_live.available_min)) {
+		vidrx_live.available_min = available;
+	}
+	if (available > vidrx_live.available_max) {
+		vidrx_live.available_max = available;
+	}
+	vidrx_live.advertised_sum += advertised;
+	vidrx_live.advertised_last = advertised;
+	if ((vidrx_live.samples == 1U) ||
+	    (advertised < vidrx_live.advertised_min)) {
+		vidrx_live.advertised_min = advertised;
+	}
+	if (advertised > vidrx_live.advertised_max) {
+		vidrx_live.advertised_max = advertised;
+	}
+	if (advertised == 0U) {
+		vidrx_live.advertised_zero++;
+	}
+	vidrx_live.used_sum += used;
+	vidrx_live.used_last = used;
+	if (used > vidrx_live.used_max) {
+		vidrx_live.used_max = used;
+	}
+	vidrx_live.capacity = capacity;
+	if ((capacity != 0U) && (used * 100U >= capacity * 75U)) {
+		vidrx_live.ge75++;
+	}
+	if ((capacity != 0U) && (used * 100U >= capacity * 90U)) {
+		vidrx_live.ge90++;
+	}
+	if ((capacity != 0U) && (used >= capacity)) {
+		vidrx_live.full++;
+	}
+	vidrx_live.probe_time_sum_us += probe_us;
+	if (probe_us > vidrx_live.probe_time_max_us) {
+		vidrx_live.probe_time_max_us = probe_us;
+	}
+	taskEXIT_CRITICAL();
+}
+
+ssize_t __wrap_lwip_recv(int socket, void *buffer, size_t bytes, int flags)
+{
+	TaskHandle_t task = xTaskGetCurrentTaskHandle();
+	int receiver = vidrx_is_receiver_task(task);
+	int newly_bound = 0;
+
+	if (receiver && (bytes > VIDRX_BIND_MIN_BYTES)) {
+		if (!vidrx_is_bound(task, socket)) {
+			vidrx_bind(task, socket);
+			newly_bound = 1;
+		}
+	}
+
+	/*
+	 * The binding body read is sampled immediately.  Thereafter the fixed
+	 * header request provides one low-overhead snapshot per frame, before
+	 * recv() consumes bytes and re-opens the local TCP receive window.
+	 */
+	if (receiver && vidrx_is_bound(task, socket) &&
+	    (newly_bound || (bytes == 128U))) {
+		struct lwip_tcp_buffer_diag diag;
+		uint32_t start_us = hal_read_curtime_us();
+		int result = lwip_diag_tcp_buffer_state(socket, &diag);
+		uint32_t probe_us = hal_read_curtime_us() - start_us;
+
+		if (result == 0) {
+			vidrx_record_snapshot(&diag, probe_us);
+		} else {
+			taskENTER_CRITICAL();
+			vidrx_live.errors++;
+			taskEXIT_CRITICAL();
+		}
+	}
+
+	return __real_lwip_recv(socket, buffer, bytes, flags);
+}
+
+static uint32_t vidrx_average(uint64_t total, uint32_t count)
+{
+	return (count != 0U) ? (uint32_t)(total / count) : 0U;
+}
+
+static uint32_t vidrx_ratio_x10(uint32_t value, uint32_t total)
+{
+	return (total != 0U) ? (value * 1000U) / total : 0U;
+}
+
+void screen_queue_profiler_report(uint32_t sequence)
+{
+	uint32_t ge75_x10;
+	uint32_t ge90_x10;
+	uint32_t full_x10;
+	TaskHandle_t task;
+	int socket;
+	uint32_t generation;
+
+	taskENTER_CRITICAL();
+	vidrx_copy = vidrx_live;
+	task = vidrx_live.task;
+	socket = vidrx_live.socket;
+	generation = vidrx_live.generation;
+	vidrx_live = (vidrx_window_stats_t){
+		.task = task,
+		.socket = socket,
+		.generation = generation
+	};
+	taskEXIT_CRITICAL();
+
+	if ((vidrx_copy.samples == 0U) && (vidrx_copy.errors == 0U)) {
+		return;
+	}
+
+	ge75_x10 = vidrx_ratio_x10(vidrx_copy.ge75, vidrx_copy.samples);
+	ge90_x10 = vidrx_ratio_x10(vidrx_copy.ge90, vidrx_copy.samples);
+	full_x10 = vidrx_ratio_x10(vidrx_copy.full, vidrx_copy.samples);
+
+	rt_printf("[VIDRXWND][%lu] source=AirPlayScreenReceiver "
+		  "bind=recv_req_gt_40KiB task=0x%08lx fd=%d generation=%lu "
+		  "samples/error=%lu/%lu wnd_scale=%s\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)(uintptr_t)vidrx_copy.task,
+		  vidrx_copy.socket,
+		  (unsigned long)vidrx_copy.generation,
+		  (unsigned long)vidrx_copy.samples,
+		  (unsigned long)vidrx_copy.errors,
+		  (vidrx_copy.capacity > 65535U) ? "negotiated" : "none");
+	rt_printf("[VIDRXWND][%lu] pending_last/avg/max=%lu/%lu/%luB "
+		  "window_avail_last/min/avg/max/cap=%lu/%lu/%lu/%lu/%luB "
+		  "used_last/avg/max=%lu/%lu/%luB\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)vidrx_copy.pending_last,
+		  (unsigned long)vidrx_average(vidrx_copy.pending_sum,
+						vidrx_copy.samples),
+		  (unsigned long)vidrx_copy.pending_max,
+		  (unsigned long)vidrx_copy.available_last,
+		  (unsigned long)vidrx_copy.available_min,
+		  (unsigned long)vidrx_average(vidrx_copy.available_sum,
+						vidrx_copy.samples),
+		  (unsigned long)vidrx_copy.available_max,
+		  (unsigned long)vidrx_copy.capacity,
+		  (unsigned long)vidrx_copy.used_last,
+		  (unsigned long)vidrx_average(vidrx_copy.used_sum,
+						vidrx_copy.samples),
+		  (unsigned long)vidrx_copy.used_max);
+	rt_printf("[VIDRXWND][%lu] advertised_last/min/avg/max=%lu/%lu/%lu/%luB "
+		  "advertised_zero=%lu(%lu.%lu%%)\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)vidrx_copy.advertised_last,
+		  (unsigned long)vidrx_copy.advertised_min,
+		  (unsigned long)vidrx_average(vidrx_copy.advertised_sum,
+						vidrx_copy.samples),
+		  (unsigned long)vidrx_copy.advertised_max,
+		  (unsigned long)vidrx_copy.advertised_zero,
+		  (unsigned long)(vidrx_ratio_x10(vidrx_copy.advertised_zero,
+							vidrx_copy.samples) / 10U),
+		  (unsigned long)(vidrx_ratio_x10(vidrx_copy.advertised_zero,
+							vidrx_copy.samples) % 10U));
+	rt_printf("[VIDRXWND][%lu] used_ge75/ge90/full=%lu(%lu.%lu%%)/"
+		  "%lu(%lu.%lu%%)/%lu(%lu.%lu%%) "
+		  "probe_us_avg/max=%lu/%lu\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)vidrx_copy.ge75,
+		  (unsigned long)(ge75_x10 / 10U),
+		  (unsigned long)(ge75_x10 % 10U),
+		  (unsigned long)vidrx_copy.ge90,
+		  (unsigned long)(ge90_x10 / 10U),
+		  (unsigned long)(ge90_x10 % 10U),
+		  (unsigned long)vidrx_copy.full,
+		  (unsigned long)(full_x10 / 10U),
+		  (unsigned long)(full_x10 % 10U),
+		  (unsigned long)vidrx_average(vidrx_copy.probe_time_sum_us,
+						vidrx_copy.samples),
+		  (unsigned long)vidrx_copy.probe_time_max_us);
+}
+
+#else
+
 void screen_queue_profiler_report(uint32_t sequence)
 {
 	(void)sequence;
 }
+
+#endif /* CONFIG_SCREEN_TCP_BUFFER_PROFILE */
 
 #endif /* CONFIG_SCREEN_QUEUE_PROFILE */

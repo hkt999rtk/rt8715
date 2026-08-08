@@ -494,6 +494,14 @@ static u8 RX_BUFFER[MAX_BUFFER_SIZE];
 #define CONFIG_NCM_TX_ASYNC_PROFILE 0
 #endif
 
+#ifndef CONFIG_NCM_TX_BATCH
+#define CONFIG_NCM_TX_BATCH 0
+#endif
+
+#ifndef CONFIG_NCM_TX_BATCH_PROFILE
+#define CONFIG_NCM_TX_BATCH_PROFILE 0
+#endif
+
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
 #define NCM_TX_PROFILE_WINDOW_US 10000000U
 #define NCM_TX_PROFILE_SIZE_BINS 4U
@@ -608,7 +616,8 @@ static void ncm_tx_profile_report(u32_t now)
 	g_ncm_tx_profile.window_start_us = now;
 }
 
-static void ncm_tx_profile_commit(u32_t bytes, u32_t segments, int result,
+static void ncm_tx_profile_commit(u32_t bytes, u32_t pbufs,
+				  u32_t chained_pbufs, u32_t segments, int result,
 				  u32_t total_cycles, u32_t flatten_cycles,
 				  u32_t send_cycles)
 {
@@ -625,11 +634,8 @@ static void ncm_tx_profile_commit(u32_t bytes, u32_t segments, int result,
 		g_ncm_tx_profile.errors++;
 	}
 	g_ncm_tx_profile.bytes += bytes;
-	if (segments <= 1U) {
-		g_ncm_tx_profile.single_pbuf++;
-	} else {
-		g_ncm_tx_profile.chained_pbuf++;
-	}
+	g_ncm_tx_profile.chained_pbuf += chained_pbufs;
+	g_ncm_tx_profile.single_pbuf += pbufs - chained_pbufs;
 	g_ncm_tx_profile.pbuf_segments += segments;
 	if (segments > g_ncm_tx_profile.pbuf_segments_max) {
 		g_ncm_tx_profile.pbuf_segments_max = segments;
@@ -685,6 +691,217 @@ extern int usbh_cdc_ncm_send_data(u8 *buf, u32 len);
 extern u16 usbh_cdc_ecm_get_receive_mps(void);
 #elif defined(CONFIG_USBH_CDC_NCM)
 extern u16 usbh_cdc_ncm_get_receive_mps(void);
+#endif
+
+#if defined(CONFIG_PLATFORM_8195BHP) && defined(CONFIG_USBH_CDC_NCM) && \
+	CONFIG_NCM_TX_ASYNC && CONFIG_NCM_TX_BATCH
+/*
+ * The USB NCM transport is supplied only as lib_usbsmart.a.  Its public
+ * usbh_cdc_ncm_send_data() function owns bulk submission and the completion
+ * semaphore, but calls ncm_wrap_ntb() to construct the transfer.  Linker
+ * wrapping replaces only that formatter so the closed transport state machine
+ * remains untouched.
+ *
+ * The first argument is Realtek's packed host-user object.  The two offsets
+ * below are part of the observed lib_usbsmart ABI (and are also used directly
+ * by usbh_cdc_ncm_send_data/ncm_wrap_ntb in that archive).  Read them bytewise:
+ * an ordinary u32 load at offset 19 or 43 would raise UNALIGNED on Cortex-M33.
+ * Every invocation validates the pointed-to NCM options before writing.  A
+ * changed library ABI therefore stops TX with one explicit FATAL message
+ * instead of corrupting an unknown buffer.
+ */
+#define NCM_TX_HOST_CONTEXT_OFFSET       19U
+#define NCM_TX_HOST_BUFFER_OFFSET        43U
+#define NCM_TX_CONTEXT_CRC_OFFSET         4U
+#define NCM_TX_CONTEXT_OPTIONS_OFFSET     8U
+#define NCM_TX_CONTEXT_MAX_SIZE_OFFSET   40U
+#define NCM_TX_NTB_MAX_SIZE           16384U
+#define NCM_TX_NTH16_SIGNATURE    0x484D434EU
+#define NCM_TX_NDP16_SIGNATURE    0x304D434EU
+#define NCM_TX_NTH16_SIZE                 12U
+#define NCM_TX_NDP16_HEADER_SIZE           8U
+#define NCM_TX_DPE16_SIZE                  4U
+
+struct ncm_tx_batch_second {
+	const u8 *data;
+	u32_t len;
+};
+
+static struct ncm_tx_batch_second g_ncm_tx_batch_second;
+static u8 g_ncm_tx_batch_fatal_logged;
+
+static u32_t ncm_tx_get_le32(const u8 *p)
+{
+	/* volatile is intentional: without it GCC folds these byte reads into one
+	 * unaligned LDR even though host-user fields live at packed offsets. */
+	const volatile u8 *v = (const volatile u8 *)p;
+
+	return (u32_t)v[0] |
+	       ((u32_t)v[1] << 8) |
+	       ((u32_t)v[2] << 16) |
+	       ((u32_t)v[3] << 24);
+}
+
+static void ncm_tx_put_le16(u8 *p, u16 value)
+{
+	p[0] = (u8)(value & 0xFFU);
+	p[1] = (u8)(value >> 8);
+}
+
+static void ncm_tx_put_le32(u8 *p, u32_t value)
+{
+	p[0] = (u8)(value & 0xFFU);
+	p[1] = (u8)((value >> 8) & 0xFFU);
+	p[2] = (u8)((value >> 16) & 0xFFU);
+	p[3] = (u8)(value >> 24);
+}
+
+static u32_t ncm_tx_align4(u32_t value)
+{
+	return (value + 3U) & ~3U;
+}
+
+static u32_t ncm_tx_batch_ntb_size(u32_t first_len, u32_t second_len)
+{
+	u32_t ndp_len = NCM_TX_NDP16_HEADER_SIZE +
+		NCM_TX_DPE16_SIZE * (second_len ? 3U : 2U);
+	u32_t first_index = ncm_tx_align4(NCM_TX_NTH16_SIZE + ndp_len);
+	u32_t first_end = first_index + first_len;
+
+	if (second_len == 0U) {
+		return first_end;
+	}
+	return ncm_tx_align4(first_end) + second_len;
+}
+
+static int ncm_tx_batch_fatal(const char *reason, u32_t actual,
+			      u32_t expected)
+{
+	if (g_ncm_tx_batch_fatal_logged == 0U) {
+		g_ncm_tx_batch_fatal_logged = 1U;
+		printf("[NCMTXBATCH][FATAL] formatter ABI %s actual=0x%08x expected=0x%08x; NCM TX stopped\n",
+		       reason, (unsigned int)actual, (unsigned int)expected);
+	}
+	return -1;
+}
+
+static void ncm_tx_batch_arm(const u8 *data, u32_t len)
+{
+	/* The NCM worker is the sole caller of the synchronous closed transport. */
+	g_ncm_tx_batch_second.data = data;
+	g_ncm_tx_batch_second.len = len;
+}
+
+static void ncm_tx_batch_disarm(void)
+{
+	g_ncm_tx_batch_second.data = NULL;
+	g_ncm_tx_batch_second.len = 0U;
+}
+
+int __wrap_ncm_wrap_ntb(void *host_user, u8 *first_data, u32_t first_len)
+{
+	const u8 *host = (const u8 *)host_user;
+	const u8 *context;
+	const u8 *options;
+	u8 *out;
+	u32_t context_addr;
+	u32_t options_addr;
+	u32_t out_addr;
+	u32_t out_max;
+	u32_t second_len = g_ncm_tx_batch_second.len;
+	u32_t ndp_len;
+	u32_t first_index;
+	u32_t second_index = 0U;
+	u32_t block_len;
+
+	if (host == NULL || first_data == NULL || first_len == 0U ||
+	    first_len > 0xFFFFU || second_len > 0xFFFFU ||
+	    (second_len != 0U && g_ncm_tx_batch_second.data == NULL)) {
+		return ncm_tx_batch_fatal("argument", first_len, 1U);
+	}
+
+	context_addr = ncm_tx_get_le32(host + NCM_TX_HOST_CONTEXT_OFFSET);
+	out_addr = ncm_tx_get_le32(host + NCM_TX_HOST_BUFFER_OFFSET);
+	if (context_addr == 0U || out_addr == 0U) {
+		return ncm_tx_batch_fatal("pointer", context_addr, out_addr);
+	}
+	context = (const u8 *)(uintptr_t)context_addr;
+	out = (u8 *)(uintptr_t)out_addr;
+	if (context[NCM_TX_CONTEXT_CRC_OFFSET] != 0U) {
+		return ncm_tx_batch_fatal("crc-mode",
+			context[NCM_TX_CONTEXT_CRC_OFFSET], 0U);
+	}
+
+	options_addr = ncm_tx_get_le32(context + NCM_TX_CONTEXT_OPTIONS_OFFSET);
+	if (options_addr == 0U) {
+		return ncm_tx_batch_fatal("options", 0U, 1U);
+	}
+	options = (const u8 *)(uintptr_t)options_addr;
+	if (ncm_tx_get_le32(options) != NCM_TX_NTH16_SIGNATURE) {
+		return ncm_tx_batch_fatal("NTH16-signature",
+			ncm_tx_get_le32(options), NCM_TX_NTH16_SIGNATURE);
+	}
+	if (ncm_tx_get_le32(options + 4U) != NCM_TX_NDP16_SIGNATURE) {
+		return ncm_tx_batch_fatal("NDP16-signature",
+			ncm_tx_get_le32(options + 4U), NCM_TX_NDP16_SIGNATURE);
+	}
+	if (ncm_tx_get_le32(options + 8U) != NCM_TX_NTH16_SIZE ||
+	    ncm_tx_get_le32(options + 12U) != NCM_TX_NDP16_HEADER_SIZE ||
+	    ncm_tx_get_le32(options + 16U) != NCM_TX_DPE16_SIZE) {
+		return ncm_tx_batch_fatal("layout",
+			ncm_tx_get_le32(options + 8U), NCM_TX_NTH16_SIZE);
+	}
+
+	out_max = ncm_tx_get_le32(context + NCM_TX_CONTEXT_MAX_SIZE_OFFSET);
+	block_len = ncm_tx_batch_ntb_size(first_len, second_len);
+	if (out_max == 0U || out_max > 0xFFFFU || block_len > out_max ||
+	    block_len > NCM_TX_NTB_MAX_SIZE) {
+		return ncm_tx_batch_fatal("NTB-size", block_len, out_max);
+	}
+
+	ndp_len = NCM_TX_NDP16_HEADER_SIZE +
+		NCM_TX_DPE16_SIZE * (second_len ? 3U : 2U);
+	first_index = ncm_tx_align4(NCM_TX_NTH16_SIZE + ndp_len);
+	if (second_len != 0U) {
+		second_index = ncm_tx_align4(first_index + first_len);
+	}
+
+	/* NTH16 followed by one NDP16.  Each DPE index obeys the negotiated
+	 * divisor/alignment/remainder of 4/4/0 reported by this device. */
+	memset(out, 0, first_index);
+	ncm_tx_put_le32(out + 0U, NCM_TX_NTH16_SIGNATURE);
+	ncm_tx_put_le16(out + 4U, NCM_TX_NTH16_SIZE);
+	/* Preserve the exact NTH16 convention emitted by the closed formatter for
+	 * this deployed gadget: sequence and block length are both zero, while the
+	 * formatter return value supplies the USB transfer length.  Although a
+	 * populated wBlockLength is valid NCM16, changing these fields caused the
+	 * peer to submit successfully at USB level but discard the NTB. */
+	ncm_tx_put_le16(out + 6U, 0U);
+	ncm_tx_put_le16(out + 8U, 0U);
+	ncm_tx_put_le16(out + 10U, NCM_TX_NTH16_SIZE);
+
+	ncm_tx_put_le32(out + 12U, NCM_TX_NDP16_SIGNATURE);
+	ncm_tx_put_le16(out + 16U, (u16)ndp_len);
+	ncm_tx_put_le16(out + 18U, 0U);
+	ncm_tx_put_le16(out + 20U, (u16)first_index);
+	ncm_tx_put_le16(out + 22U, (u16)first_len);
+	if (second_len != 0U) {
+		ncm_tx_put_le16(out + 24U, (u16)second_index);
+		ncm_tx_put_le16(out + 26U, (u16)second_len);
+		/* The terminator at offsets 28/30 was cleared by memset(). */
+	}
+
+	memcpy(out + first_index, first_data, first_len);
+	if (second_len != 0U) {
+		if (second_index > first_index + first_len) {
+			memset(out + first_index + first_len, 0,
+			       second_index - first_index - first_len);
+		}
+		memcpy(out + second_index, g_ncm_tx_batch_second.data,
+		       second_len);
+	}
+	return (int)block_len;
+}
 #endif
 
 #endif
@@ -755,7 +972,7 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
 }
 
 /*for ethernet mii interface*/
-static err_t ncm_send_pbuf_sync(struct pbuf *p)
+static err_t ncm_send_pbuf_sync(struct pbuf *p, struct pbuf *second)
 {
 #if (defined(CONFIG_ETHERNET) && CONFIG_ETHERNET)
 	// printf("[NCM] tx len=%d\n", p->tot_len);
@@ -763,6 +980,7 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 	u8 *pdata = TX_BUFFER;
 	u8 *tx_data = TX_BUFFER;
 	u32 size = 0;
+	u32 total_size;
 	int ret = 0;
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
 	u32_t profile_start_cycles;
@@ -771,9 +989,23 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 	u32_t profile_send_start_cycles;
 	u32_t profile_send_cycles;
 	u32_t profile_segments = 1U;
+	u32_t profile_pbufs = 1U;
+	u32_t profile_chained_pbufs = 0U;
 
 	ncm_tx_profile_init();
 	profile_start_cycles = DWT->CYCCNT;
+#endif
+
+#if !(defined(CONFIG_PLATFORM_8195BHP) && defined(CONFIG_USBH_CDC_NCM) && \
+	CONFIG_NCM_TX_ASYNC && CONFIG_NCM_TX_BATCH)
+	(void)second;
+	second = NULL;
+#else
+	/* Aggregation intentionally accepts only two already-contiguous pbufs.
+	 * Chained packets stay on the existing flatten-and-send path. */
+	if (second != NULL && (p->next != NULL || second->next != NULL)) {
+		return ERR_ARG;
+	}
 #endif
 
 	/* ncm_wrap_ntb() consumes the payload synchronously and does not modify it. */
@@ -784,6 +1016,7 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
 		profile_flatten_start_cycles = DWT->CYCCNT;
 		profile_segments = 0U;
+		profile_chained_pbufs = 1U;
 #endif
 		for (q = p; q != NULL; q = q->next) {
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
@@ -795,8 +1028,9 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
 				profile_flatten_cycles = DWT->CYCCNT -
 					profile_flatten_start_cycles;
-				ncm_tx_profile_commit((u32_t)p->tot_len, profile_segments,
-					-1, DWT->CYCCNT - profile_start_cycles,
+				ncm_tx_profile_commit((u32_t)p->tot_len, 1U, 1U,
+					profile_segments, -1,
+					DWT->CYCCNT - profile_start_cycles,
 					profile_flatten_cycles, 0U);
 #endif
 				return ERR_BUF;
@@ -819,6 +1053,18 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 		profile_flatten_cycles = DWT->CYCCNT - profile_flatten_start_cycles;
 #endif
 	}
+	total_size = size;
+#if defined(CONFIG_PLATFORM_8195BHP) && defined(CONFIG_USBH_CDC_NCM) && \
+	CONFIG_NCM_TX_ASYNC && CONFIG_NCM_TX_BATCH
+	if (second != NULL) {
+		ncm_tx_batch_arm((const u8 *)second->payload, second->len);
+		total_size += second->len;
+#if CONFIG_NCM_TX_PROFILE
+		profile_pbufs = 2U;
+		profile_segments = 2U;
+#endif
+	}
+#endif
 
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
 	profile_send_start_cycles = DWT->CYCCNT;
@@ -828,9 +1074,14 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 #elif defined(CONFIG_USBH_CDC_NCM)
 	ret = usbh_cdc_ncm_send_data(tx_data, size);
 #endif
+#if defined(CONFIG_PLATFORM_8195BHP) && defined(CONFIG_USBH_CDC_NCM) && \
+	CONFIG_NCM_TX_ASYNC && CONFIG_NCM_TX_BATCH
+	ncm_tx_batch_disarm();
+#endif
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
 	profile_send_cycles = DWT->CYCCNT - profile_send_start_cycles;
-	ncm_tx_profile_commit(size, profile_segments, ret,
+	ncm_tx_profile_commit(total_size, profile_pbufs, profile_chained_pbufs,
+		profile_segments, ret,
 		DWT->CYCCNT - profile_start_cycles, profile_flatten_cycles,
 		profile_send_cycles);
 #endif
@@ -840,6 +1091,7 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 	}
 #endif
 	(void) p;
+	(void) second;
 	return ERR_OK;
 }
 
@@ -864,6 +1116,15 @@ struct ncm_tx_async_stats {
 	u32_t queue_depth_max;
 	u32_t queue_wait_max_us;
 	uint64_t queue_wait_total_us;
+#if CONFIG_NCM_TX_BATCH
+	u32_t ntbs;
+	u32_t single_ntbs;
+	u32_t paired_ntbs;
+	u32_t paired_bytes;
+	u32_t pair_skip_no_peer;
+	u32_t pair_skip_chained;
+	u32_t pair_skip_size;
+#endif
 };
 
 static QueueHandle_t g_ncm_tx_async_queue;
@@ -895,7 +1156,13 @@ static void ncm_tx_async_report(u32_t now)
 	taskEXIT_CRITICAL();
 	depth_now = (u32_t)uxQueueMessagesWaiting(g_ncm_tx_async_queue);
 	sent = snapshot.sent;
-	printf("[NCMTXASYNC] window_us=%u mode=single-immediate enqueued/sent/error/full=%u/%u/%u/%u "
+	printf("[NCMTXASYNC] window_us=%u mode="
+#if CONFIG_NCM_TX_BATCH
+	       "pair-opportunistic"
+#else
+	       "single-immediate"
+#endif
+	       " enqueued/sent/error/full=%u/%u/%u/%u "
 	       "depth_now/max=%u/%u wait_us avg/max=%u/%u queue_payload_copy=0\n",
 	       (unsigned int)window,
 	       (unsigned int)snapshot.enqueued,
@@ -906,6 +1173,19 @@ static void ncm_tx_async_report(u32_t now)
 	       (unsigned int)snapshot.queue_depth_max,
 	       sent ? (unsigned int)(snapshot.queue_wait_total_us / sent) : 0U,
 	       (unsigned int)snapshot.queue_wait_max_us);
+#if CONFIG_NCM_TX_BATCH && CONFIG_NCM_TX_BATCH_PROFILE
+	printf("[NCMTXBATCH] ntbs single/pair=%u/%u packets=%u saved_submits=%u "
+	       "pair_packet_pct_x100=%u paired_bytes=%u skip no_peer/chained/size=%u/%u/%u\n",
+	       (unsigned int)snapshot.single_ntbs,
+	       (unsigned int)snapshot.paired_ntbs,
+	       (unsigned int)sent,
+	       (unsigned int)snapshot.paired_ntbs,
+	       sent ? (unsigned int)((snapshot.paired_ntbs * 20000U) / sent) : 0U,
+	       (unsigned int)snapshot.paired_bytes,
+	       (unsigned int)snapshot.pair_skip_no_peer,
+	       (unsigned int)snapshot.pair_skip_chained,
+	       (unsigned int)snapshot.pair_skip_size);
+#endif
 #else
 	(void)now;
 #endif
@@ -914,21 +1194,107 @@ static void ncm_tx_async_report(u32_t now)
 static void ncm_tx_async_worker(void *arg)
 {
 	struct ncm_tx_async_item item;
+#if CONFIG_NCM_TX_BATCH
+	struct ncm_tx_async_item second;
+	struct ncm_tx_async_item pending;
+	u8_t have_pending = 0U;
+#endif
 
 	(void)arg;
 	for (;;) {
-		if (xQueueReceive(g_ncm_tx_async_queue, &item, portMAX_DELAY) == pdTRUE) {
+		BaseType_t received;
+#if CONFIG_NCM_TX_BATCH
+		struct pbuf *second_pbuf = NULL;
+		u32_t packet_count = 1U;
+		u32_t paired_bytes = 0U;
+
+		if (have_pending) {
+			item = pending;
+			have_pending = 0U;
+			received = pdTRUE;
+		} else {
+			received = xQueueReceive(g_ncm_tx_async_queue, &item,
+						 portMAX_DELAY);
+		}
+#else
+		received = xQueueReceive(g_ncm_tx_async_queue, &item,
+					 portMAX_DELAY);
+#endif
+		if (received == pdTRUE) {
 			u32_t now = hal_read_curtime_us();
 			u32_t wait_us = now - item.enqueue_us;
-			err_t result = ncm_send_pbuf_sync(item.p);
+			err_t result;
+#if CONFIG_NCM_TX_BATCH
+			u32_t second_wait_us = 0U;
+
+			/* Never delay the first packet.  Pair it only when a second pbuf is
+			 * already queued at this exact instant. */
+			if (xQueueReceive(g_ncm_tx_async_queue, &second, 0) == pdTRUE) {
+				if (item.p->next != NULL || second.p->next != NULL) {
+					pending = second;
+					have_pending = 1U;
+#if CONFIG_NCM_TX_ASYNC_PROFILE
+					taskENTER_CRITICAL();
+					g_ncm_tx_async_stats.pair_skip_chained++;
+					taskEXIT_CRITICAL();
+#endif
+				} else if (ncm_tx_batch_ntb_size(item.p->len,
+							       second.p->len) >
+					   NCM_TX_NTB_MAX_SIZE) {
+					pending = second;
+					have_pending = 1U;
+#if CONFIG_NCM_TX_ASYNC_PROFILE
+					taskENTER_CRITICAL();
+					g_ncm_tx_async_stats.pair_skip_size++;
+					taskEXIT_CRITICAL();
+#endif
+				} else {
+					second_pbuf = second.p;
+					packet_count = 2U;
+					paired_bytes = item.p->len + second.p->len;
+					second_wait_us = now - second.enqueue_us;
+				}
+			} else {
+#if CONFIG_NCM_TX_ASYNC_PROFILE
+				taskENTER_CRITICAL();
+				g_ncm_tx_async_stats.pair_skip_no_peer++;
+				taskEXIT_CRITICAL();
+#endif
+			}
+#endif
+			result = ncm_send_pbuf_sync(item.p,
+#if CONFIG_NCM_TX_BATCH
+						    second_pbuf
+#else
+						    NULL
+#endif
+						    );
 
 #if CONFIG_NCM_TX_ASYNC_PROFILE
 			taskENTER_CRITICAL();
-			g_ncm_tx_async_stats.sent++;
+			g_ncm_tx_async_stats.sent +=
+#if CONFIG_NCM_TX_BATCH
+				packet_count;
+#else
+				1U;
+#endif
 			g_ncm_tx_async_stats.queue_wait_total_us += wait_us;
 			if (wait_us > g_ncm_tx_async_stats.queue_wait_max_us) {
 				g_ncm_tx_async_stats.queue_wait_max_us = wait_us;
 			}
+#if CONFIG_NCM_TX_BATCH
+			g_ncm_tx_async_stats.ntbs++;
+			if (second_pbuf != NULL) {
+				g_ncm_tx_async_stats.paired_ntbs++;
+				g_ncm_tx_async_stats.paired_bytes += paired_bytes;
+				g_ncm_tx_async_stats.queue_wait_total_us += second_wait_us;
+				if (second_wait_us > g_ncm_tx_async_stats.queue_wait_max_us) {
+					g_ncm_tx_async_stats.queue_wait_max_us = second_wait_us;
+				}
+			} else {
+				g_ncm_tx_async_stats.single_ntbs++;
+			}
+#endif
 			if (result != ERR_OK) {
 				g_ncm_tx_async_stats.send_errors++;
 			}
@@ -939,6 +1305,11 @@ static void ncm_tx_async_worker(void *arg)
 #endif
 			/* linkoutput() retained one reference before returning to lwIP. */
 			pbuf_free(item.p);
+#if CONFIG_NCM_TX_BATCH
+			if (second_pbuf != NULL) {
+				pbuf_free(second_pbuf);
+			}
+#endif
 			ncm_tx_async_report(hal_read_curtime_us());
 		}
 	}
@@ -965,7 +1336,13 @@ static int ncm_tx_async_init(void)
 		g_ncm_tx_async_task = NULL;
 		return 0;
 	}
-	printf("[NCMTXASYNC] enabled mode=single-immediate queue=%u priority=%u; "
+	printf("[NCMTXASYNC] enabled mode="
+#if CONFIG_NCM_TX_BATCH
+	       "pair-opportunistic"
+#else
+	       "single-immediate"
+#endif
+	       " queue=%u priority=%u; "
 	       "pbuf-reference only, no payload copy\n",
 	       (unsigned int)NCM_TX_ASYNC_QUEUE_LEN,
 	       (unsigned int)NCM_TX_ASYNC_TASK_PRIORITY);
@@ -1031,7 +1408,7 @@ static err_t low_level_output_mii(struct netif *netif, struct pbuf *p)
 		 * two callers through the closed NCM TX state machine concurrently. */
 	}
 #endif
-	return ncm_send_pbuf_sync(p);
+	return ncm_send_pbuf_sync(p, NULL);
 }
 
 

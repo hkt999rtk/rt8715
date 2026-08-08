@@ -1461,6 +1461,14 @@ struct lwip_recv_gdma_stats {
   u32_t dma_batches;
   u32_t dma_bytes;
   u32_t cpu_edge_bytes;
+  u32_t cache_clean_us;
+  u32_t cache_clean_max_us;
+  u32_t dma_wait_us;
+  u32_t dma_wait_max_us;
+  u32_t cache_invalidate_us;
+  u32_t cache_invalidate_max_us;
+  u32_t cpu_edge_us;
+  u32_t cpu_edge_max_us;
   u32_t max_blocks;
   u32_t max_bytes;
 };
@@ -1503,6 +1511,24 @@ lwip_recv_gdma_profile(u32_t blocks, u32_t bytes, int attempted, int success,
   }
   if (attempted) {
     lwip_recv_gdma_stats.attempts++;
+    lwip_recv_gdma_stats.cache_clean_us += result->cache_clean_us;
+    lwip_recv_gdma_stats.dma_wait_us += result->dma_wait_us;
+    lwip_recv_gdma_stats.cache_invalidate_us += result->cache_invalidate_us;
+    lwip_recv_gdma_stats.cpu_edge_us += result->cpu_edge_us;
+    if (result->cache_clean_us > lwip_recv_gdma_stats.cache_clean_max_us) {
+      lwip_recv_gdma_stats.cache_clean_max_us = result->cache_clean_us;
+    }
+    if (result->dma_wait_us > lwip_recv_gdma_stats.dma_wait_max_us) {
+      lwip_recv_gdma_stats.dma_wait_max_us = result->dma_wait_us;
+    }
+    if (result->cache_invalidate_us >
+        lwip_recv_gdma_stats.cache_invalidate_max_us) {
+      lwip_recv_gdma_stats.cache_invalidate_max_us =
+        result->cache_invalidate_us;
+    }
+    if (result->cpu_edge_us > lwip_recv_gdma_stats.cpu_edge_max_us) {
+      lwip_recv_gdma_stats.cpu_edge_max_us = result->cpu_edge_us;
+    }
     if (success) {
       lwip_recv_gdma_stats.successes++;
       lwip_recv_gdma_stats.dma_blocks += result->dma_blocks;
@@ -1551,6 +1577,29 @@ lwip_recv_gdma_profile(u32_t blocks, u32_t bytes, int attempted, int success,
                         snapshot.input_bytes != 0U ?
                           (unsigned int)(((uint64_t)snapshot.dma_bytes * 1000ULL /
                                           snapshot.input_bytes) % 10ULL) : 0U));
+    LWIP_PLATFORM_DIAG(("[RECVGDMA][PHASE] us total/avg/max "
+                        "cache_clean=%u/%u/%u dma_wait=%u/%u/%u "
+                        "cache_invalidate=%u/%u/%u cpu_edge=%u/%u/%u\n",
+                        (unsigned int)snapshot.cache_clean_us,
+                        snapshot.attempts != 0U ?
+                          (unsigned int)(snapshot.cache_clean_us /
+                                         snapshot.attempts) : 0U,
+                        (unsigned int)snapshot.cache_clean_max_us,
+                        (unsigned int)snapshot.dma_wait_us,
+                        snapshot.attempts != 0U ?
+                          (unsigned int)(snapshot.dma_wait_us /
+                                         snapshot.attempts) : 0U,
+                        (unsigned int)snapshot.dma_wait_max_us,
+                        (unsigned int)snapshot.cache_invalidate_us,
+                        snapshot.attempts != 0U ?
+                          (unsigned int)(snapshot.cache_invalidate_us /
+                                         snapshot.attempts) : 0U,
+                        (unsigned int)snapshot.cache_invalidate_max_us,
+                        (unsigned int)snapshot.cpu_edge_us,
+                        snapshot.attempts != 0U ?
+                          (unsigned int)(snapshot.cpu_edge_us /
+                                         snapshot.attempts) : 0U,
+                        (unsigned int)snapshot.cpu_edge_max_us));
     /* Keep the channel diagnosis adjacent to this recv-GDMA window.  The
      * latched reason remains visible even if the original early error scrolled
      * out of the UART capture. */
@@ -4814,6 +4863,7 @@ lwip_diag_tcp_buffer_state(int s, struct lwip_tcp_buffer_diag *diag)
   diag->rx_pending_bytes = (u32_t)recv_avail;
   diag->rx_window_capacity = (u32_t)TCP_WND_MAX(pcb);
   diag->rx_window_available = (u32_t)pcb->rcv_wnd;
+  diag->rx_window_advertised = (u32_t)pcb->rcv_ann_wnd;
   diag->tx_buffer_capacity = (u32_t)TCP_SND_BUF;
   diag->tx_buffer_available = (u32_t)pcb->snd_buf;
   diag->tx_queue_len = (u32_t)pcb->snd_queuelen;

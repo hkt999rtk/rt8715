@@ -5,6 +5,7 @@
 #include "net_queue_profiler.h"
 #include "crypto_engine_profiler.h"
 #include "memcpy_task_profiler.h"
+#include "irq_profiler.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -88,6 +89,8 @@ static volatile uint32_t pcprof_late_10us_count;
 static volatile uint32_t pcprof_late_100us_count;
 static volatile uint32_t pcprof_previous_cycle;
 static volatile uint32_t pcprof_caller_attributed_samples;
+static volatile uint32_t pcprof_timer_callbacks;
+static volatile uint32_t pcprof_timer_irq = UINT32_MAX;
 static uint32_t pcprof_period_cycles;
 static uint32_t pcprof_late_reject_cycles;
 static uint32_t pcprof_late_10us_cycles;
@@ -173,6 +176,14 @@ pcprof_timer_callback(void *arg)
 	uint32_t elapsed;
 
 	(void)arg;
+	pcprof_timer_callbacks++;
+	if (pcprof_timer_irq >= 32U) {
+		uint32_t exception = __get_IPSR();
+
+		if (exception >= 16U && exception < 48U) {
+			pcprof_timer_irq = exception - 16U;
+		}
+	}
 	pcprof_previous_cycle = start;
 	if (previous != 0U) {
 		uint32_t interval = start - previous;
@@ -559,6 +570,8 @@ static void pcprof_task(void *arg)
 		uint32_t late_10us;
 		uint32_t late_100us;
 		uint32_t caller_attributed;
+		uint32_t timer_callbacks;
+		uint32_t timer_irq;
 		uint32_t primask;
 
 		vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(PCPROF_REPORT_PERIOD_MS));
@@ -584,6 +597,8 @@ static void pcprof_task(void *arg)
 		late_10us = pcprof_late_10us_count;
 		late_100us = pcprof_late_100us_count;
 		caller_attributed = pcprof_caller_attributed_samples;
+		timer_callbacks = pcprof_timer_callbacks;
+		timer_irq = pcprof_timer_irq;
 		pcprof_invalid_samples = 0U;
 		pcprof_nested_samples = 0U;
 		pcprof_late_samples = 0U;
@@ -596,6 +611,11 @@ static void pcprof_task(void *arg)
 		pcprof_late_10us_count = 0U;
 		pcprof_late_100us_count = 0U;
 		pcprof_caller_attributed_samples = 0U;
+		pcprof_timer_callbacks = 0U;
+		/* Rotate the exact IRQ counters at this same boundary.  This keeps
+		 * raw and adjusted IRQ rates aligned with the PC sample window and
+		 * avoids counting the report's own UART traffic in the old window. */
+		carbox_irq_profiler_snapshot(timer_irq, timer_callbacks);
 		if (primask == 0U) {
 			__enable_irq();
 		}
@@ -606,6 +626,7 @@ static void pcprof_task(void *arg)
 			      interval_cycles_sum, interval_cycles_max,
 			      interval_count, late_10us, late_100us,
 			      caller_attributed);
+		carbox_irq_profiler_report(sequence, PCPROF_REPORT_PERIOD_MS);
 		gcd_sync_profiler_report(sequence);
 		screen_queue_profiler_report(sequence);
 		usb_hcd_profiler_report(sequence);
@@ -618,6 +639,10 @@ static void pcprof_task(void *arg)
 
 void carbox_pc_profiler_start(void)
 {
+	/* Install the common IRQ registration hook synchronously.  Creating the
+	 * reporter task first would leave a window in which later device drivers
+	 * could register vectors without profiling wrappers. */
+	carbox_irq_profiler_init();
 	if (xTaskCreate(pcprof_task, "pcprof",
 			PCPROF_TASK_STACK_BYTES / sizeof(StackType_t), NULL,
 			tskIDLE_PRIORITY + 1U, NULL) != pdPASS) {

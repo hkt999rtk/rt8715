@@ -77,12 +77,218 @@
 #if defined(CONFIG_PLATFORM_8195BHP)
 #include "lwip_intf.h"
 #include "cmsis.h"
+#include "hal_cache.h"
+#include "large_memcpy_gdma.h"
 #endif
 #if LWIP_TCP_TIMESTAMPS
 #include "lwip/sys.h"
 #endif
 
 #include <string.h>
+
+#ifndef CONFIG_TCP_TX_LINKED_GDMA
+/* Production-safe default: TX pbuf scatter GDMA is enabled only by an explicit
+ * board build option.  TCP receive GDMA is controlled independently. */
+#define CONFIG_TCP_TX_LINKED_GDMA 0
+#endif
+
+#ifndef CONFIG_TCP_TX_LINKED_GDMA_PROFILE
+#define CONFIG_TCP_TX_LINKED_GDMA_PROFILE 0
+#endif
+
+#ifndef TCP_TX_LINKED_GDMA_THRESHOLD
+#define TCP_TX_LINKED_GDMA_THRESHOLD 4096U
+#endif
+
+#ifndef TCP_TX_LINKED_GDMA_VERIFY
+#define TCP_TX_LINKED_GDMA_VERIFY 0
+#endif
+
+#ifndef TCP_TX_LINKED_GDMA_SHADOW
+#define TCP_TX_LINKED_GDMA_SHADOW 0
+#endif
+
+#ifndef TCP_TX_LINKED_GDMA_DIRECT_BLOCKS
+#define TCP_TX_LINKED_GDMA_DIRECT_BLOCKS 0
+#endif
+
+#ifndef TCP_TX_LINKED_GDMA_PROBE_BLOCKS
+#define TCP_TX_LINKED_GDMA_PROBE_BLOCKS 0
+#endif
+
+/* Diagnostic mode, 1-based.  A bounded range of real TCP pbufs becomes one
+ * linked-GDMA submission.  Every other real pbuf is populated synchronously
+ * by M33, allowing descriptor count and destination position to be varied
+ * independently. */
+#ifndef TCP_TX_LINKED_GDMA_ISOLATE_BLOCK
+#define TCP_TX_LINKED_GDMA_ISOLATE_BLOCK 0
+#endif
+
+#ifndef TCP_TX_LINKED_GDMA_ISOLATE_COUNT
+#define TCP_TX_LINKED_GDMA_ISOLATE_COUNT 1
+#endif
+
+#ifndef TCP_TX_LINKED_GDMA_GUARD_BYTES
+#define TCP_TX_LINKED_GDMA_GUARD_BYTES 0
+#endif
+
+#define TCP_TX_LINKED_GDMA_MAX_BLOCKS 48U
+#define TCP_TX_LINKED_GDMA_SHADOW_SIZE 65535U
+#define TCP_TX_LINKED_GDMA_CACHE_LINE 32U
+/* heap_4_2 rounds its 8-byte BlockLink_t up to portBYTE_ALIGNMENT.  This
+ * platform uses 64-byte heap alignment, so the allocator metadata for a
+ * PBUF_RAM allocation occupies the two cache lines immediately before p. */
+#define TCP_TX_LINKED_GDMA_HEAP_HEADER_BYTES 64U
+#define TCP_TX_LINKED_GDMA_HEAP_ALLOCATED_BIT 0x80000000UL
+#define TCP_TX_LINKED_GDMA_PROBE_PRE_BYTES 128U
+/* Match the observed heap pbuf layout exactly: p->payload is +0x80, a full
+ * TCP segment copy is 0x5a0, and consecutive pbuf metadata starts are 0x6c0
+ * apart.  The final 0xa0 bytes emulate guard/alignment/heap spacing. */
+#define TCP_TX_LINKED_GDMA_PROBE_PAYLOAD_BYTES 1440U
+#define TCP_TX_LINKED_GDMA_PROBE_POST_BYTES 160U
+#define TCP_TX_LINKED_GDMA_GUARD_RESERVE \
+  (TCP_TX_LINKED_GDMA_GUARD_BYTES + TCP_TX_LINKED_GDMA_CACHE_LINE - 1U)
+
+#if (TCP_TX_LINKED_GDMA_GUARD_BYTES > 0) && \
+    ((TCP_TX_LINKED_GDMA_GUARD_BYTES % TCP_TX_LINKED_GDMA_CACHE_LINE) != 0)
+#error "TCP_TX_LINKED_GDMA_GUARD_BYTES must be a multiple of 32"
+#endif
+
+#if (TCP_TX_LINKED_GDMA_ISOLATE_BLOCK > 0) && \
+    ((TCP_TX_LINKED_GDMA_ISOLATE_COUNT == 0) || \
+     ((TCP_TX_LINKED_GDMA_ISOLATE_BLOCK + \
+       TCP_TX_LINKED_GDMA_ISOLATE_COUNT - 1U) > \
+      TCP_TX_LINKED_GDMA_MAX_BLOCKS))
+#error "TCP TX GDMA isolate range exceeds descriptor table"
+#endif
+
+#if (TCP_TX_LINKED_GDMA_ISOLATE_BLOCK > 0) && \
+    ((TCP_TX_LINKED_GDMA_DIRECT_BLOCKS > 0) || \
+     (TCP_TX_LINKED_GDMA_PROBE_BLOCKS > 0))
+#error "real-pbuf isolation cannot be combined with direct/probe modes"
+#endif
+
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_TX_LINKED_GDMA
+/* tcp_write() executes under the lwIP core lock, and linked GDMA completes
+ * synchronously before the newly allocated pbufs are published.  Keep this
+ * relatively large descriptor table in BSS rather than on TCP_IP's stack. */
+static carbox_gdma_copy_block_t
+tcp_tx_linked_gdma_blocks[TCP_TX_LINKED_GDMA_MAX_BLOCKS];
+struct tcp_tx_linked_gdma_pbuf_diag {
+  const struct pbuf *p;
+  const void *payload;
+  void *copy_dst;
+  u8_t *guard;
+  struct pbuf *snapshot_next;
+  void *snapshot_payload;
+  u16_t copy_len;
+  u16_t pbuf_len;
+  u16_t snapshot_tot_len;
+  u16_t snapshot_len;
+  u8_t snapshot_type_internal;
+  u8_t snapshot_flags;
+  LWIP_PBUF_REF_T snapshot_ref;
+  u8_t snapshot_if_idx;
+  u8_t *snapshot_heap_header;
+  u8_t snapshot_heap_header_bytes[TCP_TX_LINKED_GDMA_HEAP_HEADER_BYTES];
+  u8_t *snapshot_cache_line;
+  u8_t snapshot_cache_bytes[TCP_TX_LINKED_GDMA_CACHE_LINE];
+};
+static struct tcp_tx_linked_gdma_pbuf_diag
+tcp_tx_linked_gdma_pbuf_diag[TCP_TX_LINKED_GDMA_MAX_BLOCKS];
+#if TCP_TX_LINKED_GDMA_SHADOW
+/* Diagnostic-only destination.  Real TX pbufs are still populated by M33, so
+ * a GDMA/cache defect cannot publish corrupt TCP state during isolation. */
+static u8_t tcp_tx_linked_gdma_shadow[TCP_TX_LINKED_GDMA_SHADOW_SIZE];
+#endif
+#if TCP_TX_LINKED_GDMA_PROBE_BLOCKS > 0
+struct tcp_tx_linked_gdma_probe_slot {
+  u8_t pre[TCP_TX_LINKED_GDMA_PROBE_PRE_BYTES];
+  u8_t payload[TCP_TX_LINKED_GDMA_PROBE_PAYLOAD_BYTES];
+  u8_t post[TCP_TX_LINKED_GDMA_PROBE_POST_BYTES];
+} __attribute__((aligned(TCP_TX_LINKED_GDMA_CACHE_LINE)));
+static struct tcp_tx_linked_gdma_probe_slot
+tcp_tx_linked_gdma_probe[TCP_TX_LINKED_GDMA_PROBE_BLOCKS];
+
+static void
+tcp_tx_linked_gdma_probe_prepare(u16_t index)
+{
+  struct tcp_tx_linked_gdma_probe_slot *slot =
+    &tcp_tx_linked_gdma_probe[index];
+
+  memset(slot->pre, 0xa6, sizeof(slot->pre));
+  memset(slot->post, 0x6a, sizeof(slot->post));
+  dcache_clean_by_addr((uint32_t *)slot->pre, (int32_t)sizeof(slot->pre));
+  dcache_clean_by_addr((uint32_t *)slot->post, (int32_t)sizeof(slot->post));
+  __DSB();
+}
+
+static int
+tcp_tx_linked_gdma_probe_check(u16_t count)
+{
+  u16_t index;
+
+  for (index = 0U; index < count; ++index) {
+    struct tcp_tx_linked_gdma_probe_slot *slot =
+      &tcp_tx_linked_gdma_probe[index];
+    u16_t offset;
+
+    dcache_invalidate_by_addr((uint32_t *)slot->pre,
+                              (int32_t)sizeof(slot->pre));
+    dcache_invalidate_by_addr((uint32_t *)slot->post,
+                              (int32_t)sizeof(slot->post));
+    __DSB();
+    for (offset = 0U; offset < sizeof(slot->pre); ++offset) {
+      if (slot->pre[offset] != 0xa6U) {
+        LWIP_PLATFORM_DIAG(("[TXGDMA][PROBE][FATAL] block=%u side=pre "
+                            "offset=%u value=0x%02x\r\n",
+                            (unsigned int)index, (unsigned int)offset,
+                            (unsigned int)slot->pre[offset]));
+        return 0;
+      }
+    }
+    for (offset = 0U; offset < sizeof(slot->post); ++offset) {
+      if (slot->post[offset] != 0x6aU) {
+        LWIP_PLATFORM_DIAG(("[TXGDMA][PROBE][FATAL] block=%u side=post "
+                            "offset=%u value=0x%02x\r\n",
+                            (unsigned int)index, (unsigned int)offset,
+                            (unsigned int)slot->post[offset]));
+        return 0;
+      }
+    }
+  }
+  return 1;
+}
+#endif
+static u8_t tcp_tx_linked_gdma_direct_disabled;
+
+#if TCP_TX_LINKED_GDMA_GUARD_BYTES > 0
+static u8_t *
+tcp_tx_linked_gdma_guard_start(void *payload, u16_t logical_alloc)
+{
+  uintptr_t logical_end = (uintptr_t)payload + logical_alloc;
+
+  return (u8_t *)((logical_end + TCP_TX_LINKED_GDMA_CACHE_LINE - 1U) &
+                  ~(uintptr_t)(TCP_TX_LINKED_GDMA_CACHE_LINE - 1U));
+}
+
+static void
+tcp_tx_linked_gdma_guard_clean(u8_t *guard)
+{
+  dcache_clean_by_addr((uint32_t *)guard,
+                       (int32_t)TCP_TX_LINKED_GDMA_GUARD_BYTES);
+  __DSB();
+}
+
+static void
+tcp_tx_linked_gdma_guard_invalidate(u8_t *guard)
+{
+  dcache_invalidate_by_addr((uint32_t *)guard,
+                            (int32_t)TCP_TX_LINKED_GDMA_GUARD_BYTES);
+  __DSB();
+}
+#endif
+#endif
 
 #ifdef LWIP_HOOK_FILENAME
 #include LWIP_HOOK_FILENAME
@@ -128,6 +334,325 @@ tcp_data_copy_gdma(void *dst, const void *src, u16_t len)
 #define TCP_DATA_COPY2(dst, src, len, chksum, chksum_swapped) MEMCPY(dst, src, len)
 #endif
 #endif /* TCP_CHECKSUM_ON_COPY*/
+
+#if CONFIG_TCP_TX_LINKED_GDMA && TCP_CHECKSUM_ON_COPY
+#error "TCP TX linked GDMA requires LWIP_CHECKSUM_ON_COPY=0"
+#endif
+
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_TX_LINKED_GDMA_PROFILE
+struct tcp_tx_linked_gdma_stats {
+  u32_t window_start_us;
+  u32_t calls;
+  u32_t attempts;
+  u32_t successes;
+  u32_t fallbacks;
+  u32_t small_cpu;
+  u32_t segments;
+  u32_t bytes;
+  u32_t dma_bytes;
+  u32_t cpu_edge_bytes;
+  u32_t wait_count;
+  u32_t wait_us_total;
+  u32_t wait_us_max;
+  u32_t cache_clean_us;
+  u32_t cache_clean_max_us;
+  u32_t dma_wait_us;
+  u32_t dma_wait_max_us;
+  u32_t cache_invalidate_us;
+  u32_t cache_invalidate_max_us;
+  u32_t cpu_edge_us;
+  u32_t cpu_edge_max_us;
+  u32_t verify_failures;
+  u32_t pbuf_blocks;
+  u32_t dst_aligned32;
+  u32_t dst_word_aligned;
+  u32_t dst_unaligned;
+  u32_t prefix_bytes;
+  u32_t prefix_max;
+  u32_t body_bytes;
+  u32_t edge_bytes;
+  u32_t metadata_line_overlap;
+  u32_t payload_offset_min;
+  u32_t payload_offset_max;
+  u32_t src_min;
+  u32_t src_max;
+  u32_t dst_min;
+  u32_t dst_max;
+  u32_t same_block_overlap;
+  u32_t cross_block_overlap;
+  u32_t copy_outside_pbuf;
+  u8_t layout_count;
+  u32_t layout_p[4];
+  u32_t layout_dst[4];
+  u32_t layout_end[4];
+  u32_t layout_guard[4];
+};
+
+static struct tcp_tx_linked_gdma_stats tcp_tx_linked_gdma_stats;
+static u32_t tcp_tx_linked_gdma_report_sequence;
+
+static void __attribute__((noinline))
+tcp_tx_linked_gdma_profile(u16_t segments, u32_t bytes, int attempted,
+                           int success,
+                           const carbox_gdma_copyv_result_t *result,
+                           int verify_failed)
+{
+  struct tcp_tx_linked_gdma_stats *stats = &tcp_tx_linked_gdma_stats;
+  u32_t now = rltk_tcp_perf_now_us();
+  u32_t window;
+
+  if (stats->window_start_us == 0U) {
+    stats->window_start_us = now;
+  }
+  stats->calls++;
+  stats->segments += segments;
+  stats->bytes += bytes;
+  if (attempted) {
+    u16_t block_index;
+
+    if (stats->layout_count == 0U) {
+      stats->layout_count = (u8_t)LWIP_MIN(segments, 4U);
+      for (block_index = 0U; block_index < stats->layout_count;
+           ++block_index) {
+        const struct tcp_tx_linked_gdma_pbuf_diag *layout =
+          &tcp_tx_linked_gdma_pbuf_diag[block_index];
+
+        stats->layout_p[block_index] =
+          (u32_t)(uintptr_t)layout->p;
+        stats->layout_dst[block_index] =
+          (u32_t)(uintptr_t)layout->copy_dst;
+        stats->layout_end[block_index] =
+          (u32_t)((uintptr_t)layout->copy_dst + layout->copy_len);
+        stats->layout_guard[block_index] =
+          (u32_t)(uintptr_t)layout->guard;
+      }
+    }
+
+    stats->attempts++;
+    stats->cache_clean_us += result->cache_clean_us;
+    stats->dma_wait_us += result->dma_wait_us;
+    stats->cache_invalidate_us += result->cache_invalidate_us;
+    stats->cpu_edge_us += result->cpu_edge_us;
+    stats->cache_clean_max_us = LWIP_MAX(stats->cache_clean_max_us,
+                                         result->cache_clean_us);
+    stats->dma_wait_max_us = LWIP_MAX(stats->dma_wait_max_us,
+                                      result->dma_wait_us);
+    stats->cache_invalidate_max_us = LWIP_MAX(
+      stats->cache_invalidate_max_us, result->cache_invalidate_us);
+    stats->cpu_edge_max_us = LWIP_MAX(stats->cpu_edge_max_us,
+                                      result->cpu_edge_us);
+    if (success) {
+      stats->successes++;
+      stats->dma_bytes += result->dma_bytes;
+      stats->cpu_edge_bytes += result->cpu_edge_bytes;
+    } else {
+      stats->fallbacks++;
+    }
+    if (verify_failed) {
+      stats->verify_failures++;
+    }
+    if (result->channel_waited) {
+      stats->wait_count++;
+      stats->wait_us_total += result->channel_wait_us;
+      if (result->channel_wait_us > stats->wait_us_max) {
+        stats->wait_us_max = result->channel_wait_us;
+      }
+    }
+    for (block_index = 0U; block_index < segments; ++block_index) {
+      const struct tcp_tx_linked_gdma_pbuf_diag *diag =
+        &tcp_tx_linked_gdma_pbuf_diag[block_index];
+      uintptr_t dst = (uintptr_t)diag->copy_dst;
+      uintptr_t body_start = (dst + 31U) & ~(uintptr_t)31U;
+      u32_t prefix = (u32_t)(body_start - dst);
+      u32_t body = 0U;
+      uintptr_t body_end;
+      uintptr_t metadata_start;
+      uintptr_t metadata_end;
+      u32_t payload_offset;
+      uintptr_t src = (uintptr_t)tcp_tx_linked_gdma_blocks[block_index].src;
+      uintptr_t src_end = src + diag->copy_len;
+      uintptr_t dst_end = dst + diag->copy_len;
+      uintptr_t payload = (uintptr_t)diag->payload;
+      u16_t other_index;
+
+      stats->pbuf_blocks++;
+      if ((dst & 31U) == 0U) {
+        stats->dst_aligned32++;
+      } else if ((dst & 3U) == 0U) {
+        stats->dst_word_aligned++;
+      } else {
+        stats->dst_unaligned++;
+      }
+      if (prefix < diag->copy_len) {
+        body = ((u32_t)diag->copy_len - prefix) & ~63U;
+      } else {
+        prefix = diag->copy_len;
+      }
+      stats->prefix_bytes += prefix;
+      if (prefix > stats->prefix_max) {
+        stats->prefix_max = prefix;
+      }
+      stats->body_bytes += body;
+      stats->edge_bytes += (u32_t)diag->copy_len - body;
+
+      body_end = body_start + body;
+      metadata_start = (uintptr_t)diag->p & ~(uintptr_t)31U;
+      metadata_end = ((uintptr_t)diag->p + sizeof(*diag->p) + 31U) &
+                     ~(uintptr_t)31U;
+      if (body != 0U && body_start < metadata_end &&
+          body_end > metadata_start) {
+        stats->metadata_line_overlap++;
+      }
+
+      payload_offset = (u32_t)((uintptr_t)diag->payload -
+                               (uintptr_t)diag->p);
+      if (stats->payload_offset_min == 0U ||
+          payload_offset < stats->payload_offset_min) {
+        stats->payload_offset_min = payload_offset;
+      }
+      if (payload_offset > stats->payload_offset_max) {
+        stats->payload_offset_max = payload_offset;
+      }
+      if (stats->src_min == 0U || src < stats->src_min) {
+        stats->src_min = (u32_t)src;
+      }
+      if (src_end > stats->src_max) {
+        stats->src_max = (u32_t)src_end;
+      }
+      if (stats->dst_min == 0U || dst < stats->dst_min) {
+        stats->dst_min = (u32_t)dst;
+      }
+      if (dst_end > stats->dst_max) {
+        stats->dst_max = (u32_t)dst_end;
+      }
+      if (src < dst_end && src_end > dst) {
+        stats->same_block_overlap++;
+      }
+      if (dst < payload || dst_end > payload + diag->pbuf_len) {
+        stats->copy_outside_pbuf++;
+      }
+      for (other_index = 0U; other_index < segments; ++other_index) {
+        const struct tcp_tx_linked_gdma_pbuf_diag *other =
+          &tcp_tx_linked_gdma_pbuf_diag[other_index];
+        uintptr_t other_dst;
+        uintptr_t other_end;
+
+        if (other_index == block_index) {
+          continue;
+        }
+        other_dst = (uintptr_t)other->copy_dst;
+        other_end = other_dst + other->copy_len;
+        if (src < other_end && src_end > other_dst) {
+          stats->cross_block_overlap++;
+          break;
+        }
+      }
+    }
+  } else {
+    stats->small_cpu++;
+  }
+
+  window = now - stats->window_start_us;
+  if (window >= 10000000U) {
+    LWIP_PLATFORM_DIAG(("[TXGDMA] window_us=%u calls/attempt/success/fallback/small_cpu="
+                        "%u/%u/%u/%u/%u segments/bytes=%u/%u "
+                        "dma/edge_bytes=%u/%u verify_fail=%u direct_disabled=%u\r\n",
+                        window, stats->calls, stats->attempts,
+                        stats->successes, stats->fallbacks,
+                        stats->small_cpu, stats->segments, stats->bytes,
+                        stats->dma_bytes, stats->cpu_edge_bytes,
+                        stats->verify_failures,
+                        (unsigned int)tcp_tx_linked_gdma_direct_disabled));
+    LWIP_PLATFORM_DIAG(("[TXGDMA] channel_wait count=%u wait_us total/avg/max="
+                        "%u/%u/%u mechanism=nonblocking-atomic-fastpath\r\n",
+                        stats->wait_count, stats->wait_us_total,
+                        stats->wait_count != 0U ?
+                          stats->wait_us_total / stats->wait_count : 0U,
+                        stats->wait_us_max));
+    LWIP_PLATFORM_DIAG(("[TXGDMA][PHASE] us total/avg/max "
+                        "cache_clean=%u/%u/%u dma_wait=%u/%u/%u "
+                        "cache_invalidate=%u/%u/%u cpu_edge=%u/%u/%u\r\n",
+                        stats->cache_clean_us,
+                        stats->attempts != 0U ?
+                          stats->cache_clean_us / stats->attempts : 0U,
+                        stats->cache_clean_max_us,
+                        stats->dma_wait_us,
+                        stats->attempts != 0U ?
+                          stats->dma_wait_us / stats->attempts : 0U,
+                        stats->dma_wait_max_us,
+                        stats->cache_invalidate_us,
+                        stats->attempts != 0U ?
+                          stats->cache_invalidate_us / stats->attempts : 0U,
+                        stats->cache_invalidate_max_us,
+                        stats->cpu_edge_us,
+                        stats->attempts != 0U ?
+                          stats->cpu_edge_us / stats->attempts : 0U,
+                        stats->cpu_edge_max_us));
+    LWIP_PLATFORM_DIAG(("[TXGDMA][PBUF] blocks=%u dst_align32/word/unaligned="
+                        "%u/%u/%u prefix_bytes avg/max=%u/%u "
+                        "body/edge_bytes=%u/%u metadata_line_overlap=%u "
+                        "payload_minus_p min/max=%u/%u sizeof_pbuf=%u "
+                        "direct_blocks_per_write=%u\r\n",
+                        stats->pbuf_blocks, stats->dst_aligned32,
+                        stats->dst_word_aligned, stats->dst_unaligned,
+                        stats->pbuf_blocks != 0U ?
+                          stats->prefix_bytes / stats->pbuf_blocks : 0U,
+                        stats->prefix_max, stats->body_bytes,
+                        stats->edge_bytes, stats->metadata_line_overlap,
+                        stats->payload_offset_min, stats->payload_offset_max,
+                        (unsigned int)sizeof(struct pbuf),
+                        (unsigned int)TCP_TX_LINKED_GDMA_DIRECT_BLOCKS));
+    LWIP_PLATFORM_DIAG(("[TXGDMA][ISOLATE] first_real_block=%u (1-based) "
+                        "submitted_descriptors=%u\r\n",
+                        (unsigned int)TCP_TX_LINKED_GDMA_ISOLATE_BLOCK,
+                        TCP_TX_LINKED_GDMA_ISOLATE_BLOCK != 0U ?
+                          (unsigned int)TCP_TX_LINKED_GDMA_ISOLATE_COUNT : 0U));
+    LWIP_PLATFORM_DIAG(("[TXGDMA][RANGE] src=%08x-%08x dst=%08x-%08x "
+                        "shadow=%08x overlap same/cross=%u/%u "
+                        "copy_outside_pbuf=%u\r\n",
+                        stats->src_min, stats->src_max,
+                        stats->dst_min, stats->dst_max,
+#if TCP_TX_LINKED_GDMA_SHADOW
+                        (unsigned int)(uintptr_t)tcp_tx_linked_gdma_shadow,
+#else
+                        0U,
+#endif
+                        stats->same_block_overlap,
+                        stats->cross_block_overlap,
+                        stats->copy_outside_pbuf));
+    LWIP_PLATFORM_DIAG(("[TXGDMA][LAYOUT] n=%u "
+                        "b0 p/dst/end/guard=%08x/%08x/%08x/%08x "
+                        "b1=%08x/%08x/%08x/%08x "
+                        "b2=%08x/%08x/%08x/%08x "
+                        "b3=%08x/%08x/%08x/%08x\r\n",
+                        stats->layout_count,
+                        stats->layout_p[0], stats->layout_dst[0],
+                        stats->layout_end[0], stats->layout_guard[0],
+                        stats->layout_p[1], stats->layout_dst[1],
+                        stats->layout_end[1], stats->layout_guard[1],
+                        stats->layout_p[2], stats->layout_dst[2],
+                        stats->layout_end[2], stats->layout_guard[2],
+                        stats->layout_p[3], stats->layout_dst[3],
+                        stats->layout_end[3], stats->layout_guard[3]));
+
+    /* The generic GDMA report used to be emitted only by the optional socket
+     * receive profiler.  That profiler is normally disabled while TX is under
+     * test, which hid the channel-programming failure behind TX fallback=N.
+     * Emit the shared channel snapshot from this same 10-second TX window so
+     * the attempted SAR/DAR/LLP/CTL values and the hardware readback are
+     * adjacent to the TX success/fallback counters in every test log. */
+    carbox_large_memcpy_gdma_report(++tcp_tx_linked_gdma_report_sequence);
+
+    memset(stats, 0, sizeof(*stats));
+    stats->window_start_us = now;
+  }
+}
+#else
+#define tcp_tx_linked_gdma_profile(segments, bytes, attempted, success, result, verify_failed) \
+  do { LWIP_UNUSED_ARG(segments); LWIP_UNUSED_ARG(bytes); \
+       LWIP_UNUSED_ARG(attempted); LWIP_UNUSED_ARG(success); \
+       LWIP_UNUSED_ARG(result); LWIP_UNUSED_ARG(verify_failed); } while (0)
+#endif
 
 /** Define this to 1 for an extra check that the output checksum is valid
  * (usefule when the checksum is generated by the application, not the stack) */
@@ -267,6 +792,7 @@ tcp_pbuf_prealloc(pbuf_layer layer, u16_t length, u16_t max_length,
 {
   struct pbuf *p;
   u16_t alloc = length;
+  u16_t logical_alloc;
 
   LWIP_ASSERT("tcp_pbuf_prealloc: invalid oversize", oversize != NULL);
   LWIP_ASSERT("tcp_pbuf_prealloc: invalid pcb", pcb != NULL);
@@ -299,12 +825,20 @@ tcp_pbuf_prealloc(pbuf_layer layer, u16_t length, u16_t max_length,
     }
   }
 #endif /* LWIP_NETIF_TX_SINGLE_PBUF */
+  logical_alloc = alloc;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_TX_LINKED_GDMA && \
+    (TCP_TX_LINKED_GDMA_GUARD_BYTES > 0)
+  LWIP_ASSERT("tcp_pbuf_prealloc: guard allocation overflow",
+              alloc <= (u16_t)(0xffffU -
+                                TCP_TX_LINKED_GDMA_GUARD_RESERVE));
+  alloc = (u16_t)(alloc + TCP_TX_LINKED_GDMA_GUARD_RESERVE);
+#endif
   p = pbuf_alloc(layer, alloc, PBUF_RAM);
   if (p == NULL) {
     return NULL;
   }
   LWIP_ASSERT("need unchained pbuf", p->next == NULL);
-  *oversize = p->len - length;
+  *oversize = logical_alloc - length;
   /* trim p->len to the currently used size */
   p->len = p->tot_len = length;
   return p;
@@ -449,6 +983,12 @@ tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
 #endif /* TCP_CHECKSUM_ON_COPY */
   err_t err;
   u16_t mss_local;
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_TX_LINKED_GDMA
+  carbox_gdma_copyv_result_t tx_gdma_result;
+  u32_t tx_gdma_bytes = 0U;
+  u16_t tx_gdma_block_count = 0U;
+  u8_t tx_gdma_defer = 0U;
+#endif
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_PHASE_PROFILE
   unsigned int tcp_perf_start_us;
 #endif
@@ -465,6 +1005,12 @@ tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
   /* Always copy to try to create single pbufs for TX */
   apiflags |= TCP_WRITE_FLAG_COPY;
 #endif /* LWIP_NETIF_TX_SINGLE_PBUF */
+
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_TX_LINKED_GDMA
+  tx_gdma_defer = ((apiflags & TCP_WRITE_FLAG_COPY) != 0U) &&
+                  (len > TCP_TX_LINKED_GDMA_THRESHOLD);
+  memset(&tx_gdma_result, 0, sizeof(tx_gdma_result));
+#endif
 
   LWIP_DEBUGF(TCP_OUTPUT_DEBUG, ("tcp_write(pcb=%p, data=%p, len=%"U16_F", apiflags=%"U16_F")\n",
                                  (void *)pcb, arg, len, (u16_t)apiflags));
@@ -658,7 +1204,114 @@ tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
       }
       LWIP_ASSERT("tcp_write: check that first pbuf can hold the complete seglen",
                   (p->len >= seglen));
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_TX_LINKED_GDMA
+      if (tx_gdma_defer &&
+          tx_gdma_block_count < TCP_TX_LINKED_GDMA_MAX_BLOCKS) {
+        carbox_gdma_copy_block_t *block =
+          &tcp_tx_linked_gdma_blocks[tx_gdma_block_count++];
+
+        block->dst =
+#if TCP_TX_LINKED_GDMA_SHADOW
+#if TCP_TX_LINKED_GDMA_ISOLATE_BLOCK > 0
+          !tcp_tx_linked_gdma_direct_disabled &&
+          tx_gdma_block_count >= TCP_TX_LINKED_GDMA_ISOLATE_BLOCK &&
+          tx_gdma_block_count < (TCP_TX_LINKED_GDMA_ISOLATE_BLOCK +
+                                 TCP_TX_LINKED_GDMA_ISOLATE_COUNT) ?
+            (char *)p->payload + optlen :
+#endif
+#if TCP_TX_LINKED_GDMA_PROBE_BLOCKS > 0
+          !tcp_tx_linked_gdma_direct_disabled &&
+          tx_gdma_block_count <= TCP_TX_LINKED_GDMA_PROBE_BLOCKS &&
+          seglen <= TCP_TX_LINKED_GDMA_PROBE_PAYLOAD_BYTES ?
+            (tcp_tx_linked_gdma_probe_prepare(
+               (u16_t)(tx_gdma_block_count - 1U)),
+             tcp_tx_linked_gdma_probe[tx_gdma_block_count - 1U].payload) :
+#endif
+          !tcp_tx_linked_gdma_direct_disabled &&
+          tx_gdma_block_count <= TCP_TX_LINKED_GDMA_DIRECT_BLOCKS ?
+            (char *)p->payload + optlen :
+            tcp_tx_linked_gdma_shadow + pos;
+#else
+          (char *)p->payload + optlen;
+#endif
+        block->src = (const u8_t *)arg + pos;
+        block->len = seglen;
+        tcp_tx_linked_gdma_pbuf_diag[tx_gdma_block_count - 1U].p = p;
+        tcp_tx_linked_gdma_pbuf_diag[tx_gdma_block_count - 1U].payload =
+          p->payload;
+        tcp_tx_linked_gdma_pbuf_diag[tx_gdma_block_count - 1U].copy_dst =
+          (char *)p->payload + optlen;
+        tcp_tx_linked_gdma_pbuf_diag[tx_gdma_block_count - 1U].copy_len =
+          seglen;
+        tcp_tx_linked_gdma_pbuf_diag[tx_gdma_block_count - 1U].pbuf_len =
+          p->len;
+#if TCP_TX_LINKED_GDMA_GUARD_BYTES > 0
+        tcp_tx_linked_gdma_pbuf_diag[tx_gdma_block_count - 1U].guard =
+          NULL;
+#if TCP_TX_LINKED_GDMA_ISOLATE_BLOCK > 0
+        if (tx_gdma_block_count >= TCP_TX_LINKED_GDMA_ISOLATE_BLOCK &&
+            tx_gdma_block_count < (TCP_TX_LINKED_GDMA_ISOLATE_BLOCK +
+                                   TCP_TX_LINKED_GDMA_ISOLATE_COUNT)) {
+#else
+        if (tx_gdma_block_count <= TCP_TX_LINKED_GDMA_DIRECT_BLOCKS) {
+#endif
+          tcp_tx_linked_gdma_pbuf_diag[tx_gdma_block_count - 1U].guard =
+            tcp_tx_linked_gdma_guard_start(p->payload,
+                                           (u16_t)(p->len + oversize));
+          memset(tcp_tx_linked_gdma_pbuf_diag[tx_gdma_block_count - 1U].guard,
+                 0xa5, TCP_TX_LINKED_GDMA_GUARD_BYTES);
+          /* Publish the canary to DRAM before GDMA starts.  Without this
+           * clean, a write-through can remain hidden behind a dirty A5 line. */
+          tcp_tx_linked_gdma_guard_clean(
+            tcp_tx_linked_gdma_pbuf_diag[tx_gdma_block_count - 1U].guard);
+        }
+#else
+        tcp_tx_linked_gdma_pbuf_diag[tx_gdma_block_count - 1U].guard = NULL;
+#endif
+        tx_gdma_bytes += seglen;
+#if TCP_TX_LINKED_GDMA_SHADOW
+#if TCP_TX_LINKED_GDMA_ISOLATE_BLOCK > 0
+        if (tcp_tx_linked_gdma_direct_disabled ||
+            tx_gdma_block_count < TCP_TX_LINKED_GDMA_ISOLATE_BLOCK ||
+            tx_gdma_block_count >= (TCP_TX_LINKED_GDMA_ISOLATE_BLOCK +
+                                    TCP_TX_LINKED_GDMA_ISOLATE_COUNT)) {
+#else
+        if (tcp_tx_linked_gdma_direct_disabled ||
+            tx_gdma_block_count > TCP_TX_LINKED_GDMA_DIRECT_BLOCKS ||
+            TCP_TX_LINKED_GDMA_PROBE_BLOCKS > 0) {
+#endif
+          /* Except for the deliberately tiny direct-DMA test set, keep the
+           * production destination on the proven M33 path. */
+          TCP_DATA_COPY2((char *)p->payload + optlen,
+                         (const u8_t *)arg + pos, seglen,
+                         &chksum, &chksum_swapped);
+        }
+#endif
+      } else {
+        u16_t copy_index;
+
+        /* An unexpectedly small negotiated MSS can exceed the fixed local
+         * descriptor table.  Complete every deferred block by CPU before
+         * returning to the original immediate-copy path. */
+        if (tx_gdma_defer) {
+          for (copy_index = 0U; copy_index < tx_gdma_block_count;
+               ++copy_index) {
+            TCP_DATA_COPY2(tcp_tx_linked_gdma_blocks[copy_index].dst,
+                           tcp_tx_linked_gdma_blocks[copy_index].src,
+                           tcp_tx_linked_gdma_blocks[copy_index].len,
+                           NULL, NULL);
+          }
+          tx_gdma_defer = 0U;
+          tx_gdma_block_count = 0U;
+          tx_gdma_bytes = 0U;
+        }
+        TCP_DATA_COPY2((char *)p->payload + optlen,
+                       (const u8_t *)arg + pos, seglen,
+                       &chksum, &chksum_swapped);
+      }
+#else
       TCP_DATA_COPY2((char *)p->payload + optlen, (const u8_t *)arg + pos, seglen, &chksum, &chksum_swapped);
+#endif
     } else {
       /* Copy is not set: First allocate a pbuf for holding the data.
        * Since the referenced data is available at least until it is
@@ -737,6 +1390,367 @@ tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
 
     pos += seglen;
   }
+
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_TX_LINKED_GDMA
+  if (tx_gdma_block_count != 0U) {
+    int tx_gdma_attempted =
+      tx_gdma_bytes > TCP_TX_LINKED_GDMA_THRESHOLD
+#if TCP_TX_LINKED_GDMA_ISOLATE_BLOCK > 0
+      && tx_gdma_block_count >= (TCP_TX_LINKED_GDMA_ISOLATE_BLOCK +
+                                 TCP_TX_LINKED_GDMA_ISOLATE_COUNT - 1U)
+#endif
+      ;
+    int tx_gdma_success = 0;
+    int tx_gdma_verify_failed = 0;
+
+    if (tx_gdma_attempted) {
+      u32_t copy_start_us = rltk_tcp_perf_now_us();
+      u16_t snapshot_index;
+
+      for (snapshot_index = 0U; snapshot_index < tx_gdma_block_count;
+           ++snapshot_index) {
+        struct tcp_tx_linked_gdma_pbuf_diag *diag =
+          &tcp_tx_linked_gdma_pbuf_diag[snapshot_index];
+        const struct pbuf *p = diag->p;
+
+        diag->snapshot_next = p->next;
+        diag->snapshot_payload = p->payload;
+        diag->snapshot_tot_len = p->tot_len;
+        diag->snapshot_len = p->len;
+        diag->snapshot_type_internal = p->type_internal;
+        diag->snapshot_flags = p->flags;
+        diag->snapshot_ref = p->ref;
+        diag->snapshot_if_idx = p->if_idx;
+        diag->snapshot_heap_header = NULL;
+        diag->snapshot_cache_line = NULL;
+#if TCP_TX_LINKED_GDMA_ISOLATE_BLOCK > 0
+        {
+          const u16_t isolate_index =
+            (u16_t)(TCP_TX_LINKED_GDMA_ISOLATE_BLOCK - 1U);
+          const u16_t snapshot_first = isolate_index > 0U ?
+            (u16_t)(isolate_index - 1U) : isolate_index;
+          const u16_t snapshot_last = LWIP_MIN(
+            tx_gdma_block_count,
+            (u16_t)(isolate_index + TCP_TX_LINKED_GDMA_ISOLATE_COUNT + 1U));
+
+          if (snapshot_index >= snapshot_first &&
+              snapshot_index < snapshot_last) {
+            uintptr_t line = (uintptr_t)p &
+              ~(uintptr_t)(TCP_TX_LINKED_GDMA_CACHE_LINE - 1U);
+            uintptr_t heap_header = (uintptr_t)p -
+              TCP_TX_LINKED_GDMA_HEAP_HEADER_BYTES;
+            const u32_t *heap_words = (const u32_t *)heap_header;
+
+            diag->snapshot_heap_header = (u8_t *)heap_header;
+            diag->snapshot_cache_line = (u8_t *)line;
+            dcache_clean_by_addr((uint32_t *)heap_header,
+                                 TCP_TX_LINKED_GDMA_HEAP_HEADER_BYTES);
+            dcache_clean_by_addr((uint32_t *)line,
+                                 TCP_TX_LINKED_GDMA_CACHE_LINE);
+            __DSB();
+            memcpy(diag->snapshot_heap_header_bytes,
+                   (const void *)heap_header,
+                   TCP_TX_LINKED_GDMA_HEAP_HEADER_BYTES);
+            memcpy(diag->snapshot_cache_bytes, (const void *)line,
+                   TCP_TX_LINKED_GDMA_CACHE_LINE);
+
+            /* An allocated heap_4_2 block has a NULL free-list link and the
+             * top bit set in xBlockSize.  If this is already false, GDMA is
+             * not the cause; keep the pbuf on the CPU path and report the
+             * pre-existing lifetime/heap fault without touching hardware. */
+            if ((heap_words[0] != 0U) ||
+                ((heap_words[1] & TCP_TX_LINKED_GDMA_HEAP_ALLOCATED_BIT) == 0U)) {
+              LWIP_PLATFORM_DIAG(("[TXGDMA][HEAP-HEADER][PREEXISTING] "
+                                  "block=%u p=%p hdr=%p next=%p size=0x%08x; "
+                                  "skipping direct GDMA\r\n",
+                                  (unsigned int)snapshot_index, (void *)p,
+                                  (void *)heap_header,
+                                  (void *)(uintptr_t)heap_words[0],
+                                  (unsigned int)heap_words[1]));
+              tcp_tx_linked_gdma_direct_disabled = 1U;
+            }
+          }
+        }
+#endif
+      }
+
+      /* First validation stage must not add a new blocking dependency to the
+       * TCP core.  If both linked channels are occupied, use the CPU path. */
+#if TCP_TX_LINKED_GDMA_ISOLATE_BLOCK > 0
+      if (!tcp_tx_linked_gdma_direct_disabled) {
+        static u8_t isolate_addr_reported;
+        const u16_t first = TCP_TX_LINKED_GDMA_ISOLATE_BLOCK - 1U;
+        const struct tcp_tx_linked_gdma_pbuf_diag *first_diag =
+          &tcp_tx_linked_gdma_pbuf_diag[first];
+        const struct tcp_tx_linked_gdma_pbuf_diag *last_diag =
+          &tcp_tx_linked_gdma_pbuf_diag[first +
+                                        TCP_TX_LINKED_GDMA_ISOLATE_COUNT - 1U];
+
+        if (!isolate_addr_reported) {
+          isolate_addr_reported = 1U;
+          LWIP_PLATFORM_DIAG(("[TXGDMA][ISOLATE-ADDR] first block=%u p=%p "
+                              "hdr=%p last block=%u p=%p hdr=%p\r\n",
+                              (unsigned int)first, (void *)first_diag->p,
+                              (void *)first_diag->snapshot_heap_header,
+                              (unsigned int)(first +
+                                TCP_TX_LINKED_GDMA_ISOLATE_COUNT - 1U),
+                              (void *)last_diag->p,
+                              (void *)last_diag->snapshot_heap_header));
+        }
+        tx_gdma_success = carbox_linked_gdma_copyv_force_try(
+          &tcp_tx_linked_gdma_blocks[first],
+          TCP_TX_LINKED_GDMA_ISOLATE_COUNT, &tx_gdma_result);
+      }
+#else
+      tx_gdma_success = carbox_linked_gdma_copyv_try(
+        tcp_tx_linked_gdma_blocks, tx_gdma_block_count, &tx_gdma_result);
+#endif
+
+#if TCP_TX_LINKED_GDMA_PROBE_BLOCKS > 0
+      if (tx_gdma_success && !tcp_tx_linked_gdma_direct_disabled) {
+        u16_t probe_count = LWIP_MIN(tx_gdma_block_count,
+                                    TCP_TX_LINKED_GDMA_PROBE_BLOCKS);
+
+        if (!tcp_tx_linked_gdma_probe_check(probe_count)) {
+          tcp_tx_linked_gdma_direct_disabled = 1U;
+          tx_gdma_success = 0;
+        }
+      }
+#endif
+
+      if (tx_gdma_success && !tcp_tx_linked_gdma_direct_disabled) {
+        u16_t guard_index;
+#if TCP_TX_LINKED_GDMA_ISOLATE_BLOCK > 0
+        const u16_t isolate_index =
+          (u16_t)(TCP_TX_LINKED_GDMA_ISOLATE_BLOCK - 1U);
+        const u16_t validate_first = isolate_index > 0U ?
+          (u16_t)(isolate_index - 1U) : isolate_index;
+        const u16_t validate_last = LWIP_MIN(
+          tx_gdma_block_count,
+          (u16_t)(isolate_index + TCP_TX_LINKED_GDMA_ISOLATE_COUNT + 1U));
+#else
+        const u16_t validate_first = 0U;
+        const u16_t validate_last = LWIP_MIN(
+          tx_gdma_block_count, (u16_t)TCP_TX_LINKED_GDMA_DIRECT_BLOCKS);
+#endif
+
+        for (guard_index = validate_first;
+             guard_index < validate_last;
+             ++guard_index) {
+          struct tcp_tx_linked_gdma_pbuf_diag *diag =
+            &tcp_tx_linked_gdma_pbuf_diag[guard_index];
+          struct pbuf *p = (struct pbuf *)diag->p;
+          u32_t guard_offset;
+
+          if (diag->snapshot_heap_header != NULL) {
+            u32_t raw_offset;
+
+            dcache_invalidate_by_addr(
+              (uint32_t *)diag->snapshot_heap_header,
+              TCP_TX_LINKED_GDMA_HEAP_HEADER_BYTES);
+            __DSB();
+            for (raw_offset = 0U;
+                 raw_offset < TCP_TX_LINKED_GDMA_HEAP_HEADER_BYTES;
+                 ++raw_offset) {
+              if (diag->snapshot_heap_header[raw_offset] ==
+                  diag->snapshot_heap_header_bytes[raw_offset]) {
+                continue;
+              }
+              LWIP_PLATFORM_DIAG(("[TXGDMA][HEAP-HEADER][FATAL] block=%u "
+                                  "p=%p hdr=%p offset=%u value=0x%02x/0x%02x; "
+                                  "restoring header and disabling direct GDMA\r\n",
+                                  guard_index, (void *)p,
+                                  diag->snapshot_heap_header,
+                                  (unsigned int)raw_offset,
+                                  (unsigned int)
+                                    diag->snapshot_heap_header[raw_offset],
+                                  (unsigned int)
+                                    diag->snapshot_heap_header_bytes[raw_offset]));
+              memcpy(diag->snapshot_heap_header,
+                     diag->snapshot_heap_header_bytes,
+                     TCP_TX_LINKED_GDMA_HEAP_HEADER_BYTES);
+              dcache_clean_by_addr(
+                (uint32_t *)diag->snapshot_heap_header,
+                TCP_TX_LINKED_GDMA_HEAP_HEADER_BYTES);
+              __DSB();
+              tcp_tx_linked_gdma_direct_disabled = 1U;
+              tx_gdma_success = 0;
+              break;
+            }
+            if (!tx_gdma_success) {
+              break;
+            }
+          }
+
+          if (diag->snapshot_cache_line != NULL) {
+            u32_t raw_offset;
+
+            dcache_invalidate_by_addr(
+              (uint32_t *)diag->snapshot_cache_line,
+              TCP_TX_LINKED_GDMA_CACHE_LINE);
+            __DSB();
+            for (raw_offset = 0U;
+                 raw_offset < TCP_TX_LINKED_GDMA_CACHE_LINE;
+                 ++raw_offset) {
+              if (diag->snapshot_cache_line[raw_offset] ==
+                  diag->snapshot_cache_bytes[raw_offset]) {
+                continue;
+              }
+              LWIP_PLATFORM_DIAG(("[TXGDMA][PBUF-LINE][FATAL] block=%u "
+                                  "p=%p line=%p offset=%u value=0x%02x/0x%02x; "
+                                  "restoring line and disabling direct GDMA\r\n",
+                                  guard_index, (void *)p,
+                                  diag->snapshot_cache_line,
+                                  (unsigned int)raw_offset,
+                                  (unsigned int)
+                                    diag->snapshot_cache_line[raw_offset],
+                                  (unsigned int)
+                                    diag->snapshot_cache_bytes[raw_offset]));
+              memcpy(diag->snapshot_cache_line,
+                     diag->snapshot_cache_bytes,
+                     TCP_TX_LINKED_GDMA_CACHE_LINE);
+              dcache_clean_by_addr(
+                (uint32_t *)diag->snapshot_cache_line,
+                TCP_TX_LINKED_GDMA_CACHE_LINE);
+              __DSB();
+              tcp_tx_linked_gdma_direct_disabled = 1U;
+              tx_gdma_success = 0;
+              break;
+            }
+            if (!tx_gdma_success) {
+              break;
+            }
+          }
+
+#if TCP_TX_LINKED_GDMA_GUARD_BYTES > 0
+          /* Read the post-GDMA DRAM contents, not the pre-DMA cached canary.
+           * guard is cache-line aligned and occupies dedicated reserve bytes,
+           * so this cannot discard payload or heap-header state. */
+          if (diag->guard != NULL) {
+            tcp_tx_linked_gdma_guard_invalidate(diag->guard);
+          }
+#endif
+          int metadata_changed =
+            p->next != diag->snapshot_next ||
+            p->payload != diag->snapshot_payload ||
+            p->tot_len != diag->snapshot_tot_len ||
+            p->len != diag->snapshot_len ||
+            p->type_internal != diag->snapshot_type_internal ||
+            p->flags != diag->snapshot_flags ||
+            p->ref != diag->snapshot_ref ||
+            p->if_idx != diag->snapshot_if_idx;
+
+          if (metadata_changed) {
+            LWIP_PLATFORM_DIAG(("[TXGDMA][GUARD][FATAL] block=%u p=%p "
+                                "metadata changed next=%p/%p payload=%p/%p "
+                                "tot=%u/%u len=%u/%u ref=%u/%u; "
+                                "disabling direct GDMA\r\n",
+                                guard_index, (void *)p,
+                                (void *)p->next, (void *)diag->snapshot_next,
+                                p->payload, diag->snapshot_payload,
+                                p->tot_len, diag->snapshot_tot_len,
+                                p->len, diag->snapshot_len,
+                                (unsigned int)p->ref,
+                                (unsigned int)diag->snapshot_ref));
+            p->next = diag->snapshot_next;
+            p->payload = diag->snapshot_payload;
+            p->tot_len = diag->snapshot_tot_len;
+            p->len = diag->snapshot_len;
+            p->type_internal = diag->snapshot_type_internal;
+            p->flags = diag->snapshot_flags;
+            p->ref = diag->snapshot_ref;
+            p->if_idx = diag->snapshot_if_idx;
+            tcp_tx_linked_gdma_direct_disabled = 1U;
+            tx_gdma_success = 0;
+            break;
+          }
+#if TCP_TX_LINKED_GDMA_GUARD_BYTES > 0
+          if (diag->guard != NULL) {
+            for (guard_offset = 0U;
+                 guard_offset < TCP_TX_LINKED_GDMA_GUARD_BYTES;
+                 ++guard_offset) {
+              if (diag->guard[guard_offset] == 0xa5U) {
+                continue;
+              }
+              LWIP_PLATFORM_DIAG(("[TXGDMA][GUARD][FATAL] block=%u p=%p "
+                                  "write-through offset=%u value=0x%02x; "
+                                  "disabling direct GDMA\r\n",
+                                  guard_index, (void *)p,
+                                  (unsigned int)guard_offset,
+                                  (unsigned int)diag->guard[guard_offset]));
+              tcp_tx_linked_gdma_direct_disabled = 1U;
+              tx_gdma_success = 0;
+              break;
+            }
+          }
+          if (!tx_gdma_success) {
+            break;
+          }
+#else
+          LWIP_UNUSED_ARG(guard_offset);
+#endif
+        }
+      }
+
+#if TCP_TX_LINKED_GDMA_VERIFY
+      if (tx_gdma_success) {
+        u16_t verify_index;
+
+#if TCP_TX_LINKED_GDMA_ISOLATE_BLOCK > 0
+        for (verify_index = TCP_TX_LINKED_GDMA_ISOLATE_BLOCK - 1U;
+             verify_index < (TCP_TX_LINKED_GDMA_ISOLATE_BLOCK - 1U +
+                             TCP_TX_LINKED_GDMA_ISOLATE_COUNT);
+             ++verify_index) {
+#else
+        for (verify_index = 0U; verify_index < tx_gdma_block_count;
+             ++verify_index) {
+#endif
+          const carbox_gdma_copy_block_t *block =
+            &tcp_tx_linked_gdma_blocks[verify_index];
+
+          if (memcmp(block->dst, block->src, block->len) != 0) {
+            tx_gdma_verify_failed = 1;
+            tx_gdma_success = 0;
+            LWIP_PLATFORM_DIAG(("[TXGDMA][VERIFY] mismatch block=%u/%u "
+                                "len=%u; recopying complete write with M33\r\n",
+                                verify_index, tx_gdma_block_count,
+                                (unsigned int)block->len));
+            break;
+          }
+        }
+      }
+#endif
+
+      if (tx_gdma_success) {
+#if CONFIG_TCP_PHASE_PROFILE
+        rltk_tcp_perf_tx_copy(tx_gdma_bytes, tx_gdma_result.dma_bytes,
+                              rltk_tcp_perf_now_us() - copy_start_us);
+#endif
+      }
+    }
+    if (!tx_gdma_success) {
+      u16_t copy_index;
+
+      /* The helper quiesces a failed channel before returning.  In production
+       * mode recopy every destination so a partial DMA transaction can never
+       * be published.  Shadow mode already populated real pbufs with M33; this
+       * loop only makes the diagnostic shadow complete. */
+      for (copy_index = 0U; copy_index < tx_gdma_block_count;
+           ++copy_index) {
+        TCP_DATA_COPY2(tcp_tx_linked_gdma_blocks[copy_index].dst,
+                       tcp_tx_linked_gdma_blocks[copy_index].src,
+                       tcp_tx_linked_gdma_blocks[copy_index].len,
+                       NULL, NULL);
+      }
+    }
+    tcp_tx_linked_gdma_profile(tx_gdma_block_count, tx_gdma_bytes,
+                               tx_gdma_attempted,
+                               tx_gdma_success, &tx_gdma_result,
+                               tx_gdma_verify_failed);
+  } else {
+    tcp_tx_linked_gdma_profile(0U, len, 0, 0, &tx_gdma_result, 0);
+  }
+#endif
 
   /*
    * All three segmentation phases were successful. We can commit the

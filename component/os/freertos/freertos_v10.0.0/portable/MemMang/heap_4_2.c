@@ -474,11 +474,20 @@ BlockLink_t *pxLink;
 		before it. */
 		puc -= xHeapStructSize;
 
-		/* This casting is to keep the compiler from issuing warnings. */
-		pxLink = ( void * ) puc;
+			/* This casting is to keep the compiler from issuing warnings. */
+			pxLink = ( void * ) puc;
 
-		/* Check the block is actually allocated. */
-		configASSERT( ( pxLink->xBlockSize & xHeapInfo[idx].xBlockAllocatedBit ) != 0 );
+			/* Check the block is actually allocated. */
+			if( ( ( pxLink->xBlockSize & xHeapInfo[idx].xBlockAllocatedBit ) == 0 ) ||
+			    ( pxLink->pxNextFreeBlock != NULL ) )
+			{
+				dbg_printf("[heap] FREE HEADER FAULT pv=%p hdr=%p next=%p "
+				           "size=%08x caller=%p idx=%d\n\r",
+				           pv, pxLink, pxLink->pxNextFreeBlock,
+				           ( unsigned int ) pxLink->xBlockSize,
+				           __builtin_return_address( 0 ), idx);
+			}
+			configASSERT( ( pxLink->xBlockSize & xHeapInfo[idx].xBlockAllocatedBit ) != 0 );
 		configASSERT( pxLink->pxNextFreeBlock == NULL );
 
 		if( ( pxLink->xBlockSize & xHeapInfo[idx].xBlockAllocatedBit ) != 0 )

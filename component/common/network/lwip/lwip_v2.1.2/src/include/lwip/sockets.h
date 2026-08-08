@@ -666,6 +666,8 @@ struct lwip_tcp_buffer_diag {
   u32_t rx_pending_bytes;
   u32_t rx_window_capacity;
   u32_t rx_window_available;
+  /* Unscaled byte count that the next outgoing ACK will advertise. */
+  u32_t rx_window_advertised;
   u32_t tx_buffer_capacity;
   u32_t tx_buffer_available;
   u32_t tx_queue_len;

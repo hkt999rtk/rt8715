@@ -716,6 +716,7 @@ SRC_C += ../../../component/common/drivers/wlan/realtek/src/core/option/rtw_opt_
 SRC_C += ../src/main.c
 SRC_C += ../src/carbox/carbox_diag.c
 SRC_C += ../src/carbox/pc_profiler.c
+SRC_C += ../src/carbox/irq_profiler.c
 SRC_C += ../src/carbox/gcd_sync_profiler.c
 SRC_C += ../src/carbox/screen_queue_profiler.c
 SRC_C += ../src/carbox/memcheck.c
@@ -825,11 +826,17 @@ TCP_OUTPUT_PROFILE ?= 1
 # waits synchronously for USB completion, so measure that wait separately from
 # any lwIP pbuf-chain flattening done by ethernetif.c.
 NCM_TX_PROFILE ?= 1
-# Stage 1: move the closed synchronous NCM send/wait out of TCP_IP.  This is
-# intentionally single-packet/immediate; packet/NTB aggregation is a later step.
+# Move the closed synchronous NCM send/wait out of TCP_IP.
 NCM_TX_ASYNC ?= 1
 NCM_TX_ASYNC_PROFILE ?= 1
+# Opportunistically place two already-queued Ethernet packets in one NTH16/NDP16
+# transfer.  There is no timer: an absent second packet sends immediately.  The
+# formatter is local because Realtek supplies ncm_wrap_ntb() only in a binary
+# archive; bulk submission and its private completion semaphore remain closed.
+NCM_TX_BATCH ?= 1
+NCM_TX_BATCH_PROFILE ?= 1
 PC_PROFILER ?= 1
+IRQ_PROFILE ?= 1
 MEMCPY_TASK_PROFILE ?= 0
 LARGE_MEMCPY_GDMA ?= 1
 LARGE_MEMCPY_GDMA_THRESHOLD ?= 4096
@@ -843,8 +850,31 @@ SOCKET_RECV_PROFILE ?= 0
 # recv() batch exceeds 4 KiB.  Sources may be non-contiguous; caller output is
 # contiguous.  Cache-line edges remain on the M33 path.
 SOCKET_RECV_GDMA ?= 1
-SOCKET_RECV_GDMA_PROFILE ?= 1
+SOCKET_RECV_GDMA_PROFILE ?= 0
 SOCKET_RECV_GDMA_THRESHOLD ?= 4096
+# Gather the pbuf destinations created by one large tcp_write() and scatter the
+# contiguous application payload through linked GDMA before pcb->unsent is
+# published.  Channel contention blocks on the hybrid wait semaphore; ordinary
+# uncontended calls use only the atomic two-slot fast path.
+# TX scatter GDMA remains disabled until its pbuf-destination path has a
+# board-safe implementation.  TCP RX continues to use the independently
+# validated linked-GDMA path in sockets.c/large_memcpy_gdma.c.
+TCP_TX_LINKED_GDMA ?= 0
+TCP_TX_LINKED_GDMA_PROFILE ?= 0
+TCP_TX_LINKED_GDMA_THRESHOLD ?= 4096
+# Validation-build safety net.  A successful DMA write is compared before the
+# pbuf queue is published; mismatch causes a complete M33 recopy.
+TCP_TX_LINKED_GDMA_VERIFY ?= 1
+# Isolation build: GDMA copies into a private shadow buffer while actual TX
+# pbufs stay on M33.  Disable only after the helper/concurrency test passes.
+TCP_TX_LINKED_GDMA_SHADOW ?= 1
+# Isolate real pbufs 2 and 3 as one two-descriptor linked-GDMA submission.
+# Blocks 1 and 4+ remain CPU-filled; metadata snapshots cover blocks 1..4.
+TCP_TX_LINKED_GDMA_DIRECT_BLOCKS ?= 0
+TCP_TX_LINKED_GDMA_PROBE_BLOCKS ?= 0
+TCP_TX_LINKED_GDMA_ISOLATE_BLOCK ?= 2
+TCP_TX_LINKED_GDMA_ISOLATE_COUNT ?= 2
+TCP_TX_LINKED_GDMA_GUARD_BYTES ?= 64
 # TCP core does not copy payload into a second socket buffer.  This probe
 # measures the pbuf-pointer handoff into recvmbox and the socket wakeup event.
 TCP_SOCKET_HANDOFF_PROFILE ?= 0
@@ -856,11 +886,15 @@ GCD_SYNC_PROFILE ?= 0
 # Diagnostic A/B switch.  The production default preserves DispatchLite's
 # requested worker priority; set this to a non-negative value only for testing.
 GCD_WORK_PRIORITY ?= -1
-SCREEN_QUEUE_PROFILE ?= 0
+SCREEN_QUEUE_PROFILE ?= 1
 # Keep the expensive, already-concluded diagnostic probes independently
 # switchable.  The normal screen timing/backlog profiler does not need them.
 SCREEN_FRAME_FORMAT_PROFILE ?= 0
-SCREEN_TCP_BUFFER_PROFILE ?= 0
+# Lightweight video-RX-only TCP window profiling.  This does not enable the
+# full screen queue/timestamp profiler: AirPlayScreenReceiver first binds the
+# video fd on a >40-KiB recv request, then samples that PCB once per 128-byte
+# screen header and reports only [VIDRXWND] every 10 seconds.
+SCREEN_TCP_BUFFER_PROFILE ?= 1
 # When SCREEN_QUEUE_PROFILE is enabled, correlate the local tick used to
 # generate each outgoing screen NTP timestamp with that frame's receive time.
 SCREEN_TIMESTAMP_PROFILE ?= 0
@@ -896,7 +930,10 @@ GCCFLAGS += -DCONFIG_TCP_OUTPUT_PROFILE=$(TCP_OUTPUT_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_TX_PROFILE=$(NCM_TX_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_TX_ASYNC=$(NCM_TX_ASYNC)
 GCCFLAGS += -DCONFIG_NCM_TX_ASYNC_PROFILE=$(NCM_TX_ASYNC_PROFILE)
+GCCFLAGS += -DCONFIG_NCM_TX_BATCH=$(NCM_TX_BATCH)
+GCCFLAGS += -DCONFIG_NCM_TX_BATCH_PROFILE=$(NCM_TX_BATCH_PROFILE)
 GCCFLAGS += -DCONFIG_PC_PROFILER=$(PC_PROFILER)
+GCCFLAGS += -DCONFIG_IRQ_PROFILE=$(IRQ_PROFILE)
 GCCFLAGS += -DCONFIG_MEMCPY_TASK_PROFILE=$(MEMCPY_TASK_PROFILE)
 GCCFLAGS += -DCONFIG_LARGE_MEMCPY_GDMA=$(LARGE_MEMCPY_GDMA)
 GCCFLAGS += -DLARGE_MEMCPY_GDMA_THRESHOLD=$(LARGE_MEMCPY_GDMA_THRESHOLD)
@@ -906,6 +943,16 @@ GCCFLAGS += -DCONFIG_SOCKET_RECV_PROFILE=$(SOCKET_RECV_PROFILE)
 GCCFLAGS += -DCONFIG_SOCKET_RECV_GDMA=$(SOCKET_RECV_GDMA)
 GCCFLAGS += -DCONFIG_SOCKET_RECV_GDMA_PROFILE=$(SOCKET_RECV_GDMA_PROFILE)
 GCCFLAGS += -DSOCKET_RECV_GDMA_THRESHOLD=$(SOCKET_RECV_GDMA_THRESHOLD)
+GCCFLAGS += -DCONFIG_TCP_TX_LINKED_GDMA=$(TCP_TX_LINKED_GDMA)
+GCCFLAGS += -DCONFIG_TCP_TX_LINKED_GDMA_PROFILE=$(TCP_TX_LINKED_GDMA_PROFILE)
+GCCFLAGS += -DTCP_TX_LINKED_GDMA_THRESHOLD=$(TCP_TX_LINKED_GDMA_THRESHOLD)
+GCCFLAGS += -DTCP_TX_LINKED_GDMA_VERIFY=$(TCP_TX_LINKED_GDMA_VERIFY)
+GCCFLAGS += -DTCP_TX_LINKED_GDMA_SHADOW=$(TCP_TX_LINKED_GDMA_SHADOW)
+GCCFLAGS += -DTCP_TX_LINKED_GDMA_DIRECT_BLOCKS=$(TCP_TX_LINKED_GDMA_DIRECT_BLOCKS)
+GCCFLAGS += -DTCP_TX_LINKED_GDMA_PROBE_BLOCKS=$(TCP_TX_LINKED_GDMA_PROBE_BLOCKS)
+GCCFLAGS += -DTCP_TX_LINKED_GDMA_ISOLATE_BLOCK=$(TCP_TX_LINKED_GDMA_ISOLATE_BLOCK)
+GCCFLAGS += -DTCP_TX_LINKED_GDMA_ISOLATE_COUNT=$(TCP_TX_LINKED_GDMA_ISOLATE_COUNT)
+GCCFLAGS += -DTCP_TX_LINKED_GDMA_GUARD_BYTES=$(TCP_TX_LINKED_GDMA_GUARD_BYTES)
 GCCFLAGS += -DCONFIG_TCP_SOCKET_HANDOFF_PROFILE=$(TCP_SOCKET_HANDOFF_PROFILE)
 GCCFLAGS += -DCONFIG_GDMA_RESERVE_MULTIBLOCK_CHANNELS=$(GDMA_RESERVE_MULTIBLOCK_CHANNELS)
 GCCFLAGS += -DCONFIG_GCD_SYNC_PROFILE=$(GCD_SYNC_PROFILE)
@@ -973,6 +1020,9 @@ CPPFLAGS += -Wall -Wpointer-arith -Wundef -Wno-write-strings -Wno-maybe-uninitia
 LFLAGS = 
 LFLAGS += -march=armv8-m.main+dsp -mthumb -mcmse -mfloat-abi=softfp -mfpu=fpv5-sp-d16 -Os -nostartfiles -specs=nosys.specs -nodefaultlibs -nostdlib
 LFLAGS += -Wl,--gc-sections -Wl,-Map=$(BIN_DIR)/$(TARGET).map -Wl,--cref -Wl,--build-id=none -Wl,--use-blx 
+ifeq ($(NCM_TX_BATCH),1)
+LFLAGS += -Wl,--wrap=ncm_wrap_ntb
+endif
 ifeq ($(GCD_SYNC_PROFILE),1)
 LFLAGS += -Wl,--wrap=dispatch_sync_f
 endif
@@ -987,6 +1037,12 @@ LFLAGS += -Wl,--wrap=lwip_recv -Wl,--wrap=lwip_write
 LFLAGS += -Wl,--wrap=lwip_select
 ifeq ($(SCREEN_TIMESTAMP_PROFILE),1)
 LFLAGS += -Wl,--wrap=UpTicksToNTP
+endif
+else
+ifeq ($(SCREEN_TCP_BUFFER_PROFILE),1)
+# In lightweight mode only recv is wrapped.  The wrapper ignores every task
+# and fd except the video socket discovered inside AirPlayScreenReceiver.
+LFLAGS += -Wl,--wrap=lwip_recv
 endif
 endif
 ifeq ($(USB_HCD_PROFILE),1)
