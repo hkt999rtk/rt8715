@@ -135,6 +135,7 @@ struct tcp_owned_buffer {
   tcp_owned_release_fn release;
   void *argument;
   u32_t references;
+  u32_t created_ms;
 };
 
 struct tcp_owned_pbuf {
@@ -150,6 +151,16 @@ static struct {
   u32_t releases;
   u32_t live;
   u32_t live_max;
+  u32_t age_samples;
+  u32_t age_max_ms;
+  u32_t age_lt_10ms;
+  u32_t age_10_25ms;
+  u32_t age_25_50ms;
+  u32_t age_50_100ms;
+  u32_t age_100_200ms;
+  u32_t age_200_500ms;
+  u32_t age_ge_500ms;
+  unsigned long long age_sum_ms;
   unsigned long long referenced_bytes;
 } tcp_owned_stats;
 
@@ -177,11 +188,36 @@ tcp_owned_buffer_unref(struct tcp_owned_buffer *owner)
   LWIP_ASSERT("tcp owned reference underflow", owner->references > 0U);
   owner->references--;
   if (owner->references == 0U) {
+    u32_t now_ms = sys_now();
     release = owner->release;
     argument = owner->argument;
     tcp_owned_stats.releases++;
     LWIP_ASSERT("tcp owned live underflow", tcp_owned_stats.live > 0U);
     tcp_owned_stats.live--;
+    {
+      u32_t age_ms = now_ms - owner->created_ms;
+
+      tcp_owned_stats.age_samples++;
+      tcp_owned_stats.age_sum_ms += age_ms;
+      if (age_ms > tcp_owned_stats.age_max_ms) {
+        tcp_owned_stats.age_max_ms = age_ms;
+      }
+      if (age_ms < 10U) {
+        tcp_owned_stats.age_lt_10ms++;
+      } else if (age_ms < 25U) {
+        tcp_owned_stats.age_10_25ms++;
+      } else if (age_ms < 50U) {
+        tcp_owned_stats.age_25_50ms++;
+      } else if (age_ms < 100U) {
+        tcp_owned_stats.age_50_100ms++;
+      } else if (age_ms < 200U) {
+        tcp_owned_stats.age_100_200ms++;
+      } else if (age_ms < 500U) {
+        tcp_owned_stats.age_200_500ms++;
+      } else {
+        tcp_owned_stats.age_ge_500ms++;
+      }
+    }
   }
   SYS_ARCH_UNPROTECT(level);
   if (release != NULL) {
@@ -209,6 +245,7 @@ tcp_owned_buffer_create(tcp_owned_release_fn release, void *argument)
   owner->release = release;
   owner->argument = argument;
   owner->references = 1U;
+  owner->created_ms = sys_now();
   SYS_ARCH_PROTECT(level);
   tcp_owned_stats.creates++;
   tcp_owned_stats.live++;
@@ -269,7 +306,10 @@ tcp_owned_write_report(unsigned int sequence)
 {
   u32_t creates, create_failures, pbufs, pbuf_failures, releases;
   u32_t live, live_max;
-  unsigned long long bytes;
+  u32_t age_samples, age_max_ms;
+  u32_t age_lt_10ms, age_10_25ms, age_25_50ms, age_50_100ms;
+  u32_t age_100_200ms, age_200_500ms, age_ge_500ms;
+  unsigned long long bytes, age_sum_ms;
   SYS_ARCH_DECL_PROTECT(level);
 
   SYS_ARCH_PROTECT(level);
@@ -281,6 +321,16 @@ tcp_owned_write_report(unsigned int sequence)
   live = tcp_owned_stats.live;
   live_max = tcp_owned_stats.live_max;
   bytes = tcp_owned_stats.referenced_bytes;
+  age_samples = tcp_owned_stats.age_samples;
+  age_sum_ms = tcp_owned_stats.age_sum_ms;
+  age_max_ms = tcp_owned_stats.age_max_ms;
+  age_lt_10ms = tcp_owned_stats.age_lt_10ms;
+  age_10_25ms = tcp_owned_stats.age_10_25ms;
+  age_25_50ms = tcp_owned_stats.age_25_50ms;
+  age_50_100ms = tcp_owned_stats.age_50_100ms;
+  age_100_200ms = tcp_owned_stats.age_100_200ms;
+  age_200_500ms = tcp_owned_stats.age_200_500ms;
+  age_ge_500ms = tcp_owned_stats.age_ge_500ms;
   tcp_owned_stats.creates = 0U;
   tcp_owned_stats.create_failures = 0U;
   tcp_owned_stats.pbufs = 0U;
@@ -288,11 +338,28 @@ tcp_owned_write_report(unsigned int sequence)
   tcp_owned_stats.releases = 0U;
   tcp_owned_stats.live_max = live;
   tcp_owned_stats.referenced_bytes = 0U;
+  tcp_owned_stats.age_samples = 0U;
+  tcp_owned_stats.age_sum_ms = 0U;
+  tcp_owned_stats.age_max_ms = 0U;
+  tcp_owned_stats.age_lt_10ms = 0U;
+  tcp_owned_stats.age_10_25ms = 0U;
+  tcp_owned_stats.age_25_50ms = 0U;
+  tcp_owned_stats.age_50_100ms = 0U;
+  tcp_owned_stats.age_100_200ms = 0U;
+  tcp_owned_stats.age_200_500ms = 0U;
+  tcp_owned_stats.age_ge_500ms = 0U;
   SYS_ARCH_UNPROTECT(level);
   printf("[TCPOWN][%u] create/fail=%u/%u pbuf/fail=%u/%u bytes=%llu "
          "release=%u live/max=%u/%u\r\n", sequence, creates,
          create_failures, pbufs, pbuf_failures,
          (unsigned long long)bytes, releases, live, live_max);
+  printf("[TCPOWNAGE][%u] samples=%u age_ms_avg/max=%llu/%u "
+         "bins <10/10-25/25-50/50-100/100-200/200-500/>=500="
+         "%u/%u/%u/%u/%u/%u/%u live_now/max=%u/%u\r\n",
+         sequence, age_samples,
+         age_samples ? (age_sum_ms / age_samples) : 0ULL, age_max_ms,
+         age_lt_10ms, age_10_25ms, age_25_50ms, age_50_100ms,
+         age_100_200ms, age_200_500ms, age_ge_500ms, live, live_max);
 }
 #endif
 

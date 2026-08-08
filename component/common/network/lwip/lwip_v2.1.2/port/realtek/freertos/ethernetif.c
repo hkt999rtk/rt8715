@@ -418,6 +418,12 @@ int ethernetif_wlan_rx_zc_quiesce(unsigned int timeout_ms)
 	g_wlan_rx_zc_quiesced = 1U;
 	outstanding = g_wlan_rx_zc_stats.outstanding;
 	SYS_ARCH_UNPROTECT(old_level);
+	if (rltk_wlan_rx_swap_quiesce(timeout_ms) != 0) {
+		SYS_ARCH_PROTECT(old_level);
+		g_wlan_rx_zc_quiesced = 0U;
+		SYS_ARCH_UNPROTECT(old_level);
+		return -1;
+	}
 
 	while (outstanding != 0U) {
 		if ((u32_t)(sys_now() - start_ms) >= (u32_t)timeout_ms) {
@@ -429,6 +435,7 @@ int ethernetif_wlan_rx_zc_quiesce(unsigned int timeout_ms)
 			}
 			g_wlan_rx_zc_quiesced = 0U;
 			SYS_ARCH_UNPROTECT(old_level);
+			rltk_wlan_rx_swap_resume();
 			printf("[WLAN_RX_ZC][ERROR] drain timeout outstanding=%u; "
 			       "Wi-Fi shutdown aborted\n",
 			       (unsigned int)outstanding);
@@ -459,6 +466,7 @@ void ethernetif_wlan_rx_zc_resume(void)
 	g_wlan_rx_zc_quiesced = 0U;
 	SYS_ARCH_UNPROTECT(old_level);
 	if (was_quiesced) {
+		rltk_wlan_rx_swap_resume();
 		printf("[WLAN_RX_ZC] resumed\n");
 	}
 #endif
@@ -1816,6 +1824,7 @@ void ethernetif_recv(struct netif *netif, int total_len)
 	wlan_rx_zc_report();
 	p = wlan_rx_zc_try(idx, total_len);
 	if (p != NULL) {
+		rltk_wlan_rx_callback_complete(idx);
 		if (ERR_OK != netif->input(p, netif)) {
 			pbuf_free(p);
 		}
@@ -1826,6 +1835,7 @@ void ethernetif_recv(struct netif *netif, int total_len)
 	// Allocate buffer to store received packet
 	p = pbuf_alloc(PBUF_RAW, total_len, PBUF_POOL);
 	if (p == NULL) {
+		rltk_wlan_rx_callback_complete(idx);
 		return;
 	}
 
@@ -1837,8 +1847,10 @@ void ethernetif_recv(struct netif *netif, int total_len)
 	if (rltk_wlan_recv(idx, sg_list, sg_len) != 0) {
 		/* A timed-out GDMA destination may contain only part of the frame. */
 		pbuf_free(p);
+		rltk_wlan_rx_callback_complete(idx);
 		return;
 	}
+	rltk_wlan_rx_callback_complete(idx);
 
 	// Pass received packet to the interface
 	if (ERR_OK != netif->input(p, netif)) {

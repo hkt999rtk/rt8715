@@ -16,6 +16,7 @@
 #include "cmsis.h"
 #include "diag.h"
 #include "hal_timer.h"
+#include "lwip_intf.h"
 #include "lwip/sockets.h"
 
 #ifndef CONFIG_PC_PROFILER
@@ -621,6 +622,7 @@ static void pcprof_task(void *arg)
 		crypto_engine_profiler_report(sequence);
 		carbox_memcpy_task_profiler_report(sequence,
 						 PCPROF_REPORT_PERIOD_MS);
+		rltk_wlan_rx_swap_profile_report(sequence);
 	}
 }
 

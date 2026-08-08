@@ -60,6 +60,11 @@ int rltk_wlan_rx_ref_acquire(int idx, unsigned int expected_len,
 			     void **handle, void **payload);
 void rltk_wlan_rx_ref_release(void *handle);
 int rltk_wlan_rx_ref_selftest(void);
+/* Finish a synchronous netif_rx callback that used the swapped ring buffer. */
+void rltk_wlan_rx_callback_complete(int idx);
+int rltk_wlan_rx_swap_quiesce(unsigned int timeout_ms);
+void rltk_wlan_rx_swap_resume(void);
+void rltk_wlan_rx_swap_deinit_complete(void);
 #if defined(CONFIG_PLATFORM_8195BHP)
 typedef struct rltk_network_gdma_bench_sample_s {
 	unsigned int dma_bytes;
@@ -107,6 +112,7 @@ void rltk_tcp_output_profile_wlan(unsigned int bytes,
 				  unsigned int copy_cycles,
 				  unsigned int submit_cycles,
 				  int result);
+void rltk_wlan_rx_swap_profile_report(unsigned int sequence);
 int rltk_network_gdma_benchmark_init(void);
 void rltk_network_gdma_benchmark_print_status(unsigned int sequence);
 int rltk_network_gdma_benchmark_copy(

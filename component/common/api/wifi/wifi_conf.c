@@ -1490,6 +1490,7 @@ int wifi_off(void)
 	RTW_API_INFO("\n\rDeinitializing WIFI ...");
 	device_mutex_lock(RT_DEV_LOCK_WLAN);
 	rltk_wlan_deinit();
+	rltk_wlan_rx_swap_deinit_complete();
 	_wifi_is_on = 0;
 	device_mutex_unlock(RT_DEV_LOCK_WLAN);
 
@@ -1543,6 +1544,7 @@ int wifi_off_fastly(void)
 	//RTW_API_INFO("\n\rDeinitializing WIFI ...");
 	device_mutex_lock(RT_DEV_LOCK_WLAN);
 	rltk_wlan_deinit_fastly();
+	rltk_wlan_rx_swap_deinit_complete();
 	device_mutex_unlock(RT_DEV_LOCK_WLAN);
 	return 0;
 }

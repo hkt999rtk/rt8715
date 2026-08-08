@@ -209,6 +209,15 @@ typedef struct screenprof_stats_s {
 	uint32_t rx_window_ge75;
 	uint32_t rx_window_ge90;
 	uint32_t rx_window_full;
+	uint64_t rx_window_available_sum;
+	uint32_t rx_window_available_last;
+	uint32_t rx_window_available_min;
+	uint32_t rx_window_available_max;
+	uint64_t rx_window_advertised_sum;
+	uint32_t rx_window_advertised_last;
+	uint32_t rx_window_advertised_min;
+	uint32_t rx_window_advertised_max;
+	uint32_t rx_window_advertised_zero;
 
 	uint32_t select_calls;
 	uint32_t select_ready;
@@ -515,6 +524,15 @@ static void screenprof_record_rx_buffer(
 		screenprof_live.rx_window_used_max = used;
 	}
 	screenprof_live.rx_window_capacity = capacity;
+	screenprof_live.rx_window_available_sum += available;
+	screenprof_live.rx_window_available_last = available;
+	if ((screenprof_live.rx_buffer_samples == 1U) ||
+	    (available < screenprof_live.rx_window_available_min)) {
+		screenprof_live.rx_window_available_min = available;
+	}
+	if (available > screenprof_live.rx_window_available_max) {
+		screenprof_live.rx_window_available_max = available;
+	}
 	if ((capacity != 0U) && (used * 100U >= capacity * 75U)) {
 		screenprof_live.rx_window_ge75++;
 	}
@@ -523,6 +541,24 @@ static void screenprof_record_rx_buffer(
 	}
 	if ((capacity != 0U) && (used >= capacity)) {
 		screenprof_live.rx_window_full++;
+	}
+	screenprof_live.rx_window_advertised_sum +=
+		diag->rx_window_advertised;
+	screenprof_live.rx_window_advertised_last =
+		diag->rx_window_advertised;
+	if ((screenprof_live.rx_buffer_samples == 1U) ||
+	    (diag->rx_window_advertised <
+	     screenprof_live.rx_window_advertised_min)) {
+		screenprof_live.rx_window_advertised_min =
+			diag->rx_window_advertised;
+	}
+	if (diag->rx_window_advertised >
+	    screenprof_live.rx_window_advertised_max) {
+		screenprof_live.rx_window_advertised_max =
+			diag->rx_window_advertised;
+	}
+	if (diag->rx_window_advertised == 0U) {
+		screenprof_live.rx_window_advertised_zero++;
 	}
 	screenprof_record_probe_time(probe_us);
 	taskEXIT_CRITICAL();
@@ -1418,7 +1454,12 @@ ssize_t __wrap_lwip_recv(int socket, void *buffer, size_t bytes, int flags)
 #endif
 
 #if CONFIG_SCREEN_TCP_BUFFER_PROFILE
-	if (measured && (bytes > 64U)) {
+	/*
+	 * Sample once per video frame immediately before the fixed 128-byte
+	 * screen header is consumed. Sampling after recv() would hide receive
+	 * pressure because tcp_recved() re-opens the local advertised window.
+	 */
+	if (measured && (bytes == 128U)) {
 		struct lwip_tcp_buffer_diag diag;
 		uint32_t probe_start_us = hal_read_curtime_us();
 		int probe_result = lwip_diag_tcp_buffer_state(socket, &diag);
@@ -2147,6 +2188,9 @@ void screen_queue_profiler_report(uint32_t sequence)
 		uint32_t rx100 = screenprof_ratio_x10(
 			screenprof_copy.rx_window_full,
 			screenprof_copy.rx_buffer_samples);
+		uint32_t ann_zero = screenprof_ratio_x10(
+			screenprof_copy.rx_window_advertised_zero,
+			screenprof_copy.rx_buffer_samples);
 		uint32_t tx75 = screenprof_ratio_x10(
 			screenprof_copy.tx_buffer_ge75,
 			screenprof_copy.tx_buffer_samples);
@@ -2161,25 +2205,35 @@ void screen_queue_profiler_report(uint32_t sequence)
 			screenprof_copy.tx_buffer_samples +
 			screenprof_copy.tx_buffer_errors;
 
-		rt_printf("[BUFPROF][%lu] RX samples/error=%lu/%lu "
+		rt_printf("[VIDRXWND][%lu] source=AirPlayScreenReceiver "
+			  "samples/error=%lu/%lu wnd_scale=%s "
 			  "pending_last/avg/max=%lu/%lu/%luB "
-			  "window_used_last/avg/max/cap=%lu/%lu/%lu/%luB "
+			  "window_avail_last/min/avg/max/cap=%lu/%lu/%lu/%lu/%luB "
+			  "used_last/avg/max=%lu/%lu/%luB "
 			  "ge75/ge90/full=%lu(%lu.%lu%%)/%lu(%lu.%lu%%)/"
 			  "%lu(%lu.%lu%%)\r\n",
 			  (unsigned long)sequence,
 			  (unsigned long)screenprof_copy.rx_buffer_samples,
 			  (unsigned long)screenprof_copy.rx_buffer_errors,
+			  (screenprof_copy.rx_window_capacity > 65535U) ?
+				"negotiated" : "none",
 			  (unsigned long)screenprof_copy.rx_pending_last,
 			  (unsigned long)screenprof_average(
 				  screenprof_copy.rx_pending_sum,
 				  screenprof_copy.rx_buffer_samples),
 			  (unsigned long)screenprof_copy.rx_pending_max,
+			  (unsigned long)screenprof_copy.rx_window_available_last,
+			  (unsigned long)screenprof_copy.rx_window_available_min,
+			  (unsigned long)screenprof_average(
+				  screenprof_copy.rx_window_available_sum,
+				  screenprof_copy.rx_buffer_samples),
+			  (unsigned long)screenprof_copy.rx_window_available_max,
+			  (unsigned long)screenprof_copy.rx_window_capacity,
 			  (unsigned long)screenprof_copy.rx_window_used_last,
 			  (unsigned long)screenprof_average(
 				  screenprof_copy.rx_window_used_sum,
 				  screenprof_copy.rx_buffer_samples),
 			  (unsigned long)screenprof_copy.rx_window_used_max,
-			  (unsigned long)screenprof_copy.rx_window_capacity,
 			  (unsigned long)screenprof_copy.rx_window_ge75,
 			  (unsigned long)(rx75 / 10U),
 			  (unsigned long)(rx75 % 10U),
@@ -2189,6 +2243,18 @@ void screen_queue_profiler_report(uint32_t sequence)
 			  (unsigned long)screenprof_copy.rx_window_full,
 			  (unsigned long)(rx100 / 10U),
 			  (unsigned long)(rx100 % 10U));
+		rt_printf("[VIDRXWND][%lu] advertised_last/min/avg/max="
+			  "%lu/%lu/%lu/%luB advertised_zero=%lu(%lu.%lu%%)\r\n",
+			  (unsigned long)sequence,
+			  (unsigned long)screenprof_copy.rx_window_advertised_last,
+			  (unsigned long)screenprof_copy.rx_window_advertised_min,
+			  (unsigned long)screenprof_average(
+				  screenprof_copy.rx_window_advertised_sum,
+				  screenprof_copy.rx_buffer_samples),
+			  (unsigned long)screenprof_copy.rx_window_advertised_max,
+			  (unsigned long)screenprof_copy.rx_window_advertised_zero,
+			  (unsigned long)(ann_zero / 10U),
+			  (unsigned long)(ann_zero % 10U));
 		rt_printf("[BUFPROF][%lu] TX samples/error=%lu/%lu "
 			  "used_last/avg/max/cap=%lu/%lu/%lu/%luB "
 			  "ge75/ge90/full=%lu(%lu.%lu%%)/%lu(%lu.%lu%%)/"

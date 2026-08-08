@@ -4862,6 +4862,7 @@ lwip_diag_tcp_buffer_state(int s, struct lwip_tcp_buffer_diag *diag)
   diag->rx_pending_bytes = (u32_t)recv_avail;
   diag->rx_window_capacity = (u32_t)TCP_WND_MAX(pcb);
   diag->rx_window_available = (u32_t)pcb->rcv_wnd;
+  diag->rx_window_advertised = (u32_t)pcb->rcv_ann_wnd;
   diag->tx_buffer_capacity = (u32_t)TCP_SND_BUF;
   diag->tx_buffer_available = (u32_t)pcb->snd_buf;
   diag->tx_queue_len = (u32_t)pcb->snd_queuelen;

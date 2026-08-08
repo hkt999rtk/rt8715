@@ -815,6 +815,11 @@ NET_GDMA_COPY ?= 0
 NET_GDMA_BENCH ?= 0
 NET_GDMA_STATS ?= 0
 NET_GDMA_OWNER_BOOST_PRIORITY ?= 11
+# Descriptor/skb validation and 10-second diagnostics for the closed-driver
+# RX ring hook. WLAN_RX_RING_SWAP enables the validated spare-buffer rotation;
+# disabling it leaves this as an observation-only legacy memcpy probe.
+WLAN_RX_SWAP_BRINGUP_PROFILE ?= 1
+WLAN_RX_RING_SWAP ?= 1
 TCP_PHASE_PROFILE ?= 1
 # Detailed 10-second breakdown of tcp_input() processing. This is independent
 # of the compact 5-second TCP_PERF throughput/checksum summary above.
@@ -888,10 +893,10 @@ TCP_OWNED_WRITE ?= 1
 # Keep the expensive, already-concluded diagnostic probes independently
 # switchable.  The normal screen timing/backlog profiler does not need them.
 SCREEN_FRAME_FORMAT_PROFILE ?= 0
-SCREEN_TCP_BUFFER_PROFILE ?= 0
+SCREEN_TCP_BUFFER_PROFILE ?= 1
 # When SCREEN_QUEUE_PROFILE is enabled, correlate the local tick used to
 # generate each outgoing screen NTP timestamp with that frame's receive time.
-SCREEN_TIMESTAMP_PROFILE ?= 0
+SCREEN_TIMESTAMP_PROFILE ?= 1
 USB_HCD_PROFILE ?= 1
 NET_QUEUE_PROFILE ?= 1
 # Stage 1 validates the preallocated pbuf-pointer mailbox path without
@@ -918,6 +923,8 @@ GCCFLAGS += -DCONFIG_NET_GDMA_COPY=$(NET_GDMA_COPY)
 GCCFLAGS += -DCONFIG_NET_GDMA_BENCH=$(NET_GDMA_BENCH)
 GCCFLAGS += -DCONFIG_NET_GDMA_STATS=$(NET_GDMA_STATS)
 GCCFLAGS += -DNET_GDMA_OWNER_BOOST_PRIORITY=$(NET_GDMA_OWNER_BOOST_PRIORITY)
+GCCFLAGS += -DCONFIG_WLAN_RX_SWAP_BRINGUP_PROFILE=$(WLAN_RX_SWAP_BRINGUP_PROFILE)
+GCCFLAGS += -DCONFIG_WLAN_RX_RING_SWAP=$(WLAN_RX_RING_SWAP)
 GCCFLAGS += -DCONFIG_TCP_PHASE_PROFILE=$(TCP_PHASE_PROFILE)
 GCCFLAGS += -DCONFIG_TCP_CORE_PHASE_PROFILE=$(TCP_CORE_PHASE_PROFILE)
 GCCFLAGS += -DCONFIG_TCP_OUTPUT_PROFILE=$(TCP_OUTPUT_PROFILE)
@@ -1113,6 +1120,9 @@ LFLAGS += -Wl,-wrap,usb_os_sema_give
 LIBFLAGS =
 LIBFLAGS += ../../../component/soc/realtek/8195b/fwlib/hal-rtl8195b-hp/lib/lib/hal_pmc_hs.a
 LIBFLAGS += -L../../../component/soc/realtek/8195b/misc/bsp/lib/common/GCC/
+WLAN_RX_HOOK_DIR := ../../../component/common/drivers/wlan/realtek/wlan_rx_gdma
+WLAN_RX_HOOK_ARCHIVE := $(WLAN_RX_HOOK_DIR)/build/lib_wlan_rx_gdma.a
+WLAN_RX_HOOK_ORIGINAL := ../../../component/soc/realtek/8195b/misc/bsp/lib/common/GCC/lib_wlan.a
 CARBOX_BUILD_RTK264 ?= 1
 CARBOX_RTK264_OPT_FLAGS ?= -O3
 CARBOX_RTK264_DIR := ../src/carbox/rtk264
@@ -1121,7 +1131,12 @@ CARBOX_RTK264_SOURCE := $(CARBOX_RTK264_DIR)/lib_rtk264.c
 CARBOX_RTK264_HEADER := $(CARBOX_RTK264_DIR)/lib_rtk264.h
 CARBOX_RTK264_OBJECT := $(CARBOX_RTK264_BUILD_DIR)/lib_rtk264.o
 CARBOX_RTK264_ARCHIVE := $(CARBOX_RTK264_BUILD_DIR)/lib_rtk264.a
-all: LIBFLAGS += -l_codec -l_dct -l_h264 -l_haac -l_hmp3 -l_http -l_mmf -l_muxer -l_p2p -l_rtsp -l_sdcard -l_soc_is -l_speex  -l_websocket -l_wlan -l_wps -l_qr_code -l_tftp -l_opusenc -l_opusfile -l_opus
+ifneq ($(filter 1,$(NET_GDMA_COPY) $(WLAN_RX_SWAP_BRINGUP_PROFILE) $(WLAN_RX_RING_SWAP)),)
+WLAN_RX_HOOK_LIBRARY := $(WLAN_RX_HOOK_ARCHIVE)
+else
+WLAN_RX_HOOK_LIBRARY := -l_wlan
+endif
+all: LIBFLAGS += -l_codec -l_dct -l_h264 -l_haac -l_hmp3 -l_http -l_mmf -l_muxer -l_p2p -l_rtsp -l_sdcard -l_soc_is -l_speex  -l_websocket $(WLAN_RX_HOOK_LIBRARY) -l_wps -l_qr_code -l_tftp -l_opusenc -l_opusfile -l_opus
 mp: LIBFLAGS += -l_codec -l_dct -l_h264 -l_haac -l_hmp3 -l_http -l_mmf -l_muxer -l_p2p -l_rtsp -l_sdcard -l_soc_is -l_speex  -l_websocket -l_wlan_mp -l_wps -l_qr_code -l_tftp -l_opusenc -l_opusfile -l_opus
 ifneq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK),1)
 all mp: LIBFLAGS += -l_mdns
@@ -1245,6 +1260,14 @@ endif
 # -------------------------------------------------------------------
 
 .PHONY: application
+ifneq ($(filter 1,$(NET_GDMA_COPY) $(WLAN_RX_SWAP_BRINGUP_PROFILE) $(WLAN_RX_RING_SWAP)),)
+.PHONY: wlan_rx_hook
+wlan_rx_hook:
+	@$(MAKE) -C $(WLAN_RX_HOOK_DIR) \
+		CROSS_COMPILE=$(abspath $(CROSS_COMPILE)) \
+		ORIGINAL_ARCHIVE=$(abspath $(WLAN_RX_HOOK_ORIGINAL))
+application: wlan_rx_hook
+endif
 $(CARBOX_RTK264_OBJECT): $(CARBOX_RTK264_SOURCE) $(CARBOX_RTK264_HEADER)
 	@mkdir -p $(CARBOX_RTK264_BUILD_DIR)
 	@echo "  CC   $<"

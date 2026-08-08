@@ -98,6 +98,14 @@ extern struct netif xnetif[];			//LWIP netif
 #define CONFIG_WLAN_RX_RING_GDMA_VERIFY 0
 #endif
 
+#ifndef CONFIG_WLAN_RX_SWAP_BRINGUP_PROFILE
+#define CONFIG_WLAN_RX_SWAP_BRINGUP_PROFILE 0
+#endif
+
+#ifndef CONFIG_WLAN_RX_RING_SWAP
+#define CONFIG_WLAN_RX_RING_SWAP 0
+#endif
+
 #ifndef NET_GDMA_COPY_THRESHOLD
 #define NET_GDMA_COPY_THRESHOLD 1024U
 #endif
@@ -1784,6 +1792,818 @@ void rltk_tcp_output_profile_wlan(unsigned int b, unsigned int a,
  */
 #define WLAN_RX_RING_GDMA_MAX_LEN NET_GDMA_MAX_COPY_LEN
 
+#define WLAN_RX_SWAP_DESC_BASE_OFFSET       0x0cd0U
+#define WLAN_RX_SWAP_RING_INDEX_OFFSET      0x0cd8U
+#define WLAN_RX_SWAP_SHADOW_BASE_OFFSET     0x0cdcU
+#define WLAN_RX_SWAP_RING_COUNT_OFFSET      0x0d3cU
+#define WLAN_RX_SWAP_RING_SIZE_OFFSET       0x0d40U
+#define WLAN_RX_SWAP_MAX_SLOTS                   32U
+#define WLAN_RX_SWAP_METADATA_LEN               132U
+#define WLAN_RX_SWAP_PACKET_OFFSET               56U
+#define WLAN_RX_SWAP_RING_BYTES                2112U
+#define WLAN_RX_SWAP_MIN_LEN                   1024U
+
+static int wlan_rx_swap_readable(uintptr_t address, u32 bytes)
+{
+	uintptr_t end = address + (uintptr_t)bytes;
+
+	if (address == 0U || end < address) {
+		return 0;
+	}
+	return ((address >= 0x20000000U && end <= 0x21000000U) ||
+		(address >= 0x70000000U && end <= 0x80000000U));
+}
+
+#if CONFIG_WLAN_RX_RING_SWAP
+/*
+ * The closed driver owns 24 RX descriptors but only copies their completed
+ * payload into much smaller skb allocations.  Keep a separate set of full
+ * 2112-byte buffers so a completed descriptor can be refilled immediately
+ * while its old buffer is handed to lwIP.  Released ring buffers join the
+ * same free list, so this is a bounded rotation rather than an allocation in
+ * the receive path.
+ *
+ * rtl8195ba_free_recv_priv() frees each recvbuf through its saved OS resource
+ * record, not through descriptor word1/the inline shadow table.  Therefore
+ * descriptors may contain these static buffers during deinit.  Quiesce drains
+ * every retained pbuf and discards returned original-ring pointers before the
+ * closed driver releases their saved allocations.
+ */
+#define WLAN_RX_SWAP_SPARE_COUNT                192U
+#define WLAN_RX_SWAP_POOL_CAPACITY \
+	(WLAN_RX_SWAP_SPARE_COUNT + WLAN_RX_SWAP_MAX_SLOTS)
+#define WLAN_RX_SWAP_ENTRY_COUNT                224U
+
+#define WLAN_RX_SWAP_ENTRY_FREE                   0U
+#define WLAN_RX_SWAP_ENTRY_CALLBACK               1U
+#define WLAN_RX_SWAP_ENTRY_RETAINED               2U
+
+typedef struct wlan_rx_swap_entry_s {
+	struct sk_buff *skb;
+	u8 *ring_buffer;
+	u8 *old_head;
+	u8 *old_data;
+	u8 *old_tail;
+	u8 *old_end;
+	u32 old_len;
+	u32 retained_tick;
+	u8 state;
+} wlan_rx_swap_entry_t;
+
+typedef struct wlan_rx_swap_runtime_s {
+	uintptr_t adapter;
+	uintptr_t desc_base;
+	u32 ring_count;
+	u32 ring_size;
+	u8 initialized;
+	u8 quiesced;
+	u8 **pool;
+	u32 pool_count;
+	wlan_rx_swap_entry_t *entries;
+	u32 swapped;
+	u32 fallback_quiesced;
+	u32 fallback_layout;
+	u32 fallback_pool;
+	u32 fallback_table;
+	u32 acquire_invalid;
+	u32 acquire_invalid_data;
+	u32 acquire_invalid_tail;
+	u32 acquire_invalid_len;
+	u32 acquired;
+	u32 copied_complete;
+	u32 released;
+	u32 live;
+	u32 live_max;
+	u32 session_change;
+} wlan_rx_swap_runtime_t;
+
+static u8 g_wlan_rx_swap_storage[WLAN_RX_SWAP_SPARE_COUNT]
+	[WLAN_RX_SWAP_RING_BYTES] __attribute__((aligned(32)));
+static u8 *g_wlan_rx_swap_pool[WLAN_RX_SWAP_POOL_CAPACITY];
+static wlan_rx_swap_entry_t g_wlan_rx_swap_entries[WLAN_RX_SWAP_ENTRY_COUNT];
+static wlan_rx_swap_runtime_t g_wlan_rx_swap_runtime;
+
+static void wlan_rx_swap_runtime_init_locked(void)
+{
+	u32 i;
+	wlan_rx_swap_runtime_t *rt = &g_wlan_rx_swap_runtime;
+
+	if (rt->initialized) {
+		return;
+	}
+	rt->pool = g_wlan_rx_swap_pool;
+	rt->entries = g_wlan_rx_swap_entries;
+	rt->pool_count = WLAN_RX_SWAP_SPARE_COUNT;
+	for (i = 0; i < WLAN_RX_SWAP_SPARE_COUNT; i++) {
+		rt->pool[i] = &g_wlan_rx_swap_storage[i][0];
+	}
+	rtw_memset(rt->entries, 0, sizeof(g_wlan_rx_swap_entries));
+	rt->initialized = 1U;
+}
+
+static wlan_rx_swap_entry_t *
+wlan_rx_swap_entry_find_locked(struct sk_buff *skb, u8 state)
+{
+	u32 i;
+
+	for (i = 0; i < WLAN_RX_SWAP_ENTRY_COUNT; i++) {
+		if (g_wlan_rx_swap_entries[i].state == state &&
+		    g_wlan_rx_swap_entries[i].skb == skb) {
+			return &g_wlan_rx_swap_entries[i];
+		}
+	}
+	return NULL;
+}
+
+static wlan_rx_swap_entry_t *wlan_rx_swap_entry_alloc_locked(void)
+{
+	u32 i;
+
+	for (i = 0; i < WLAN_RX_SWAP_ENTRY_COUNT; i++) {
+		if (g_wlan_rx_swap_entries[i].state == WLAN_RX_SWAP_ENTRY_FREE) {
+			return &g_wlan_rx_swap_entries[i];
+		}
+	}
+	return NULL;
+}
+
+static int wlan_rx_swap_handle_is_entry(void *handle)
+{
+	uintptr_t value = (uintptr_t)handle;
+	uintptr_t first = (uintptr_t)&g_wlan_rx_swap_entries[0];
+	uintptr_t last = (uintptr_t)&g_wlan_rx_swap_entries[WLAN_RX_SWAP_ENTRY_COUNT];
+
+	return value >= first && value < last &&
+		((value - first) % sizeof(g_wlan_rx_swap_entries[0])) == 0U;
+}
+
+static void wlan_rx_swap_restore_skb_locked(wlan_rx_swap_entry_t *entry)
+{
+	entry->skb->head = entry->old_head;
+	entry->skb->data = entry->old_data;
+	entry->skb->tail = entry->old_tail;
+	entry->skb->end = entry->old_end;
+	entry->skb->len = entry->old_len;
+}
+
+static void wlan_rx_swap_pool_put_locked(u8 *buffer)
+{
+	if (g_wlan_rx_swap_runtime.pool_count < WLAN_RX_SWAP_POOL_CAPACITY) {
+		g_wlan_rx_swap_runtime.pool[g_wlan_rx_swap_runtime.pool_count++] =
+			buffer;
+	} else {
+		/* A duplicate release is safer to leak than to corrupt the free list. */
+		g_wlan_rx_swap_runtime.fallback_table++;
+	}
+}
+
+static int wlan_rx_swap_try(void *dst, void *src, u32 len,
+			    void *adapter_arg, void *skb_arg)
+{
+	wlan_rx_swap_runtime_t *rt = &g_wlan_rx_swap_runtime;
+	wlan_rx_swap_entry_t *entry;
+	struct sk_buff *skb = (struct sk_buff *)skb_arg;
+	uintptr_t adapter = (uintptr_t)adapter_arg;
+	uintptr_t desc_base;
+	uintptr_t desc;
+	uintptr_t shadow_addr;
+	u8 *shadow;
+	u8 *spare;
+	u32 ring_index;
+	u32 ring_count;
+	u32 ring_size;
+	u32 source_offset;
+
+	/* Fixed metadata and small/control copies retain their original ABI. */
+	if (len < WLAN_RX_SWAP_MIN_LEN || len == WLAN_RX_SWAP_METADATA_LEN ||
+	    skb == NULL ||
+	    !wlan_rx_swap_readable(adapter + WLAN_RX_SWAP_DESC_BASE_OFFSET,
+		WLAN_RX_SWAP_RING_SIZE_OFFSET - WLAN_RX_SWAP_DESC_BASE_OFFSET +
+			sizeof(u32)) || !wlan_rx_swap_readable((uintptr_t)skb, 40U)) {
+		return 0;
+	}
+
+	desc_base = *(const u32 *)(adapter + WLAN_RX_SWAP_DESC_BASE_OFFSET);
+	ring_index = *(const u32 *)(adapter + WLAN_RX_SWAP_RING_INDEX_OFFSET);
+	ring_count = *(const u32 *)(adapter + WLAN_RX_SWAP_RING_COUNT_OFFSET);
+	ring_size = *(const u32 *)(adapter + WLAN_RX_SWAP_RING_SIZE_OFFSET);
+	if (ring_count == 0U || ring_count > WLAN_RX_SWAP_MAX_SLOTS ||
+	    ring_index >= ring_count || ring_size != WLAN_RX_SWAP_RING_BYTES ||
+	    !wlan_rx_swap_readable(desc_base, ring_count * 8U) ||
+	    skb->data != (u8 *)dst || skb->head == NULL ||
+	    skb->data < skb->head || skb->tail < skb->data ||
+	    skb->end < skb->tail) {
+		rt->fallback_layout++;
+		return 0;
+	}
+
+	desc = desc_base + ring_index * 8U;
+	shadow_addr = adapter + WLAN_RX_SWAP_SHADOW_BASE_OFFSET +
+		ring_index * sizeof(u32);
+	shadow = (u8 *)(uintptr_t)*(const u32 *)shadow_addr;
+	if (*(const u32 *)(desc + 4U) != (u32)(uintptr_t)shadow ||
+	    (uintptr_t)src < (uintptr_t)shadow ||
+	    (uintptr_t)src + len < (uintptr_t)src ||
+	    (uintptr_t)src + len > (uintptr_t)shadow + ring_size) {
+		rt->fallback_layout++;
+		return 0;
+	}
+	source_offset = (u32)((uintptr_t)src - (uintptr_t)shadow);
+	if (source_offset != WLAN_RX_SWAP_PACKET_OFFSET) {
+		rt->fallback_layout++;
+		return 0;
+	}
+
+	save_and_cli();
+	wlan_rx_swap_runtime_init_locked();
+	if (rt->quiesced) {
+		rt->fallback_quiesced++;
+		restore_flags();
+		return 0;
+	}
+	if (rt->adapter == 0U) {
+		rt->adapter = adapter;
+		rt->desc_base = desc_base;
+		rt->ring_count = ring_count;
+		rt->ring_size = ring_size;
+	} else if (rt->adapter != adapter || rt->desc_base != desc_base ||
+		   rt->ring_count != ring_count || rt->ring_size != ring_size) {
+		rt->session_change++;
+		restore_flags();
+		return 0;
+	}
+	if (rt->pool_count == 0U) {
+		rt->fallback_pool++;
+		restore_flags();
+		return 0;
+	}
+	entry = wlan_rx_swap_entry_alloc_locked();
+	if (entry == NULL) {
+		rt->fallback_table++;
+		restore_flags();
+		return 0;
+	}
+	spare = rt->pool[--rt->pool_count];
+	entry->skb = skb;
+	entry->ring_buffer = shadow;
+	entry->old_head = skb->head;
+	entry->old_data = skb->data;
+	entry->old_tail = skb->tail;
+	entry->old_end = skb->end;
+	entry->old_len = skb->len;
+	entry->state = WLAN_RX_SWAP_ENTRY_CALLBACK;
+	rt->swapped++;
+	rt->live++;
+	if (rt->live > rt->live_max) {
+		rt->live_max = rt->live;
+	}
+	restore_flags();
+
+	/* Prepare the replacement before making it visible to the RX engine. */
+	dcache_clean_invalidate_by_addr((u32 *)spare, WLAN_RX_SWAP_RING_BYTES);
+	*(u32 *)shadow_addr = (u32)(uintptr_t)spare;
+	*(u32 *)(desc + 4U) = (u32)(uintptr_t)spare;
+	dcache_clean_by_addr((u32 *)(desc & ~(uintptr_t)31U), 32);
+	__DSB();
+
+	/* Present one coherent backing store to all subsequent closed-driver code. */
+	skb->head = shadow;
+	skb->data = (u8 *)src;
+	skb->tail = (u8 *)src + len;
+	skb->end = shadow + ring_size;
+	skb->len = len;
+	return 1;
+}
+
+static int wlan_rx_swap_ref_acquire(struct sk_buff *skb,
+				    unsigned int expected_len,
+				    void **handle, void **payload)
+{
+	wlan_rx_swap_entry_t *entry;
+	int result = 0;
+
+	save_and_cli();
+	entry = wlan_rx_swap_entry_find_locked(skb, WLAN_RX_SWAP_ENTRY_CALLBACK);
+	if (entry != NULL) {
+		/*
+		 * The RX tasklet binds the skb at ring+56, then the closed receive
+		 * pipeline advances skb->data with skb_pull() while removing the WLAN
+		 * and Ethernet headers.  The lwIP payload therefore starts later in
+		 * the same ring buffer; equality with ring+56 would reject every valid
+		 * IP packet.
+		 */
+		if (skb->data >= entry->ring_buffer + WLAN_RX_SWAP_PACKET_OFFSET &&
+		    skb->data <= entry->ring_buffer + WLAN_RX_SWAP_RING_BYTES &&
+		    skb->tail >= skb->data &&
+		    skb->tail <= entry->ring_buffer + WLAN_RX_SWAP_RING_BYTES &&
+		    expected_len <= skb->len &&
+		    expected_len <= (unsigned int)(skb->tail - skb->data)) {
+			*handle = entry;
+			*payload = skb->data;
+			wlan_rx_swap_restore_skb_locked(entry);
+			entry->state = WLAN_RX_SWAP_ENTRY_RETAINED;
+			entry->retained_tick = rtw_get_current_time();
+			g_wlan_rx_swap_runtime.acquired++;
+			result = 1;
+		} else {
+			g_wlan_rx_swap_runtime.acquire_invalid++;
+			if (skb->data < entry->ring_buffer + WLAN_RX_SWAP_PACKET_OFFSET ||
+			    skb->data > entry->ring_buffer + WLAN_RX_SWAP_RING_BYTES) {
+				g_wlan_rx_swap_runtime.acquire_invalid_data++;
+			}
+			if (skb->tail < skb->data ||
+			    skb->tail > entry->ring_buffer + WLAN_RX_SWAP_RING_BYTES) {
+				g_wlan_rx_swap_runtime.acquire_invalid_tail++;
+			}
+			if (expected_len > skb->len || skb->tail < skb->data ||
+			    expected_len > (unsigned int)(skb->tail - skb->data)) {
+				g_wlan_rx_swap_runtime.acquire_invalid_len++;
+			}
+			result = -1;
+		}
+	}
+	restore_flags();
+	return result;
+}
+
+static void wlan_rx_swap_release_entry(wlan_rx_swap_entry_t *entry)
+{
+	save_and_cli();
+	if (entry->state == WLAN_RX_SWAP_ENTRY_RETAINED) {
+		wlan_rx_swap_pool_put_locked(entry->ring_buffer);
+		rtw_memset(entry, 0, sizeof(*entry));
+		g_wlan_rx_swap_runtime.released++;
+		if (g_wlan_rx_swap_runtime.live != 0U) {
+			g_wlan_rx_swap_runtime.live--;
+		}
+	}
+	restore_flags();
+}
+
+static void wlan_rx_swap_complete_skb(struct sk_buff *skb)
+{
+	wlan_rx_swap_entry_t *entry;
+
+	if (skb == NULL) {
+		return;
+	}
+	save_and_cli();
+	entry = wlan_rx_swap_entry_find_locked(skb, WLAN_RX_SWAP_ENTRY_CALLBACK);
+	if (entry != NULL) {
+		wlan_rx_swap_restore_skb_locked(entry);
+		wlan_rx_swap_pool_put_locked(entry->ring_buffer);
+		rtw_memset(entry, 0, sizeof(*entry));
+		g_wlan_rx_swap_runtime.copied_complete++;
+		if (g_wlan_rx_swap_runtime.live != 0U) {
+			g_wlan_rx_swap_runtime.live--;
+		}
+	}
+	restore_flags();
+}
+
+/*
+ * Patched rtw_recv.o routes every receive-frame skb destruction here.  Normal
+ * IP packets have already restored their skb in ethernetif_recv(); EAPOL,
+ * AP-forward and error branches reach this as their only completion hook.
+ */
+void rtw_rx_swap_kfree_skb_chk_key(struct sk_buff *skb,
+				   struct net_device *root_dev)
+{
+	wlan_rx_swap_complete_skb(skb);
+	kfree_skb_chk_key(skb, root_dev);
+}
+
+void rltk_wlan_rx_callback_complete(int idx)
+{
+	struct sk_buff *skb;
+
+	if (idx < 0) {
+		return;
+	}
+	skb = rltk_wlan_get_recv_skb(idx);
+	if (skb == NULL) {
+		return;
+	}
+	wlan_rx_swap_complete_skb(skb);
+}
+
+int rltk_wlan_rx_swap_quiesce(unsigned int timeout_ms)
+{
+	u32 start = rtw_get_current_time();
+	u32 live;
+
+	save_and_cli();
+	wlan_rx_swap_runtime_init_locked();
+	g_wlan_rx_swap_runtime.quiesced = 1U;
+	live = g_wlan_rx_swap_runtime.live;
+	restore_flags();
+	while (live != 0U) {
+		if (rtw_systime_to_ms(rtw_get_current_time() - start) >= timeout_ms) {
+			printf("[WLAN_RX_SWAP][ERROR] quiesce timeout live=%u\n",
+			       (unsigned int)live);
+			save_and_cli();
+			g_wlan_rx_swap_runtime.quiesced = 0U;
+			restore_flags();
+			return -1;
+		}
+		rtw_msleep_os(10U);
+		save_and_cli();
+		live = g_wlan_rx_swap_runtime.live;
+		restore_flags();
+	}
+	printf("[WLAN_RX_SWAP] quiesced swapped=%u pool=%u live=0\n",
+	       (unsigned int)g_wlan_rx_swap_runtime.swapped,
+	       (unsigned int)g_wlan_rx_swap_runtime.pool_count);
+	return 0;
+}
+
+void rltk_wlan_rx_swap_resume(void)
+{
+	save_and_cli();
+	g_wlan_rx_swap_runtime.quiesced = 0U;
+	restore_flags();
+}
+
+void rltk_wlan_rx_swap_deinit_complete(void)
+{
+	u32 i;
+
+	save_and_cli();
+	/* The closed driver has now released all saved original RX allocations. */
+	g_wlan_rx_swap_runtime.adapter = 0U;
+	g_wlan_rx_swap_runtime.desc_base = 0U;
+	g_wlan_rx_swap_runtime.ring_count = 0U;
+	g_wlan_rx_swap_runtime.ring_size = 0U;
+	g_wlan_rx_swap_runtime.pool_count = WLAN_RX_SWAP_SPARE_COUNT;
+	for (i = 0; i < WLAN_RX_SWAP_SPARE_COUNT; i++) {
+		g_wlan_rx_swap_runtime.pool[i] = &g_wlan_rx_swap_storage[i][0];
+	}
+	rtw_memset(g_wlan_rx_swap_entries, 0, sizeof(g_wlan_rx_swap_entries));
+	restore_flags();
+}
+#else
+void rltk_wlan_rx_callback_complete(int idx) { (void)idx; }
+int rltk_wlan_rx_swap_quiesce(unsigned int timeout_ms)
+{ (void)timeout_ms; return 0; }
+void rltk_wlan_rx_swap_resume(void) { }
+void rltk_wlan_rx_swap_deinit_complete(void) { }
+void rtw_rx_swap_kfree_skb_chk_key(struct sk_buff *skb,
+				   struct net_device *root_dev)
+{ kfree_skb_chk_key(skb, root_dev); }
+#endif /* CONFIG_WLAN_RX_RING_SWAP */
+
+#if CONFIG_WLAN_RX_SWAP_BRINGUP_PROFILE
+/*
+ * These offsets describe the RTL8195B closed driver's RX adapter state at the
+ * object-local rtw_memcpy call redirected by wlan_rx_gdma/Makefile.  This is
+ * The same checks remain active during swap bring-up so every descriptor,
+ * shadow pointer and skb binding can be compared with the observation-only
+ * baseline.  CONFIG_WLAN_RX_RING_SWAP controls whether the validated copy is
+ * elided or merely observed.
+ */
+typedef struct wlan_rx_swap_profile_s {
+	u32 calls;
+	u32 bytes;
+	u32 frame_calls;
+	u32 frame_bytes;
+	u32 metadata_calls;
+	u32 invalid_context;
+	u32 slot_bitmap;
+	u32 slot_repeats;
+	u32 desc_match;
+	u32 desc_mismatch;
+	u32 source_range_ok;
+	u32 source_range_bad;
+	u32 source_offset_min;
+	u32 source_offset_max;
+	u32 dst_match;
+	u32 dst_mismatch;
+	u32 skb_valid;
+	u32 skb_invalid;
+	u32 replacement_fit;
+	u32 replacement_too_small;
+	u32 ring_count_last;
+	u32 ring_size_last;
+	u32 skb_capacity_min;
+	u32 skb_capacity_max;
+	u32 data_capacity_min;
+	u32 data_capacity_max;
+	u32 ring_align32[2];
+	u32 skb_align32[2];
+	uintptr_t last_adapter;
+	uintptr_t last_skb;
+	uintptr_t last_desc;
+	uintptr_t last_shadow;
+	uintptr_t last_src;
+	uintptr_t last_dst;
+	u32 last_index;
+	u32 last_desc_word0;
+	u32 last_desc_word1;
+	u8 first_printed;
+} wlan_rx_swap_profile_t;
+
+static wlan_rx_swap_profile_t g_wlan_rx_swap_profile;
+
+static u32 wlan_rx_swap_popcount(u32 value)
+{
+	u32 count = 0U;
+
+	while (value != 0U) {
+		value &= value - 1U;
+		count++;
+	}
+	return count;
+}
+
+static void wlan_rx_swap_profile_call(void *dst, void *src, u32 len,
+				      void *adapter_arg, void *skb_arg)
+{
+	wlan_rx_swap_profile_t *p = &g_wlan_rx_swap_profile;
+	uintptr_t adapter = (uintptr_t)adapter_arg;
+	uintptr_t skb = (uintptr_t)skb_arg;
+	uintptr_t desc_base;
+	uintptr_t desc;
+	uintptr_t shadow;
+	uintptr_t head;
+	uintptr_t data;
+	uintptr_t tail;
+	uintptr_t end;
+	u32 ring_index;
+	u32 ring_count;
+	u32 ring_size;
+	u32 source_offset = 0U;
+	u32 skb_capacity;
+	u32 data_capacity;
+	u32 slot_bit;
+	u32 desc_word0;
+	u32 desc_word1;
+	int source_ok;
+	int skb_ok;
+
+	p->calls++;
+	p->bytes += len;
+
+	/* The second redirected call copies fixed-size receive metadata. */
+	if (!wlan_rx_swap_readable(adapter + WLAN_RX_SWAP_DESC_BASE_OFFSET,
+				   WLAN_RX_SWAP_RING_SIZE_OFFSET -
+				   WLAN_RX_SWAP_DESC_BASE_OFFSET + sizeof(u32)) ||
+	    !wlan_rx_swap_readable(skb, 40U)) {
+		if (len == WLAN_RX_SWAP_METADATA_LEN) {
+			p->metadata_calls++;
+		} else {
+			p->invalid_context++;
+		}
+		return;
+	}
+
+	desc_base = *(const u32 *)(adapter + WLAN_RX_SWAP_DESC_BASE_OFFSET);
+	ring_index = *(const u32 *)(adapter + WLAN_RX_SWAP_RING_INDEX_OFFSET);
+	ring_count = *(const u32 *)(adapter + WLAN_RX_SWAP_RING_COUNT_OFFSET);
+	ring_size = *(const u32 *)(adapter + WLAN_RX_SWAP_RING_SIZE_OFFSET);
+	if (ring_count == 0U || ring_count > WLAN_RX_SWAP_MAX_SLOTS ||
+	    ring_index >= ring_count || ring_size < 512U || ring_size > 4096U ||
+	    !wlan_rx_swap_readable(desc_base, ring_count * 8U)) {
+		if (len == WLAN_RX_SWAP_METADATA_LEN) {
+			p->metadata_calls++;
+		} else {
+			p->invalid_context++;
+		}
+		return;
+	}
+
+	data = *(const u32 *)(skb + 16U);
+	if ((uintptr_t)dst != data) {
+		if (len == WLAN_RX_SWAP_METADATA_LEN) {
+			p->metadata_calls++;
+		} else {
+			p->invalid_context++;
+		}
+		return;
+	}
+
+	p->frame_calls++;
+	p->frame_bytes += len;
+	p->ring_count_last = ring_count;
+	p->ring_size_last = ring_size;
+	p->last_adapter = adapter;
+	p->last_skb = skb;
+	p->last_src = (uintptr_t)src;
+	p->last_dst = (uintptr_t)dst;
+	p->last_index = ring_index;
+
+	slot_bit = 1UL << ring_index;
+	if ((p->slot_bitmap & slot_bit) != 0U) {
+		p->slot_repeats++;
+	}
+	p->slot_bitmap |= slot_bit;
+
+	desc = desc_base + ring_index * 8U;
+	desc_word0 = *(const u32 *)desc;
+	desc_word1 = *(const u32 *)(desc + 4U);
+	shadow = *(const u32 *)(adapter + WLAN_RX_SWAP_SHADOW_BASE_OFFSET +
+				 ring_index * sizeof(u32));
+	p->last_desc = desc;
+	p->last_shadow = shadow;
+	p->last_desc_word0 = desc_word0;
+	p->last_desc_word1 = desc_word1;
+	if (desc_word1 == shadow) {
+		p->desc_match++;
+	} else {
+		p->desc_mismatch++;
+	}
+
+	source_ok = ((uintptr_t)src >= shadow &&
+		     (uintptr_t)src + len >= (uintptr_t)src &&
+		     (uintptr_t)src + len <= shadow + ring_size);
+	if (source_ok) {
+		source_offset = (u32)((uintptr_t)src - shadow);
+		p->source_range_ok++;
+		if (p->source_offset_min == 0U ||
+		    source_offset < p->source_offset_min) {
+			p->source_offset_min = source_offset;
+		}
+		if (source_offset > p->source_offset_max) {
+			p->source_offset_max = source_offset;
+		}
+	} else {
+		p->source_range_bad++;
+	}
+
+	head = *(const u32 *)(skb + 12U);
+	tail = *(const u32 *)(skb + 20U);
+	end = *(const u32 *)(skb + 24U);
+	skb_ok = (head != 0U && head <= data && data <= tail && tail <= end &&
+		  wlan_rx_swap_readable(head, (u32)(end - head)));
+	if (skb_ok) {
+		skb_capacity = (u32)(end - head);
+		data_capacity = (u32)(end - data);
+		p->skb_valid++;
+		p->dst_match++;
+		if (p->skb_capacity_min == 0U || skb_capacity < p->skb_capacity_min) {
+			p->skb_capacity_min = skb_capacity;
+		}
+		if (skb_capacity > p->skb_capacity_max) {
+			p->skb_capacity_max = skb_capacity;
+		}
+		if (p->data_capacity_min == 0U || data_capacity < p->data_capacity_min) {
+			p->data_capacity_min = data_capacity;
+		}
+		if (data_capacity > p->data_capacity_max) {
+			p->data_capacity_max = data_capacity;
+		}
+		if (skb_capacity >= ring_size) {
+			p->replacement_fit++;
+		} else {
+			p->replacement_too_small++;
+		}
+		p->skb_align32[(head & 31U) == 0U]++;
+	} else {
+		p->skb_invalid++;
+		p->dst_mismatch++;
+	}
+	p->ring_align32[(shadow & 31U) == 0U]++;
+
+	if (!p->first_printed) {
+		p->first_printed = 1U;
+		printf("[WLAN_RX_SWAP][INIT] mode=%s adapter=%p skb=%p "
+		       "slot=%u/%u ring_size=%u desc=%p words=%08x/%08x "
+		       "shadow=%p src=%p off=%u dst=%p head/data/tail/end="
+		       "%p/%p/%p/%p cap=%u/%u\n",
+#if CONFIG_WLAN_RX_RING_SWAP
+		       "swap",
+#else
+		       "observe",
+#endif
+		       adapter_arg, skb_arg, (unsigned int)ring_index,
+		       (unsigned int)ring_count, (unsigned int)ring_size,
+		       (void *)desc, (unsigned int)desc_word0,
+		       (unsigned int)desc_word1, (void *)shadow, src,
+		       (unsigned int)source_offset, dst, (void *)head, (void *)data,
+		       (void *)tail, (void *)end,
+		       skb_ok ? (unsigned int)(end - head) : 0U,
+		       skb_ok ? (unsigned int)(end - data) : 0U);
+	}
+}
+
+void rltk_wlan_rx_swap_profile_report(unsigned int sequence)
+{
+	wlan_rx_swap_profile_t snapshot;
+	u8 first_printed;
+#if CONFIG_WLAN_RX_RING_SWAP
+	wlan_rx_swap_runtime_t runtime_snapshot;
+	u32 now = rtw_get_current_time();
+	u32 callback_live = 0U;
+	u32 retained_live = 0U;
+	u32 retained_oldest_ms = 0U;
+	u32 i;
+#endif
+
+	save_and_cli();
+	first_printed = g_wlan_rx_swap_profile.first_printed;
+	snapshot = g_wlan_rx_swap_profile;
+	rtw_memset(&g_wlan_rx_swap_profile, 0, sizeof(g_wlan_rx_swap_profile));
+	g_wlan_rx_swap_profile.first_printed = first_printed;
+#if CONFIG_WLAN_RX_RING_SWAP
+	runtime_snapshot = g_wlan_rx_swap_runtime;
+	for (i = 0; i < WLAN_RX_SWAP_ENTRY_COUNT; i++) {
+		wlan_rx_swap_entry_t *entry = &g_wlan_rx_swap_entries[i];
+
+		if (entry->state == WLAN_RX_SWAP_ENTRY_CALLBACK) {
+			callback_live++;
+		} else if (entry->state == WLAN_RX_SWAP_ENTRY_RETAINED) {
+			u32 age_ms = rtw_systime_to_ms(now - entry->retained_tick);
+
+			retained_live++;
+			if (age_ms > retained_oldest_ms) {
+				retained_oldest_ms = age_ms;
+			}
+		}
+	}
+#endif
+	restore_flags();
+
+	printf("[WLAN_RX_SWAP][%u] mode=%s calls/bytes=%u/%u "
+	       "frame=%u/%uB metadata=%u invalid=%u slots=%u/%u repeats=%u "
+	       "desc match/mismatch=%u/%u src ok/bad=%u/%u off_min/max=%u/%u\n",
+	       sequence,
+#if CONFIG_WLAN_RX_RING_SWAP
+	       "swap",
+#else
+	       "observe",
+#endif
+	       (unsigned int)snapshot.calls,
+	       (unsigned int)snapshot.bytes, (unsigned int)snapshot.frame_calls,
+	       (unsigned int)snapshot.frame_bytes,
+	       (unsigned int)snapshot.metadata_calls,
+	       (unsigned int)snapshot.invalid_context,
+	       (unsigned int)wlan_rx_swap_popcount(snapshot.slot_bitmap),
+	       (unsigned int)snapshot.ring_count_last,
+	       (unsigned int)snapshot.slot_repeats,
+	       (unsigned int)snapshot.desc_match,
+	       (unsigned int)snapshot.desc_mismatch,
+	       (unsigned int)snapshot.source_range_ok,
+	       (unsigned int)snapshot.source_range_bad,
+	       (unsigned int)snapshot.source_offset_min,
+	       (unsigned int)snapshot.source_offset_max);
+	printf("[WLAN_RX_SWAP][%u] skb valid/invalid=%u/%u dst match/mismatch=%u/%u "
+	       "ring_size=%u skb_cap min/max=%u/%u data_cap min/max=%u/%u "
+	       "replacement fit/too_small=%u/%u align32 ring/skb=%u/%u\n",
+	       sequence, (unsigned int)snapshot.skb_valid,
+	       (unsigned int)snapshot.skb_invalid,
+	       (unsigned int)snapshot.dst_match,
+	       (unsigned int)snapshot.dst_mismatch,
+	       (unsigned int)snapshot.ring_size_last,
+	       (unsigned int)snapshot.skb_capacity_min,
+	       (unsigned int)snapshot.skb_capacity_max,
+	       (unsigned int)snapshot.data_capacity_min,
+	       (unsigned int)snapshot.data_capacity_max,
+	       (unsigned int)snapshot.replacement_fit,
+	       (unsigned int)snapshot.replacement_too_small,
+	       (unsigned int)snapshot.ring_align32[1],
+	       (unsigned int)snapshot.skb_align32[1]);
+	printf("[WLAN_RX_SWAP][%u][LAST] adapter=%p skb=%p slot=%u desc=%p "
+	       "words=%08x/%08x shadow=%p src=%p dst=%p\n",
+	       sequence, (void *)snapshot.last_adapter, (void *)snapshot.last_skb,
+	       (unsigned int)snapshot.last_index, (void *)snapshot.last_desc,
+	       (unsigned int)snapshot.last_desc_word0,
+	       (unsigned int)snapshot.last_desc_word1,
+	       (void *)snapshot.last_shadow, (void *)snapshot.last_src,
+	       (void *)snapshot.last_dst);
+#if CONFIG_WLAN_RX_RING_SWAP
+	printf("[WLAN_RX_SWAP][%u][RUN] swapped/acquired/copied/released="
+	       "%u/%u/%u/%u fallback quiesced/layout/pool/table=%u/%u/%u/%u "
+	       "acquire_invalid total/data/tail/len=%u/%u/%u/%u "
+	       "live/max=%u/%u state callback/retained=%u/%u "
+	       "retained_oldest_ms=%u pool=%u/%u session_change=%u min_len=%u\n",
+	       sequence, (unsigned int)runtime_snapshot.swapped,
+	       (unsigned int)runtime_snapshot.acquired,
+	       (unsigned int)runtime_snapshot.copied_complete,
+	       (unsigned int)runtime_snapshot.released,
+	       (unsigned int)runtime_snapshot.fallback_quiesced,
+	       (unsigned int)runtime_snapshot.fallback_layout,
+	       (unsigned int)runtime_snapshot.fallback_pool,
+	       (unsigned int)runtime_snapshot.fallback_table,
+	       (unsigned int)runtime_snapshot.acquire_invalid,
+	       (unsigned int)runtime_snapshot.acquire_invalid_data,
+	       (unsigned int)runtime_snapshot.acquire_invalid_tail,
+	       (unsigned int)runtime_snapshot.acquire_invalid_len,
+	       (unsigned int)runtime_snapshot.live,
+	       (unsigned int)runtime_snapshot.live_max,
+	       (unsigned int)callback_live, (unsigned int)retained_live,
+	       (unsigned int)retained_oldest_ms,
+	       (unsigned int)runtime_snapshot.pool_count,
+	       (unsigned int)WLAN_RX_SWAP_POOL_CAPACITY,
+	       (unsigned int)runtime_snapshot.session_change,
+	       (unsigned int)WLAN_RX_SWAP_MIN_LEN);
+#endif
+}
+#else
+void rltk_wlan_rx_swap_profile_report(unsigned int sequence)
+{
+	(void)sequence;
+}
+#endif
+
 static u32 wlan_rx_ring_hash(const void *buffer, u32 len)
 {
 	const volatile u8 *bytes = (const volatile u8 *)buffer;
@@ -1797,8 +2617,21 @@ static u32 wlan_rx_ring_hash(const void *buffer, u32 len)
 	return hash;
 }
 
-void rtw_rx_ring_memcpy(void *dst, void *src, u32 len)
+static void __attribute__((used, noinline))
+rtw_rx_ring_memcpy_impl(void *dst, void *src, u32 len,
+			void *adapter, void *call_r6)
 {
+#if CONFIG_WLAN_RX_SWAP_BRINGUP_PROFILE
+	wlan_rx_swap_profile_call(dst, src, len, adapter, call_r6);
+#else
+	(void)adapter;
+	(void)call_r6;
+#endif
+#if CONFIG_WLAN_RX_RING_SWAP
+	if (wlan_rx_swap_try(dst, src, len, adapter, call_r6)) {
+		return;
+	}
+#endif
 #if !CONFIG_NET_GDMA_COPY
 	rtw_memcpy(dst, src, len);
 #else
@@ -1866,6 +2699,25 @@ void rtw_rx_ring_memcpy(void *dst, void *src, u32 len)
 	}
 #endif
 #endif /* CONFIG_NET_GDMA_COPY */
+}
+
+/*
+ * The redirected closed-object call keeps adapter and the newly allocated skb
+ * in callee-saved r5/r6.  Capture them before an ordinary C prologue can reuse
+ * those registers.  The shim remains a normal void memcpy ABI to the caller;
+ * the fifth helper argument is placed at sp[0] with 8-byte stack alignment.
+ */
+void __attribute__((naked, noinline))
+rtw_rx_ring_memcpy(void *dst, void *src, u32 len)
+{
+	__asm volatile(
+		"push {r4, lr}\n"
+		"sub sp, sp, #8\n"
+		"mov r3, r5\n"
+		"str r6, [sp, #0]\n"
+		"bl rtw_rx_ring_memcpy_impl\n"
+		"add sp, sp, #8\n"
+		"pop {r4, pc}\n");
 }
 
 #endif /* CONFIG_LWIP_LAYER && CONFIG_PLATFORM_8195BHP */
@@ -2128,6 +2980,19 @@ int rltk_wlan_rx_ref_acquire(int idx, unsigned int expected_len,
 	*payload = NULL;
 
 	skb = rltk_wlan_get_recv_skb(idx);
+
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_WLAN_RX_RING_SWAP
+	{
+		int swap_result = wlan_rx_swap_ref_acquire(skb, expected_len,
+						       handle, payload);
+		if (swap_result > 0) {
+			return 0;
+		}
+		if (swap_result < 0) {
+			return -1;
+		}
+	}
+#endif
 	if (skb == NULL || skb->head == NULL || skb->data == NULL ||
 	    skb->tail == NULL || skb->end == NULL || skb->data < skb->head ||
 	    skb->tail < skb->data || skb->end < skb->tail ||
@@ -2170,6 +3035,12 @@ void rltk_wlan_rx_ref_release(void *handle)
 {
 #if (CONFIG_LWIP_LAYER == 1)
 	if (handle != NULL) {
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_WLAN_RX_RING_SWAP
+		if (wlan_rx_swap_handle_is_entry(handle)) {
+			wlan_rx_swap_release_entry((wlan_rx_swap_entry_t *)handle);
+			return;
+		}
+#endif
 		/* kfree_skb() drops the shared data reference under its own lock. */
 		kfree_skb((struct sk_buff *)handle);
 	}
