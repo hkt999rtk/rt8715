@@ -51,8 +51,13 @@ extern "C" {
  * are freed by calling pbuf_custom->custom_free_function().
  * Currently, the pbuf_custom code is only needed for one specific configuration
  * of IP_FRAG, unless required by external driver/application code. */
+#ifndef CONFIG_TCP_OWNED_WRITE
+#define CONFIG_TCP_OWNED_WRITE 0
+#endif
 #ifndef LWIP_SUPPORT_CUSTOM_PBUF
-#define LWIP_SUPPORT_CUSTOM_PBUF ((IP_FRAG && !LWIP_NETIF_TX_SINGLE_PBUF) || (LWIP_IPV6 && LWIP_IPV6_FRAG))
+#define LWIP_SUPPORT_CUSTOM_PBUF ((IP_FRAG && !LWIP_NETIF_TX_SINGLE_PBUF) || \
+                                 (LWIP_IPV6 && LWIP_IPV6_FRAG) || \
+                                 CONFIG_TCP_OWNED_WRITE)
 #endif
 
 /** @ingroup pbuf 

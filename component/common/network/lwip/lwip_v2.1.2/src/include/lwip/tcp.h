@@ -473,6 +473,17 @@ err_t            tcp_shutdown(struct tcp_pcb *pcb, int shut_rx, int shut_tx);
 
 err_t            tcp_write   (struct tcp_pcb *pcb, const void *dataptr, u16_t len,
                               u8_t apiflags);
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+typedef void (*tcp_owned_release_fn)(void *argument);
+struct tcp_owned_buffer;
+struct tcp_owned_buffer *tcp_owned_buffer_create(tcp_owned_release_fn release,
+                                                  void *argument);
+void             tcp_owned_buffer_unref(struct tcp_owned_buffer *owner);
+err_t            tcp_write_owned(struct tcp_pcb *pcb, const void *dataptr,
+                                 u16_t len, u8_t apiflags,
+                                 struct tcp_owned_buffer *owner);
+void             tcp_owned_write_report(unsigned int sequence);
+#endif
 
 void             tcp_setprio (struct tcp_pcb *pcb, u8_t prio);
 

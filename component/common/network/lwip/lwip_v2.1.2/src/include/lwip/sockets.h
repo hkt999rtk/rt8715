@@ -647,6 +647,12 @@ ssize_t lwip_sendto(int s, const void *dataptr, size_t size, int flags,
     const struct sockaddr *to, socklen_t tolen);
 int lwip_socket(int domain, int type, int protocol);
 ssize_t lwip_write(int s, const void *dataptr, size_t size);
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+typedef void (*lwip_owned_release_fn)(void *argument);
+ssize_t lwip_write_owned(int s, const void *dataptr, size_t size,
+                         lwip_owned_release_fn release, void *argument);
+void lwip_tcp_owned_report(unsigned int sequence);
+#endif
 ssize_t lwip_writev(int s, const struct iovec *iov, int iovcnt);
 #if LWIP_SOCKET_SELECT
 int lwip_select(int maxfdp1, fd_set *readset, fd_set *writeset, fd_set *exceptset,

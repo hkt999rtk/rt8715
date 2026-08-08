@@ -7,6 +7,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "diag.h"
+#include "lwip/sockets.h"
 
 #ifndef CONFIG_SCREEN_TX_DIRECT_CRYPTO
 #define CONFIG_SCREEN_TX_DIRECT_CRYPTO 0
@@ -15,10 +16,13 @@
 #ifndef SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES
 #define SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES 4096U
 #endif
+#ifndef CONFIG_TCP_OWNED_WRITE
+#define CONFIG_TCP_OWNED_WRITE 0
+#endif
 
 #if CONFIG_SCREEN_TX_DIRECT_CRYPTO
 
-#define SCREEN_TX_DIRECT_SLOTS 4U
+#define SCREEN_TX_DIRECT_SLOTS 8U
 #define SCREEN_TX_HEADER_BYTES 128U
 #define SCREEN_TX_TAG_BYTES    16U
 
@@ -42,6 +46,9 @@ typedef struct screen_tx_direct_slot_s {
 	uint32_t crypto_kind;
 	uint8_t state;
 	uint8_t materialized;
+	uint8_t tcp_owned;
+	uint8_t consumer_released;
+	uint8_t network_released;
 } screen_tx_direct_slot_t;
 
 typedef struct screen_tx_direct_stats_s {
@@ -58,6 +65,10 @@ typedef struct screen_tx_direct_stats_s {
 	uint32_t table_full;
 	uint32_t prefix_same;
 	uint32_t prefix_rewritten;
+	uint32_t owned_begin;
+	uint32_t owned_deferred_free;
+	uint32_t owned_completions;
+	uint32_t owned_final_frees;
 	uint64_t bytes_saved;
 } screen_tx_direct_stats_t;
 
@@ -78,7 +89,10 @@ static screen_tx_direct_slot_t *screen_tx_find_task_locked(TaskHandle_t task)
 	uint32_t i;
 
 	for (i = 0U; i < SCREEN_TX_DIRECT_SLOTS; i++) {
-		if (screen_tx_slots[i].owner == task) {
+		/* ACK-owned frames remain in the table after ScreenThread starts the
+		 * next frame.  They are not the task's active crypto transaction. */
+		if ((screen_tx_slots[i].owner == task) &&
+		    !screen_tx_slots[i].tcp_owned) {
 			return &screen_tx_slots[i];
 		}
 	}
@@ -196,6 +210,77 @@ void carbox_screen_tx_release(void *pointer)
 	taskEXIT_CRITICAL();
 	if (stale) {
 		screen_tx_disable("release-before-crypto-complete", pointer);
+	}
+}
+
+int carbox_screen_tx_owned_begin(const void *pointer, size_t length)
+{
+	TaskHandle_t task = xTaskGetCurrentTaskHandle();
+	screen_tx_direct_slot_t *slot;
+	int owned = 0;
+
+	taskENTER_CRITICAL();
+	slot = screen_tx_find_task_locked(task);
+	if ((slot != NULL) && (slot->wire_base == pointer) &&
+	    (slot->wire_length == length) &&
+	    (slot->state == SCREEN_TX_DIRECT_READY) && !slot->tcp_owned) {
+		slot->tcp_owned = 1U;
+		slot->consumer_released = 0U;
+		slot->network_released = 0U;
+		screen_tx_stats.owned_begin++;
+		owned = 1;
+	}
+	taskEXIT_CRITICAL();
+	return owned;
+}
+
+int carbox_screen_tx_owned_consumer_release(void *pointer)
+{
+	uint32_t i;
+	int defer = 0;
+
+	taskENTER_CRITICAL();
+	for (i = 0U; i < SCREEN_TX_DIRECT_SLOTS; i++) {
+		screen_tx_direct_slot_t *slot = &screen_tx_slots[i];
+
+		if ((slot->wire_base == pointer) && slot->tcp_owned) {
+			if (slot->network_released) {
+				screen_tx_clear_slot_locked(slot);
+			} else {
+				slot->consumer_released = 1U;
+				screen_tx_stats.owned_deferred_free++;
+				defer = 1;
+			}
+			break;
+		}
+	}
+	taskEXIT_CRITICAL();
+	return defer;
+}
+
+void carbox_screen_tx_owned_complete(void *pointer)
+{
+	uint32_t i;
+	int final_free = 0;
+
+	taskENTER_CRITICAL();
+	for (i = 0U; i < SCREEN_TX_DIRECT_SLOTS; i++) {
+		screen_tx_direct_slot_t *slot = &screen_tx_slots[i];
+
+		if ((slot->wire_base == pointer) && slot->tcp_owned) {
+			slot->network_released = 1U;
+			screen_tx_stats.owned_completions++;
+			if (slot->consumer_released) {
+				screen_tx_clear_slot_locked(slot);
+				screen_tx_stats.owned_final_frees++;
+				final_free = 1;
+			}
+			break;
+		}
+	}
+	taskEXIT_CRITICAL();
+	if (final_free) {
+		free(pointer);
 	}
 }
 
@@ -425,6 +510,12 @@ void carbox_screen_tx_direct_crypto_report(uint32_t sequence)
 		  (unsigned long)stats.prefix_rewritten,
 		  (unsigned long)stats.releases,
 		  (unsigned long)stats.table_full, (unsigned long)live);
+	rt_printf("[TXCRYPTO_DIRECT][%lu] tcp_owned begin/defer/complete/final="
+		  "%lu/%lu/%lu/%lu\r\n", (unsigned long)sequence,
+		  (unsigned long)stats.owned_begin,
+		  (unsigned long)stats.owned_deferred_free,
+		  (unsigned long)stats.owned_completions,
+		  (unsigned long)stats.owned_final_frees);
 }
 
 /* AESUtils.o is preserved from the vendor archive. Linker wrapping changes
@@ -458,6 +549,12 @@ extern int __real_lwip_write(int socket, const void *buffer, size_t bytes);
 int __wrap_lwip_write(int socket, const void *buffer, size_t bytes)
 {
 	carbox_screen_tx_before_write(buffer, bytes);
+#if CONFIG_TCP_OWNED_WRITE
+	if (carbox_screen_tx_owned_begin(buffer, bytes)) {
+		return lwip_write_owned(socket, buffer, bytes,
+			carbox_screen_tx_owned_complete, (void *)(uintptr_t)buffer);
+	}
+#endif
 	return __real_lwip_write(socket, buffer, bytes);
 }
 #endif
@@ -470,6 +567,18 @@ void carbox_screen_tx_allocation(void *pointer, size_t length)
 	(void)length;
 }
 void carbox_screen_tx_release(void *pointer) { (void)pointer; }
+int carbox_screen_tx_owned_begin(const void *pointer, size_t length)
+{
+	(void)pointer;
+	(void)length;
+	return 0;
+}
+int carbox_screen_tx_owned_consumer_release(void *pointer)
+{
+	(void)pointer;
+	return 0;
+}
+void carbox_screen_tx_owned_complete(void *pointer) { (void)pointer; }
 void *carbox_airplay_screen_memcpy(void *destination, const void *source,
 				   size_t length)
 {

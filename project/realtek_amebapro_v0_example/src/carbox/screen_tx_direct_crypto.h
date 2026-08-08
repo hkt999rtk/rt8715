@@ -7,6 +7,9 @@
 /* AirPlayScreen.o-only hooks installed in the derived vendor archive. */
 void carbox_screen_tx_allocation(void *pointer, size_t length);
 void carbox_screen_tx_release(void *pointer);
+int carbox_screen_tx_owned_begin(const void *pointer, size_t length);
+int carbox_screen_tx_owned_consumer_release(void *pointer);
+void carbox_screen_tx_owned_complete(void *pointer);
 void *carbox_airplay_screen_memcpy(void *destination, const void *source,
 				   size_t length);
 

@@ -2598,6 +2598,54 @@ lwip_write(int s, const void *data, size_t size)
   return lwip_send(s, data, size, 0);
 }
 
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+ssize_t
+lwip_write_owned(int s, const void *data, size_t size,
+                 lwip_owned_release_fn release, void *argument)
+{
+  struct lwip_sock *sock;
+  struct tcp_owned_buffer *owner;
+  err_t err;
+  size_t written = 0;
+
+  if ((data == NULL) || (size == 0U) || (release == NULL)) {
+    set_errno(EINVAL);
+    return -1;
+  }
+  sock = get_socket(s);
+  if (sock == NULL) {
+    return -1;
+  }
+  if (NETCONNTYPE_GROUP(netconn_type(sock->conn)) != NETCONN_TCP) {
+    sock_set_errno(sock, EINVAL);
+    done_socket(sock);
+    release(argument);
+    return -1;
+  }
+  owner = tcp_owned_buffer_create((tcp_owned_release_fn)release, argument);
+  if (owner == NULL) {
+    sock_set_errno(sock, ENOMEM);
+    done_socket(sock);
+    release(argument);
+    return -1;
+  }
+  err = netconn_write_owned_partly(sock->conn, data, size, 0, &written,
+                                   owner);
+  /* Drop the API reference.  Segment references keep the object and caller
+   * buffer alive across retransmission until ACK/abort purges every pbuf. */
+  tcp_owned_buffer_unref(owner);
+  sock_set_errno(sock, err_to_errno(err));
+  done_socket(sock);
+  return err == ERR_OK ? (ssize_t)written : -1;
+}
+
+void
+lwip_tcp_owned_report(unsigned int sequence)
+{
+  tcp_owned_write_report(sequence);
+}
+#endif
+
 ssize_t
 lwip_writev(int s, const struct iovec *iov, int iovcnt)
 {

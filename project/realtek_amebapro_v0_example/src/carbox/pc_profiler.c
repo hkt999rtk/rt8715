@@ -16,6 +16,7 @@
 #include "cmsis.h"
 #include "diag.h"
 #include "hal_timer.h"
+#include "lwip/sockets.h"
 
 #ifndef CONFIG_PC_PROFILER
 #define CONFIG_PC_PROFILER 0
@@ -612,6 +613,9 @@ static void pcprof_task(void *arg)
 		screen_queue_profiler_report(sequence);
 		carbox_video_handover_report(sequence);
 		carbox_screen_tx_direct_crypto_report(sequence);
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+		lwip_tcp_owned_report(sequence);
+#endif
 		usb_hcd_profiler_report(sequence);
 		net_queue_profiler_report(sequence);
 		crypto_engine_profiler_report(sequence);

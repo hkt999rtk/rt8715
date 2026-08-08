@@ -986,6 +986,28 @@ netconn_write_partly(struct netconn *conn, const void *dataptr, size_t size,
   return netconn_write_vectors_partly(conn, &vector, 1, apiflags, bytes_written);
 }
 
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+static err_t netconn_write_vectors_partly_internal(struct netconn *conn,
+  struct netvector *vectors, u16_t vectorcnt, u8_t apiflags,
+  size_t *bytes_written, struct tcp_owned_buffer *owner);
+
+err_t
+netconn_write_owned_partly(struct netconn *conn, const void *dataptr,
+                           size_t size, u8_t apiflags,
+                           size_t *bytes_written,
+                           struct tcp_owned_buffer *owner)
+{
+  struct netvector vector;
+
+  LWIP_ERROR("netconn_write_owned: missing owner", owner != NULL,
+             return ERR_ARG;);
+  vector.ptr = dataptr;
+  vector.len = size;
+  return netconn_write_vectors_partly_internal(conn, &vector, 1,
+    (u8_t)(apiflags & ~NETCONN_COPY), bytes_written, owner);
+}
+#endif
+
 /**
  * Send vectorized data atomically over a TCP netconn.
  *
@@ -999,9 +1021,19 @@ netconn_write_partly(struct netconn *conn, const void *dataptr, size_t size,
  * @param bytes_written pointer to a location that receives the number of written bytes
  * @return ERR_OK if data was sent, any other err_t on error
  */
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+static err_t
+netconn_write_vectors_partly_internal(struct netconn *conn,
+                                      struct netvector *vectors,
+                                      u16_t vectorcnt, u8_t apiflags,
+                                      size_t *bytes_written,
+                                      struct tcp_owned_buffer *owner)
+#else
 err_t
-netconn_write_vectors_partly(struct netconn *conn, struct netvector *vectors, u16_t vectorcnt,
-                             u8_t apiflags, size_t *bytes_written)
+netconn_write_vectors_partly(struct netconn *conn, struct netvector *vectors,
+                             u16_t vectorcnt, u8_t apiflags,
+                             size_t *bytes_written)
+#endif
 {
   API_MSG_VAR_DECLARE(msg);
   err_t err;
@@ -1054,6 +1086,9 @@ netconn_write_vectors_partly(struct netconn *conn, struct netvector *vectors, u1
   API_MSG_VAR_REF(msg).msg.w.apiflags = apiflags;
   API_MSG_VAR_REF(msg).msg.w.len = size;
   API_MSG_VAR_REF(msg).msg.w.offset = 0;
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+  API_MSG_VAR_REF(msg).msg.w.owned = owner;
+#endif
 #if LWIP_SO_SNDTIMEO
   if (conn->send_timeout != 0) {
     /* get the time we started, which is later compared to
@@ -1082,6 +1117,17 @@ netconn_write_vectors_partly(struct netconn *conn, struct netvector *vectors, u1
 
   return err;
 }
+
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+err_t
+netconn_write_vectors_partly(struct netconn *conn, struct netvector *vectors,
+                             u16_t vectorcnt, u8_t apiflags,
+                             size_t *bytes_written)
+{
+  return netconn_write_vectors_partly_internal(conn, vectors, vectorcnt,
+                                                apiflags, bytes_written, NULL);
+}
+#endif
 
 /**
  * @ingroup netconn_tcp

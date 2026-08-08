@@ -1809,7 +1809,15 @@ lwip_netconn_do_writemore(struct netconn *conn  WRITE_DELAYED_PARAM)
       } else {
         write_more = 0;
       }
-      err = tcp_write(conn->pcb.tcp, dataptr, len, apiflags);
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+      if (conn->current_msg->msg.w.owned != NULL) {
+        err = tcp_write_owned(conn->pcb.tcp, dataptr, len, apiflags,
+                              conn->current_msg->msg.w.owned);
+      } else
+#endif
+      {
+        err = tcp_write(conn->pcb.tcp, dataptr, len, apiflags);
+      }
       if (err == ERR_OK) {
         conn->current_msg->msg.w.offset += len;
         conn->current_msg->msg.w.vector_off += len;

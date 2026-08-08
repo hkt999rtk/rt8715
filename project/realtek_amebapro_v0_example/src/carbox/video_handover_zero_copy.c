@@ -496,6 +496,9 @@ void carbox_video_handover_producer_free(void *pointer)
 
 void carbox_video_handover_consumer_free(void *pointer)
 {
+	if (carbox_screen_tx_owned_consumer_release(pointer)) {
+		return;
+	}
 	carbox_screen_tx_release(pointer);
 	video_handover_release(pointer, VIDEO_HANDOVER_REF_CONSUMER,
 				 "duplicate-consumer-release");
@@ -630,6 +633,9 @@ void *carbox_video_handover_destination_malloc(size_t length)
 void carbox_video_handover_producer_free(void *pointer) { free(pointer); }
 void carbox_video_handover_consumer_free(void *pointer)
 {
+	if (carbox_screen_tx_owned_consumer_release(pointer)) {
+		return;
+	}
 	carbox_screen_tx_release(pointer);
 	free(pointer);
 }

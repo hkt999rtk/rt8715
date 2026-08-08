@@ -115,6 +115,9 @@ struct api_msg {
       /** offset into total length/output of bytes written when err == ERR_OK */
       size_t offset;
       u8_t apiflags;
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+      struct tcp_owned_buffer *owned;
+#endif
 #if LWIP_SO_SNDTIMEO
       u32_t time_started;
 #endif /* LWIP_SO_SNDTIMEO */

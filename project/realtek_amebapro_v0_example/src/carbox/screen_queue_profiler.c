@@ -1558,7 +1558,17 @@ ssize_t __wrap_lwip_write(int socket, const void *buffer, size_t bytes)
 		}
 		taskEXIT_CRITICAL();
 	}
-	ssize_t result = __real_lwip_write(socket, buffer, bytes);
+	ssize_t result;
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+	if (carbox_screen_tx_owned_begin(buffer, bytes)) {
+		result = lwip_write_owned(socket, buffer, bytes,
+			carbox_screen_tx_owned_complete, (void *)(uintptr_t)buffer);
+	} else {
+		result = __real_lwip_write(socket, buffer, bytes);
+	}
+#else
+	result = __real_lwip_write(socket, buffer, bytes);
+#endif
 
 	if (measured) {
 		uint32_t now_us = hal_read_curtime_us();

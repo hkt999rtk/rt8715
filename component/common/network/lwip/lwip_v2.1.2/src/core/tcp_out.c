@@ -72,17 +72,18 @@
 #include "lwip/netif.h"
 #include "lwip/inet_chksum.h"
 #include "lwip/stats.h"
+#include "lwip/sys.h"
 #include "lwip/ip6.h"
 #include "lwip/ip6_addr.h"
 #if defined(CONFIG_PLATFORM_8195BHP)
 #include "lwip_intf.h"
 #include "cmsis.h"
 #endif
-#if LWIP_TCP_TIMESTAMPS
-#include "lwip/sys.h"
-#endif
 
 #include <string.h>
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+#include <stdio.h>
+#endif
 
 #ifdef LWIP_HOOK_FILENAME
 #include LWIP_HOOK_FILENAME
@@ -128,6 +129,172 @@ tcp_data_copy_gdma(void *dst, const void *src, u16_t len)
 #define TCP_DATA_COPY2(dst, src, len, chksum, chksum_swapped) MEMCPY(dst, src, len)
 #endif
 #endif /* TCP_CHECKSUM_ON_COPY*/
+
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+struct tcp_owned_buffer {
+  tcp_owned_release_fn release;
+  void *argument;
+  u32_t references;
+};
+
+struct tcp_owned_pbuf {
+  struct pbuf_custom custom;
+  struct tcp_owned_buffer *owner;
+};
+
+static struct {
+  u32_t creates;
+  u32_t create_failures;
+  u32_t pbufs;
+  u32_t pbuf_failures;
+  u32_t releases;
+  u32_t live;
+  u32_t live_max;
+  unsigned long long referenced_bytes;
+} tcp_owned_stats;
+
+static void
+tcp_owned_buffer_ref(struct tcp_owned_buffer *owner)
+{
+  SYS_ARCH_DECL_PROTECT(level);
+
+  SYS_ARCH_PROTECT(level);
+  owner->references++;
+  SYS_ARCH_UNPROTECT(level);
+}
+
+void
+tcp_owned_buffer_unref(struct tcp_owned_buffer *owner)
+{
+  tcp_owned_release_fn release = NULL;
+  void *argument = NULL;
+  SYS_ARCH_DECL_PROTECT(level);
+
+  if (owner == NULL) {
+    return;
+  }
+  SYS_ARCH_PROTECT(level);
+  LWIP_ASSERT("tcp owned reference underflow", owner->references > 0U);
+  owner->references--;
+  if (owner->references == 0U) {
+    release = owner->release;
+    argument = owner->argument;
+    tcp_owned_stats.releases++;
+    LWIP_ASSERT("tcp owned live underflow", tcp_owned_stats.live > 0U);
+    tcp_owned_stats.live--;
+  }
+  SYS_ARCH_UNPROTECT(level);
+  if (release != NULL) {
+    release(argument);
+    mem_free(owner);
+  }
+}
+
+struct tcp_owned_buffer *
+tcp_owned_buffer_create(tcp_owned_release_fn release, void *argument)
+{
+  struct tcp_owned_buffer *owner;
+  SYS_ARCH_DECL_PROTECT(level);
+
+  if (release == NULL) {
+    return NULL;
+  }
+  owner = (struct tcp_owned_buffer *)mem_malloc(sizeof(*owner));
+  if (owner == NULL) {
+    SYS_ARCH_PROTECT(level);
+    tcp_owned_stats.create_failures++;
+    SYS_ARCH_UNPROTECT(level);
+    return NULL;
+  }
+  owner->release = release;
+  owner->argument = argument;
+  owner->references = 1U;
+  SYS_ARCH_PROTECT(level);
+  tcp_owned_stats.creates++;
+  tcp_owned_stats.live++;
+  if (tcp_owned_stats.live > tcp_owned_stats.live_max) {
+    tcp_owned_stats.live_max = tcp_owned_stats.live;
+  }
+  SYS_ARCH_UNPROTECT(level);
+  return owner;
+}
+
+static void
+tcp_owned_pbuf_free(struct pbuf *p)
+{
+  struct tcp_owned_pbuf *owned = (struct tcp_owned_pbuf *)p;
+  struct tcp_owned_buffer *owner = owned->owner;
+
+  mem_free(owned);
+  tcp_owned_buffer_unref(owner);
+}
+
+static struct pbuf *
+tcp_owned_pbuf_alloc(struct tcp_owned_buffer *owner, const void *payload,
+                     u16_t length)
+{
+  struct tcp_owned_pbuf *owned;
+  struct pbuf *p;
+  SYS_ARCH_DECL_PROTECT(level);
+
+  owned = (struct tcp_owned_pbuf *)mem_malloc(sizeof(*owned));
+  if (owned == NULL) {
+    SYS_ARCH_PROTECT(level);
+    tcp_owned_stats.pbuf_failures++;
+    SYS_ARCH_UNPROTECT(level);
+    return NULL;
+  }
+  owned->owner = owner;
+  owned->custom.custom_free_function = tcp_owned_pbuf_free;
+  tcp_owned_buffer_ref(owner);
+  p = pbuf_alloced_custom(PBUF_RAW, length, PBUF_ROM, &owned->custom,
+                          (void *)(uintptr_t)payload, length);
+  if (p == NULL) {
+    tcp_owned_buffer_unref(owner);
+    mem_free(owned);
+    SYS_ARCH_PROTECT(level);
+    tcp_owned_stats.pbuf_failures++;
+    SYS_ARCH_UNPROTECT(level);
+    return NULL;
+  }
+  SYS_ARCH_PROTECT(level);
+  tcp_owned_stats.pbufs++;
+  tcp_owned_stats.referenced_bytes += length;
+  SYS_ARCH_UNPROTECT(level);
+  return p;
+}
+
+void
+tcp_owned_write_report(unsigned int sequence)
+{
+  u32_t creates, create_failures, pbufs, pbuf_failures, releases;
+  u32_t live, live_max;
+  unsigned long long bytes;
+  SYS_ARCH_DECL_PROTECT(level);
+
+  SYS_ARCH_PROTECT(level);
+  creates = tcp_owned_stats.creates;
+  create_failures = tcp_owned_stats.create_failures;
+  pbufs = tcp_owned_stats.pbufs;
+  pbuf_failures = tcp_owned_stats.pbuf_failures;
+  releases = tcp_owned_stats.releases;
+  live = tcp_owned_stats.live;
+  live_max = tcp_owned_stats.live_max;
+  bytes = tcp_owned_stats.referenced_bytes;
+  tcp_owned_stats.creates = 0U;
+  tcp_owned_stats.create_failures = 0U;
+  tcp_owned_stats.pbufs = 0U;
+  tcp_owned_stats.pbuf_failures = 0U;
+  tcp_owned_stats.releases = 0U;
+  tcp_owned_stats.live_max = live;
+  tcp_owned_stats.referenced_bytes = 0U;
+  SYS_ARCH_UNPROTECT(level);
+  printf("[TCPOWN][%u] create/fail=%u/%u pbuf/fail=%u/%u bytes=%llu "
+         "release=%u live/max=%u/%u\r\n", sequence, creates,
+         create_failures, pbufs, pbuf_failures,
+         (unsigned long long)bytes, releases, live, live_max);
+}
+#endif
 
 /** Define this to 1 for an extra check that the output checksum is valid
  * (usefule when the checksum is generated by the application, not the stack) */
@@ -425,8 +592,13 @@ tcp_write_checks(struct tcp_pcb *pcb, u16_t len)
  * - TCP_WRITE_FLAG_MORE (0x02) for TCP connection, PSH flag will not be set on last segment sent,
  * @return ERR_OK if enqueued, another err_t on error
  */
-err_t
-tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
+static err_t
+tcp_write_internal(struct tcp_pcb *pcb, const void *arg, u16_t len,
+                   u8_t apiflags
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+                   , struct tcp_owned_buffer *owner
+#endif
+                   )
 {
   struct pbuf *concat_p = NULL;
   struct tcp_seg *last_unsent = NULL, *seg = NULL, *prev_seg = NULL, *queue = NULL;
@@ -462,8 +634,18 @@ tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
   LWIP_ASSERT_CORE_LOCKED();
 
 #if LWIP_NETIF_TX_SINGLE_PBUF
-  /* Always copy to try to create single pbufs for TX */
+  /* Legacy netifs still receive one contiguous pbuf.  The explicit owned
+   * write contract is the sole exception: its immutable application buffer
+   * remains valid until every TCP segment is ACKed or purged. */
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+  if (owner == NULL) {
+    apiflags |= TCP_WRITE_FLAG_COPY;
+  } else {
+    apiflags &= (u8_t)~TCP_WRITE_FLAG_COPY;
+  }
+#else
   apiflags |= TCP_WRITE_FLAG_COPY;
+#endif
 #endif /* LWIP_NETIF_TX_SINGLE_PBUF */
 
   LWIP_DEBUGF(TCP_OUTPUT_DEBUG, ("tcp_write(pcb=%p, data=%p, len=%"U16_F", apiflags=%"U16_F")\n",
@@ -669,7 +851,15 @@ tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
 #if TCP_OVERSIZE
       LWIP_ASSERT("oversize == 0", oversize == 0);
 #endif /* TCP_OVERSIZE */
-      if ((p2 = pbuf_alloc(PBUF_TRANSPORT, seglen, PBUF_ROM)) == NULL) {
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+      if (owner != NULL) {
+        p2 = tcp_owned_pbuf_alloc(owner, (const u8_t *)arg + pos, seglen);
+      } else
+#endif
+      {
+        p2 = pbuf_alloc(PBUF_TRANSPORT, seglen, PBUF_ROM);
+      }
+      if (p2 == NULL) {
         LWIP_DEBUGF(TCP_OUTPUT_DEBUG | LWIP_DBG_LEVEL_SERIOUS, ("tcp_write: could not allocate memory for zero-copy pbuf\n"));
         goto memerr;
       }
@@ -682,7 +872,12 @@ tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
       }
 #endif /* TCP_CHECKSUM_ON_COPY */
       /* reference the non-volatile payload data */
-      ((struct pbuf_rom *)p2)->payload = (const u8_t *)arg + pos;
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+      if (owner == NULL)
+#endif
+      {
+        ((struct pbuf_rom *)p2)->payload = (const u8_t *)arg + pos;
+      }
 
       /* Second, allocate a pbuf for the headers. */
       if ((p = pbuf_alloc(PBUF_TRANSPORT, optlen, PBUF_RAM)) == NULL) {
@@ -861,6 +1056,28 @@ memerr:
 #endif
   return ERR_MEM;
 }
+
+err_t
+tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
+{
+  return tcp_write_internal(pcb, arg, len, apiflags
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+                            , NULL
+#endif
+                            );
+}
+
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+err_t
+tcp_write_owned(struct tcp_pcb *pcb, const void *arg, u16_t len,
+                u8_t apiflags, struct tcp_owned_buffer *owner)
+{
+  LWIP_ERROR("tcp_write_owned: missing owner", owner != NULL,
+             return ERR_ARG;);
+  return tcp_write_internal(pcb, arg, len,
+                            (u8_t)(apiflags & ~TCP_WRITE_FLAG_COPY), owner);
+}
+#endif
 
 /**
  * Split segment on the head of the unsent queue.  If return is not

@@ -1058,14 +1058,12 @@ static err_t ncm_send_pbuf_batch_sync(struct ncm_tx_async_item *items,
 	if (count < 2U) {
 		return ncm_send_pbuf_sync(items[0].p);
 	}
-	if (items[0].p->next != NULL) {
-		for (i = 0U; i < count; i++) {
-			if (ncm_send_pbuf_sync(items[i].p) != ERR_OK) {
-				return ERR_BUF;
-			}
-		}
-		return ERR_OK;
-	}
+	/* The closed builder is invoked once to create a negotiated NTH/NDP
+	 * template.  __wrap_ncm_wrap_ntb() then replaces that template and copies
+	 * every segment of every retained pbuf into the final NTB.  Therefore the
+	 * first lwIP packet need not be physically contiguous: passing its first
+	 * segment here is sufficient and avoids disabling aggregation for the
+	 * header + external-payload chains produced by tcp_write_owned(). */
 	g_ncm_tx_wrap_batch.items = items;
 	g_ncm_tx_wrap_batch.count = count;
 	g_ncm_tx_wrap_batch.packed_count = 0U;
@@ -1184,12 +1182,12 @@ static void ncm_tx_async_worker(void *arg)
 			continue;
 		}
 
-		/* A chained pbuf is already fragmented inside one lwIP packet. Keep
-		 * that uncommon case on the closed, single-datagram path. For normal
-		 * single-segment packets, the deadline is anchored to the oldest queue
-		 * entry: later arrivals never extend the 5 ms aggregation window. */
-		if (items[0].p->next == NULL) {
-			for (;;) {
+		/* A pbuf chain still represents one Ethernet datagram.  The batch
+		 * packer walks each chain, so both contiguous legacy packets and the
+		 * header + owned-payload chains may share an NTB.  The deadline remains
+		 * anchored to the oldest queue entry: later arrivals never extend the
+		 * 5 ms aggregation window. */
+		for (;;) {
 				struct ncm_tx_async_item next;
 				u32_t now;
 				u32_t elapsed;
@@ -1206,8 +1204,7 @@ static void ncm_tx_async_worker(void *arg)
 				 * negotiated NTB limit remains at the head of the next batch. */
 				if (xQueuePeek(g_ncm_tx_async_queue, &next, 0) == pdTRUE) {
 					items[count] = next;
-					if (next.p->next != NULL ||
-					    ncm_batch_wire_bytes(items, count + 1U) == UINT32_MAX) {
+					if (ncm_batch_wire_bytes(items, count + 1U) == UINT32_MAX) {
 						flush_reason = 2U;
 						break;
 					}
@@ -1233,7 +1230,6 @@ static void ncm_tx_async_worker(void *arg)
 				/* The queue itself is the wakeup primitive; no polling or
 				 * sleep loop is used while waiting for another packet. */
 				(void)xQueuePeek(g_ncm_tx_async_queue, &next, wait_ticks);
-			}
 		}
 
 		send_start = hal_read_curtime_us();

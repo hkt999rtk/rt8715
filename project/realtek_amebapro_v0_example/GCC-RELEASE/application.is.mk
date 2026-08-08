@@ -815,28 +815,28 @@ NET_GDMA_COPY ?= 0
 NET_GDMA_BENCH ?= 0
 NET_GDMA_STATS ?= 0
 NET_GDMA_OWNER_BOOST_PRIORITY ?= 11
-TCP_PHASE_PROFILE ?= 0
+TCP_PHASE_PROFILE ?= 1
 # Detailed 10-second breakdown of tcp_input() processing. This is independent
 # of the compact 5-second TCP_PERF throughput/checksum summary above.
-TCP_CORE_PHASE_PROFILE ?= 0
+TCP_CORE_PHASE_PROFILE ?= 1
 # Ten-second breakdown of tcp_output() and its synchronous WLAN transmit path.
 # This distinguishes ACK/data traffic and separates lwIP preparation/checksum/IP
 # time from skb allocation, scatter-gather copy, and closed-driver submission.
-TCP_OUTPUT_PROFILE ?= 0
+TCP_OUTPUT_PROFILE ?= 1
 # Ten-second timing of the en3 CDC-NCM transmit path.  The closed NCM library
 # waits synchronously for USB completion, so measure that wait separately from
 # any lwIP pbuf-chain flattening done by ethernetif.c.
-NCM_TX_PROFILE ?= 0
+NCM_TX_PROFILE ?= 1
 # Move the closed synchronous NCM send/wait out of TCP_IP.
 NCM_TX_ASYNC ?= 1
-NCM_TX_ASYNC_PROFILE ?= 0
+NCM_TX_ASYNC_PROFILE ?= 1
 # Seal a multi-datagram NTB when it reaches either limit, or 5 ms after the
 # oldest retained Ethernet packet was queued.  The timeout is not sliding.
 NCM_TX_BATCH ?= 1
 NCM_TX_BATCH_MAX_PACKETS ?= 16
 NCM_TX_BATCH_MAX_BYTES ?= 16384
 NCM_TX_BATCH_TIMEOUT_MS ?= 5
-PC_PROFILER ?= 0
+PC_PROFILER ?= 1
 MEMCPY_TASK_PROFILE ?= 0
 LARGE_MEMCPY_GDMA ?= 1
 LARGE_MEMCPY_GDMA_THRESHOLD ?= 4096
@@ -845,12 +845,12 @@ LARGE_MEMCPY_GDMA_OWNER_BOOST_PRIORITY ?= 11
 # Every completed DMA batch is compared by M33 before its pbufs are released;
 # mismatch prints the exact byte and forces a full CPU recopy of that batch.
 LARGE_MEMCPY_GDMA_COPYV_VERIFY ?= 0
-SOCKET_RECV_PROFILE ?= 0
+SOCKET_RECV_PROFILE ?= 1
 # Gather fragmented TCP pbuf payloads into one linked-GDMA submission when a
 # recv() batch exceeds 4 KiB.  Sources may be non-contiguous; caller output is
 # contiguous.  Cache-line edges remain on the M33 path.
 SOCKET_RECV_GDMA ?= 1
-SOCKET_RECV_GDMA_PROFILE ?= 0
+SOCKET_RECV_GDMA_PROFILE ?= 1
 SOCKET_RECV_GDMA_THRESHOLD ?= 4096
 # TCP core does not copy payload into a second socket buffer.  This probe
 # measures the pbuf-pointer handoff into recvmbox and the socket wakeup event.
@@ -863,7 +863,7 @@ GCD_SYNC_PROFILE ?= 0
 # Diagnostic A/B switch.  The production default preserves DispatchLite's
 # requested worker priority; set this to a non-negative value only for testing.
 GCD_WORK_PRIORITY ?= -1
-SCREEN_QUEUE_PROFILE ?= 0
+SCREEN_QUEUE_PROFILE ?= 1
 # Remove the closed AirPlay library's redundant full-frame handover memcpy.
 # Phase B retains the temporary allocation until queue publication is proven,
 # then frees it immediately.  The build creates derived archives whose hooks
@@ -877,6 +877,9 @@ VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES ?= 4096
 # The direct path has passed frame correctness, ownership and long-run tests.
 SCREEN_TX_DIRECT_CRYPTO ?= 1
 SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES ?= 4096
+# Video-only TCP no-copy bring-up.  The legacy socket API remains COPY; only a
+# wire buffer proven by the direct-crypto transaction uses ACK-owned pbuf refs.
+TCP_OWNED_WRITE ?= 1
 # Keep the expensive, already-concluded diagnostic probes independently
 # switchable.  The normal screen timing/backlog profiler does not need them.
 SCREEN_FRAME_FORMAT_PROFILE ?= 0
@@ -884,8 +887,8 @@ SCREEN_TCP_BUFFER_PROFILE ?= 0
 # When SCREEN_QUEUE_PROFILE is enabled, correlate the local tick used to
 # generate each outgoing screen NTP timestamp with that frame's receive time.
 SCREEN_TIMESTAMP_PROFILE ?= 0
-USB_HCD_PROFILE ?= 0
-NET_QUEUE_PROFILE ?= 0
+USB_HCD_PROFILE ?= 1
+NET_QUEUE_PROFILE ?= 1
 # Stage 1 validates the preallocated pbuf-pointer mailbox path without
 # aggregation, delay, or GTimer.  Each WLAN packet is still posted immediately.
 TCPIP_RX_BATCH_STAGE1 ?= 1
@@ -939,6 +942,7 @@ GCCFLAGS += -DCONFIG_VIDEO_HANDOVER_ZERO_COPY=$(VIDEO_HANDOVER_ZERO_COPY)
 GCCFLAGS += -DVIDEO_HANDOVER_ZERO_COPY_MIN_BYTES=$(VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES)
 GCCFLAGS += -DCONFIG_SCREEN_TX_DIRECT_CRYPTO=$(SCREEN_TX_DIRECT_CRYPTO)
 GCCFLAGS += -DSCREEN_TX_DIRECT_CRYPTO_MIN_BYTES=$(SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES)
+GCCFLAGS += -DCONFIG_TCP_OWNED_WRITE=$(TCP_OWNED_WRITE)
 GCCFLAGS += -DCONFIG_SCREEN_FRAME_FORMAT_PROFILE=$(SCREEN_FRAME_FORMAT_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TCP_BUFFER_PROFILE=$(SCREEN_TCP_BUFFER_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_PROFILE=$(SCREEN_TIMESTAMP_PROFILE)
