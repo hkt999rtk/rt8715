@@ -249,10 +249,18 @@ int carbox_video_handover_memcpy_is_elided(void *destination,
 {
 	TaskHandle_t task;
 	video_handover_active_t *active;
+	uint32_t ipsr;
 	int elide = 0;
 
 	if ((destination == NULL) || (source == NULL) ||
 	    (destination == source)) {
+		return 0;
+	}
+	/* Defense in depth for this globally reachable hook.  Its transaction
+	 * table is task-owned and uses taskENTER_CRITICAL(), so it must never be
+	 * inspected from an interrupt.  ISR memcpy always remains a real copy. */
+	__asm volatile("mrs %0, ipsr" : "=r" (ipsr));
+	if (ipsr != 0U) {
 		return 0;
 	}
 	task = xTaskGetCurrentTaskHandle();

@@ -659,6 +659,7 @@ void *__wrap_memcpy(void *s1, const void *s2, size_t n)
 	uint8_t *dst = (uint8_t *)s1;
 	const uint8_t *src = (const uint8_t *)s2;
 	void *result = s1;
+	uint32_t ipsr;
 #if CONFIG_MEMCPY_TASK_PROFILE
 	carbox_memprof_guard_t profile_guard;
 	size_t profile_len = n;
@@ -672,10 +673,14 @@ void *__wrap_memcpy(void *s1, const void *s2, size_t n)
 #define CARBOX_MEMCPY_PROFILE_FINISH() do { } while (0)
 #endif
 
-	/* The precise video handover path deliberately makes the closed-library
-	 * destination allocation alias its receiver-owned source.  Recognize only
-	 * that registered transaction before GDMA sees source==destination. */
-	if (carbox_video_handover_memcpy_is_elided(s1, s2, n)) {
+	/* The precise video handover hook uses task ownership state protected by a
+	 * FreeRTOS critical section.  memcpy is also called from interrupt handlers,
+	 * where entering that task critical section is illegal.  An ISR can never be
+	 * part of the AirPlay handover transaction, so reject it before calling the
+	 * hook and let the normal ISR-safe M33 fallback below perform the copy. */
+	__asm volatile("mrs %0, ipsr" : "=r" (ipsr));
+	if ((ipsr == 0U) &&
+	    carbox_video_handover_memcpy_is_elided(s1, s2, n)) {
 		return result;
 	}
 
