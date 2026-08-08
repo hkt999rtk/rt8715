@@ -759,6 +759,8 @@ SRAM_C += ../src/carbox/crypto_engine_profiler.c
 SRAM_C += ../src/carbox/crypto_priority_lock.c
 SRAM_C += ../src/carbox/memcpy_task_profiler.c
 SRAM_C += ../src/carbox/large_memcpy_gdma.c
+SRAM_C += ../src/carbox/video_handover_zero_copy.c
+SRAM_C += ../src/carbox/screen_tx_direct_crypto.c
 
 #ERAM
 # -------------------------------------------------------------------
@@ -861,7 +863,18 @@ GCD_SYNC_PROFILE ?= 0
 # Diagnostic A/B switch.  The production default preserves DispatchLite's
 # requested worker priority; set this to a non-negative value only for testing.
 GCD_WORK_PRIORITY ?= -1
-SCREEN_QUEUE_PROFILE ?= 0
+SCREEN_QUEUE_PROFILE ?= 1
+# Remove the closed AirPlay library's redundant full-frame handover allocation
+# and memcpy.  The build creates derived archives whose malloc/free references
+# are redirected only in AirPlayScreen.o and AirPlayReceiverSessionScreen.o;
+# the supplied vendor archives are never modified.
+VIDEO_HANDOVER_ZERO_COPY ?= 1
+VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES ?= 4096
+# Closed AirPlay normal-frame sender optimization. Its payload memcpy is
+# deferred only after object-local allocation/header/layout validation, then
+# AES or ChaCha writes ciphertext directly into wireBuffer + 128.
+SCREEN_TX_DIRECT_CRYPTO ?= 1
+SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES ?= 4096
 # Keep the expensive, already-concluded diagnostic probes independently
 # switchable.  The normal screen timing/backlog profiler does not need them.
 SCREEN_FRAME_FORMAT_PROFILE ?= 0
@@ -920,6 +933,10 @@ GCCFLAGS += -DCONFIG_GDMA_RESERVE_MULTIBLOCK_CHANNELS=$(GDMA_RESERVE_MULTIBLOCK_
 GCCFLAGS += -DCONFIG_GCD_SYNC_PROFILE=$(GCD_SYNC_PROFILE)
 GCCFLAGS += -DCONFIG_GCD_WORK_PRIORITY=$(GCD_WORK_PRIORITY)
 GCCFLAGS += -DCONFIG_SCREEN_QUEUE_PROFILE=$(SCREEN_QUEUE_PROFILE)
+GCCFLAGS += -DCONFIG_VIDEO_HANDOVER_ZERO_COPY=$(VIDEO_HANDOVER_ZERO_COPY)
+GCCFLAGS += -DVIDEO_HANDOVER_ZERO_COPY_MIN_BYTES=$(VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES)
+GCCFLAGS += -DCONFIG_SCREEN_TX_DIRECT_CRYPTO=$(SCREEN_TX_DIRECT_CRYPTO)
+GCCFLAGS += -DSCREEN_TX_DIRECT_CRYPTO_MIN_BYTES=$(SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES)
 GCCFLAGS += -DCONFIG_SCREEN_FRAME_FORMAT_PROFILE=$(SCREEN_FRAME_FORMAT_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TCP_BUFFER_PROFILE=$(SCREEN_TCP_BUFFER_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_PROFILE=$(SCREEN_TIMESTAMP_PROFILE)
@@ -999,6 +1016,19 @@ LFLAGS += -Wl,--wrap=lwip_recv -Wl,--wrap=lwip_write
 LFLAGS += -Wl,--wrap=lwip_select
 ifeq ($(SCREEN_TIMESTAMP_PROFILE),1)
 LFLAGS += -Wl,--wrap=UpTicksToNTP
+endif
+endif
+ifeq ($(VIDEO_HANDOVER_ZERO_COPY),1)
+# Needed even when the queue profiler is disabled: it provides the exact
+# task/source/length scope used by the object-local destination malloc hook.
+ifeq ($(SCREEN_QUEUE_PROFILE),0)
+LFLAGS += -Wl,--wrap=AirPlayScreen_SendVideo
+endif
+endif
+ifeq ($(SCREEN_TX_DIRECT_CRYPTO),1)
+LFLAGS += -Wl,--wrap=AES_CTR_Update
+ifeq ($(SCREEN_QUEUE_PROFILE),0)
+LFLAGS += -Wl,--wrap=lwip_write
 endif
 endif
 ifeq ($(USB_HCD_PROFILE),1)
@@ -1097,6 +1127,10 @@ CARBOX_SMART_CARPLAY_LIB_DIR := carplay_app
 CARBOX_CARPLAY_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_CarPlay.a
 CARBOX_CARPLAY_CHACHA_DIR := $(CARBOX_SMART_CARPLAY_LIB_DIR)/chacha_m33
 CARBOX_CARPLAY_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_chacha_m33.a
+CARBOX_VIDEO_HANDOVER_PATCH := $(CARBOX_SMART_CARPLAY_LIB_DIR)/patch_video_handover_archive.sh
+CARBOX_ACCESSORY2_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2.a
+CARBOX_ACCESSORY2_HANDOVER_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2_handover.a
+CARBOX_CARPLAY_HANDOVER_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_chacha_m33_handover.a
 $(CARBOX_CARPLAY_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/ChaCha20Poly1305.c \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/ChaCha20Poly1305.h \
@@ -1105,9 +1139,25 @@ $(CARBOX_CARPLAY_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/Makefile
 	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) replacement \
 		CHACHA_MODE=2 CHACHA_HW_MIN_LEN=4096 \
+		SCREEN_TX_DIRECT_CRYPTO=$(SCREEN_TX_DIRECT_CRYPTO) \
 		CHACHA_STATS_INTERVAL_MS=0 CHACHA_HW_SELFTEST=0 \
 		CRYPTO_OWNER_BOOST_PRIORITY=$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
 application: $(CARBOX_CARPLAY_ARCHIVE)
+ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO)),)
+$(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
+		$(CARBOX_VIDEO_HANDOVER_PATCH)
+	sh $(CARBOX_VIDEO_HANDOVER_PATCH) accessory $(AR) $(OBJCOPY) \
+		$(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) $@ AirPlayScreen.o
+application: $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
+endif
+ifeq ($(VIDEO_HANDOVER_ZERO_COPY),1)
+$(CARBOX_CARPLAY_HANDOVER_ARCHIVE): $(CARBOX_CARPLAY_ARCHIVE) \
+		$(CARBOX_VIDEO_HANDOVER_PATCH)
+	sh $(CARBOX_VIDEO_HANDOVER_PATCH) receiver $(AR) $(OBJCOPY) \
+		$(CARBOX_CARPLAY_ARCHIVE) $@ AirPlayReceiverSessionScreen.o
+
+application: $(CARBOX_CARPLAY_HANDOVER_ARCHIVE)
+endif
 LFLAGS += -Wl,--no-warn-mismatch
 LIBFLAGS += -Wl,--whole-archive
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_link.a
@@ -1121,7 +1171,11 @@ LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_fdkaac.a
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_init.a
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_zlib.a
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_AndroidAuto.a
-LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2.a
+ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO)),)
+LIBFLAGS += $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
+else
+LIBFLAGS += $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE)
+endif
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_jpeg.a
 # LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_usbdev.a
 # LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_ncm.a
@@ -1129,7 +1183,11 @@ LIBFLAGS += -Wl,--no-whole-archive
 # Keep the customer's RTL8195B hardware backend, replacing only the protocol
 # object so its internal copies use the measured M33 ITCM memcpy.  Leave this
 # archive outside --whole-archive so unrelated members remain demand-linked.
+ifeq ($(VIDEO_HANDOVER_ZERO_COPY),1)
+LIBFLAGS += $(CARBOX_CARPLAY_HANDOVER_ARCHIVE)
+else
 LIBFLAGS += $(CARBOX_CARPLAY_ARCHIVE)
+endif
 endif
 
 

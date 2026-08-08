@@ -1,4 +1,6 @@
 #include "screen_queue_profiler.h"
+#include "screen_tx_direct_crypto.h"
+#include "video_handover_zero_copy.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -1068,7 +1070,12 @@ void __wrap_AirPlayScreen_SendVideo(const void *data, int bytes)
 		input.arrival_delta_us, have_arrival_delta);
 	taskEXIT_CRITICAL();
 	screenprof_set_active_input(current, &input);
+	/* The ownership scope is independent of profiling.  It lets the
+	 * object-local handover malloc hook prove that this allocation belongs to
+	 * the exact receiver source and frame length before returning source. */
+	carbox_video_handover_begin(data, bytes);
 	__real_AirPlayScreen_SendVideo(data, bytes);
+	carbox_video_handover_end();
 	if (marked) {
 		screenprof_unmark_active(current);
 	}
@@ -1491,6 +1498,7 @@ ssize_t __wrap_lwip_recv(int socket, void *buffer, size_t bytes, int flags)
 
 ssize_t __wrap_lwip_write(int socket, const void *buffer, size_t bytes)
 {
+	carbox_screen_tx_before_write(buffer, bytes);
 	int measured = screenprof_is_task(&screenprof_sender_task, "ScreenThread");
 	uint32_t start_us = measured ? hal_read_curtime_us() : 0U;
 

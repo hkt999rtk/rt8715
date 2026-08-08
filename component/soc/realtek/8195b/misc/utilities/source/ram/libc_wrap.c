@@ -37,6 +37,7 @@
 #include <reent.h>
 
 #include "large_memcpy_gdma.h"
+#include "video_handover_zero_copy.h"
 
 #ifndef CONFIG_MEMCPY_TASK_PROFILE
 #define CONFIG_MEMCPY_TASK_PROFILE 0
@@ -670,6 +671,13 @@ void *__wrap_memcpy(void *s1, const void *s2, size_t n)
 #else
 #define CARBOX_MEMCPY_PROFILE_FINISH() do { } while (0)
 #endif
+
+	/* The precise video handover path deliberately makes the closed-library
+	 * destination allocation alias its receiver-owned source.  Recognize only
+	 * that registered transaction before GDMA sees source==destination. */
+	if (carbox_video_handover_memcpy_is_elided(s1, s2, n)) {
+		return result;
+	}
 
 	/* Large task-context copies use one of two persistent linked GDMA channels.
 	 * The helper deliberately refuses ISR, unaligned, busy and unavailable

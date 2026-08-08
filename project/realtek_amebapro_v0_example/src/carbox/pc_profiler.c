@@ -5,6 +5,8 @@
 #include "net_queue_profiler.h"
 #include "crypto_engine_profiler.h"
 #include "memcpy_task_profiler.h"
+#include "video_handover_zero_copy.h"
+#include "screen_tx_direct_crypto.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -608,6 +610,8 @@ static void pcprof_task(void *arg)
 			      caller_attributed);
 		gcd_sync_profiler_report(sequence);
 		screen_queue_profiler_report(sequence);
+		carbox_video_handover_report(sequence);
+		carbox_screen_tx_direct_crypto_report(sequence);
 		usb_hcd_profiler_report(sequence);
 		net_queue_profiler_report(sequence);
 		crypto_engine_profiler_report(sequence);
