@@ -4,6 +4,47 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "ChaCha20Poly1305.h"
+
+#ifndef CARBOX_SCREEN_TX_DIRECT_CRYPTO
+#define CARBOX_SCREEN_TX_DIRECT_CRYPTO 0
+#endif
+
+#if CARBOX_SCREEN_TX_DIRECT_CRYPTO
+#include "screen_tx_direct_crypto.h"
+#else
+#define CARBOX_SCREEN_TX_CRYPTO_CHACHA 2U
+static int carbox_screen_tx_crypto_begin(
+  void *alias_source, size_t length, void *destination, uint32_t kind,
+  const void **direct_source
+) {
+  (void)length;
+  (void)destination;
+  (void)kind;
+  if (direct_source) *direct_source = alias_source;
+  return 0;
+}
+static int carbox_screen_tx_crypto_active(
+  void *destination, size_t length, const void **direct_source
+) {
+  (void)length;
+  if (direct_source) *direct_source = destination;
+  return 0;
+}
+static void carbox_screen_tx_crypto_materialized(
+  void *destination, size_t length
+) {
+  (void)destination;
+  (void)length;
+}
+static void carbox_screen_tx_crypto_complete(
+  void *destination, size_t length, uint32_t kind, int status
+) {
+  (void)destination;
+  (void)length;
+  (void)kind;
+  (void)status;
+}
+#endif
 #include "ChaCha20Poly1305_rtl8195b.h"
 #if !defined(__arm__) && !defined(__thumb__)
 #include <time.h>
@@ -2037,17 +2078,31 @@ size_t chacha20_poly1305_encrypt(
   const void *src, size_t len, void *dst
 ) {
   size_t written;
+  const void *direct_src = src;
+  int direct = carbox_screen_tx_crypto_begin(
+    (void *)(uintptr_t)src, len, dst,
+    CARBOX_SCREEN_TX_CRYPTO_CHACHA, &direct_src
+  );
 
   chacha_record_io_start(
-    state, CHACHA_RTL_DIRECTION_ENCRYPT, src, len, dst
+    state, CHACHA_RTL_DIRECTION_ENCRYPT, direct_src, len, dst
   );
 #if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
-  written = chacha_deferred_copy(
-    state, (const uint8_t *)src, len, (uint8_t *)dst
-  );
+  if (direct) {
+    /* The closed normal-frame sender immediately calls final(). Return the
+     * complete logical write length without staging plaintext into dst; final
+     * submits the independently owned source directly to hardware. */
+    written = len;
+  } else {
+    written = chacha_deferred_copy(
+      state, (const uint8_t *)src, len, (uint8_t *)dst
+    );
+  }
   state->data_len += (uint64_t)len;
 #else
-  written = chacha20_poly1305_encrypt_software(state, src, len, dst);
+  written = chacha20_poly1305_encrypt_software(
+    state, direct_src, len, dst
+  );
 #endif
   state->rtl_output_next += written;
   return written;
@@ -2084,6 +2139,9 @@ size_t chacha20_poly1305_final(
   uint8_t *aad_snapshot = state->rtl_aad;
   uint8_t *input_snapshot = state->rtl_input_snapshot;
   uint8_t *output_base = state->rtl_output_base;
+  const void *direct_input = output_base;
+  int direct_tx = 0;
+  int direct_status = 0;
   size_t total_len;
   size_t written;
   int eligible = state->rtl_eligible &&
@@ -2107,7 +2165,10 @@ size_t chacha20_poly1305_final(
   chacha_export_key_nonce(state, key, nonce);
 #if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
   total_len = (size_t)state->data_len;
-  written = state->chacha_leftover;
+  direct_tx = carbox_screen_tx_crypto_active(
+    output_base, total_len, &direct_input
+  );
+  written = direct_tx ? 0u : state->chacha_leftover;
   if ((uint8_t *)dst != state->rtl_output_next) eligible = 0;
   if (written != 0u) {
     chacha_copy_bytes(dst, state->chacha_buffer, written);
@@ -2135,13 +2196,15 @@ size_t chacha20_poly1305_final(
       hardware_submitted = 1;
       status = chacha_hardware_encrypt_auto(
         key, nonce, aad, aad_len,
-        output_base, total_len, output_base, tag, &backend
+        (const uint8_t *)direct_input, total_len,
+        output_base, tag, &backend
       );
     }
     if (status == CHACHA_RTL_OK) {
       ++g_chacha_hw_operations;
       chacha_stats_record_hardware(backend, total_len);
     } else if (hardware_submitted) {
+	  direct_status = status;
       memset(tag, 0, 16u);
       chacha_log_hw_failure(
         "encrypt", status, backend, total_len, aad_len
@@ -2153,6 +2216,10 @@ size_t chacha20_poly1305_final(
           "HW", status, total_len, aad_len,
           g_chacha_hw_fallbacks
         );
+      }
+      if (direct_tx) {
+        chacha_copy_bytes(output_base, direct_input, total_len);
+        carbox_screen_tx_crypto_materialized(output_base, total_len);
       }
       (void)chacha_mode2_finish_encrypt_software(
         state, output_base, total_len, tag
@@ -2171,11 +2238,21 @@ size_t chacha20_poly1305_final(
         g_chacha_hw_fallbacks
       );
     }
+    if (direct_tx) {
+      chacha_copy_bytes(output_base, direct_input, total_len);
+      carbox_screen_tx_crypto_materialized(output_base, total_len);
+    }
     (void)chacha_mode2_finish_encrypt_software(
       state, output_base, total_len, tag
     );
     chacha_stats_record_software(
       total_len, total_len >= (size_t)CARBOX_CHACHA_HW_MIN_LEN
+    );
+  }
+  if (direct_tx) {
+    carbox_screen_tx_crypto_complete(
+      output_base, total_len, CARBOX_SCREEN_TX_CRYPTO_CHACHA,
+      direct_status
     );
   }
   memset(state, 0, sizeof(*state));
