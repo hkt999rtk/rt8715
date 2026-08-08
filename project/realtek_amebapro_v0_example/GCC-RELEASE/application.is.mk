@@ -825,10 +825,15 @@ TCP_OUTPUT_PROFILE ?= 1
 # waits synchronously for USB completion, so measure that wait separately from
 # any lwIP pbuf-chain flattening done by ethernetif.c.
 NCM_TX_PROFILE ?= 1
-# Stage 1: move the closed synchronous NCM send/wait out of TCP_IP.  This is
-# intentionally single-packet/immediate; packet/NTB aggregation is a later step.
+# Move the closed synchronous NCM send/wait out of TCP_IP.
 NCM_TX_ASYNC ?= 1
 NCM_TX_ASYNC_PROFILE ?= 1
+# Seal a multi-datagram NTB when it reaches either limit, or 5 ms after the
+# oldest retained Ethernet packet was queued.  The timeout is not sliding.
+NCM_TX_BATCH ?= 1
+NCM_TX_BATCH_MAX_PACKETS ?= 16
+NCM_TX_BATCH_MAX_BYTES ?= 16384
+NCM_TX_BATCH_TIMEOUT_MS ?= 5
 PC_PROFILER ?= 1
 MEMCPY_TASK_PROFILE ?= 0
 LARGE_MEMCPY_GDMA ?= 1
@@ -896,6 +901,10 @@ GCCFLAGS += -DCONFIG_TCP_OUTPUT_PROFILE=$(TCP_OUTPUT_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_TX_PROFILE=$(NCM_TX_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_TX_ASYNC=$(NCM_TX_ASYNC)
 GCCFLAGS += -DCONFIG_NCM_TX_ASYNC_PROFILE=$(NCM_TX_ASYNC_PROFILE)
+GCCFLAGS += -DCONFIG_NCM_TX_BATCH=$(NCM_TX_BATCH)
+GCCFLAGS += -DCONFIG_NCM_TX_BATCH_MAX_PACKETS=$(NCM_TX_BATCH_MAX_PACKETS)
+GCCFLAGS += -DCONFIG_NCM_TX_BATCH_MAX_BYTES=$(NCM_TX_BATCH_MAX_BYTES)
+GCCFLAGS += -DCONFIG_NCM_TX_BATCH_TIMEOUT_MS=$(NCM_TX_BATCH_TIMEOUT_MS)
 GCCFLAGS += -DCONFIG_PC_PROFILER=$(PC_PROFILER)
 GCCFLAGS += -DCONFIG_MEMCPY_TASK_PROFILE=$(MEMCPY_TASK_PROFILE)
 GCCFLAGS += -DCONFIG_LARGE_MEMCPY_GDMA=$(LARGE_MEMCPY_GDMA)
@@ -978,6 +987,9 @@ LFLAGS += -Wl,--wrap=dispatch_sync_f
 endif
 ifneq ($(GCD_WORK_PRIORITY),-1)
 LFLAGS += -Wl,--wrap=xTaskCreate
+endif
+ifeq ($(NCM_TX_BATCH),1)
+LFLAGS += -Wl,--wrap=ncm_wrap_ntb
 endif
 ifeq ($(SCREEN_QUEUE_PROFILE),1)
 LFLAGS += -Wl,--wrap=AirPlayScreen_SendVideo

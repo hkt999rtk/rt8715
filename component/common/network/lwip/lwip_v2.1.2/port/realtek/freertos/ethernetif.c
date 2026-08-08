@@ -494,6 +494,19 @@ static u8 RX_BUFFER[MAX_BUFFER_SIZE];
 #define CONFIG_NCM_TX_ASYNC_PROFILE 0
 #endif
 
+#ifndef CONFIG_NCM_TX_BATCH
+#define CONFIG_NCM_TX_BATCH 0
+#endif
+#ifndef CONFIG_NCM_TX_BATCH_MAX_PACKETS
+#define CONFIG_NCM_TX_BATCH_MAX_PACKETS 8U
+#endif
+#ifndef CONFIG_NCM_TX_BATCH_MAX_BYTES
+#define CONFIG_NCM_TX_BATCH_MAX_BYTES 16384U
+#endif
+#ifndef CONFIG_NCM_TX_BATCH_TIMEOUT_MS
+#define CONFIG_NCM_TX_BATCH_TIMEOUT_MS 5U
+#endif
+
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
 #define NCM_TX_PROFILE_WINDOW_US 10000000U
 #define NCM_TX_PROFILE_SIZE_BINS 4U
@@ -850,6 +863,19 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 #define NCM_TX_ASYNC_REPORT_US       10000000U
 #define NCM_TX_ASYNC_TASK_PRIORITY   TCPIP_THREAD_PRIO
 
+#if CONFIG_NCM_TX_BATCH
+#if CONFIG_NCM_TX_BATCH_MAX_PACKETS < 2 || CONFIG_NCM_TX_BATCH_MAX_PACKETS > 32
+#error "CONFIG_NCM_TX_BATCH_MAX_PACKETS must be in range 2..32"
+#endif
+#if CONFIG_NCM_TX_BATCH_MAX_BYTES > 65535 || CONFIG_NCM_TX_BATCH_MAX_BYTES < 2048
+#error "CONFIG_NCM_TX_BATCH_MAX_BYTES must be in range 2048..65535"
+#endif
+#define NCM_NTH16_SIZE                12U
+#define NCM_NDP16_FIXED_SIZE           8U
+#define NCM_NDP16_ENTRY_SIZE           4U
+#define NCM_CLOSED_TX_BUFFER_OFFSET   43U
+#endif
+
 struct ncm_tx_async_item {
 	struct pbuf *p;
 	u32_t enqueue_us;
@@ -864,11 +890,212 @@ struct ncm_tx_async_stats {
 	u32_t queue_depth_max;
 	u32_t queue_wait_max_us;
 	uint64_t queue_wait_total_us;
+#if CONFIG_NCM_TX_BATCH
+	u32_t ntbs;
+	u32_t batch_packets;
+	u32_t batch_packets_max;
+	u32_t flush_max_packets;
+	u32_t flush_max_bytes;
+	u32_t flush_timeout;
+	u32_t wrap_fallback;
+#endif
 };
 
 static QueueHandle_t g_ncm_tx_async_queue;
 static TaskHandle_t g_ncm_tx_async_task;
 static struct ncm_tx_async_stats g_ncm_tx_async_stats;
+
+#if CONFIG_NCM_TX_BATCH
+struct ncm_tx_wrap_batch {
+	struct ncm_tx_async_item *items;
+	u32_t count;
+	u32_t packed_count;
+	u8_t active;
+};
+
+static struct ncm_tx_wrap_batch g_ncm_tx_wrap_batch;
+
+extern int __real_ncm_wrap_ntb(void *context, u8 *buffer, u32_t length);
+
+static u16_t ncm_batch_get_le16(const u8 *p)
+{
+	return (u16_t)((u16_t)p[0] | ((u16_t)p[1] << 8));
+}
+
+static void ncm_batch_put_le16(u8 *p, u16_t value)
+{
+	p[0] = (u8)(value & 0xffU);
+	p[1] = (u8)(value >> 8);
+}
+
+static u32_t ncm_batch_align4(u32_t value)
+{
+	return (value + 3U) & ~3U;
+}
+
+static u32_t ncm_batch_wire_bytes(const struct ncm_tx_async_item *items,
+				   u32_t count)
+{
+	u32_t ndp_length = NCM_NDP16_FIXED_SIZE +
+		NCM_NDP16_ENTRY_SIZE * (count + 1U);
+	u32_t total = ncm_batch_align4(NCM_NTH16_SIZE + ndp_length);
+	u32_t i;
+
+	for (i = 0U; i < count; i++) {
+		total = ncm_batch_align4(total);
+		if (total > CONFIG_NCM_TX_BATCH_MAX_BYTES ||
+		    items[i].p->tot_len > CONFIG_NCM_TX_BATCH_MAX_BYTES - total) {
+			return UINT32_MAX;
+		}
+		total += items[i].p->tot_len;
+	}
+	return total;
+}
+
+static void ncm_batch_copy_pbuf(u8 *destination, const struct pbuf *p)
+{
+	const struct pbuf *q;
+
+	for (q = p; q != NULL; q = q->next) {
+		memcpy(destination, q->payload, q->len);
+		destination += q->len;
+	}
+}
+
+static u8 *ncm_batch_closed_output_buffer(const void *context)
+{
+	const u8 *bytes = (const u8 *)context + NCM_CLOSED_TX_BUFFER_OFFSET;
+	uintptr_t address = 0U;
+	u32_t i;
+
+	/* The closed library uses a packed context and reads this pointer at byte
+	 * offset 43. Assemble it byte-wise so UNALIGN_TRP cannot fault here. */
+	for (i = 0U; i < sizeof(uintptr_t); i++) {
+		address |= (uintptr_t)bytes[i] << (i * 8U);
+	}
+	return (u8 *)address;
+}
+
+int __wrap_ncm_wrap_ntb(void *context, u8 *buffer, u32_t length)
+{
+	struct ncm_tx_wrap_batch *batch = &g_ncm_tx_wrap_batch;
+	int legacy_length = __real_ncm_wrap_ntb(context, buffer, length);
+	u8 nth_signature[4];
+	u8 ndp_signature[4];
+	u8 *output;
+	u16_t sequence;
+	u16_t old_ndp_index;
+	u32_t ndp_length;
+	u32_t payload_offset;
+	u32_t total;
+	u32_t i;
+
+	if (!batch->active || batch->items == NULL || batch->count < 2U ||
+	    legacy_length < (int)NCM_NTH16_SIZE) {
+		return legacy_length;
+	}
+	output = ncm_batch_closed_output_buffer(context);
+	if (output == NULL) {
+		return legacy_length;
+	}
+	memcpy(nth_signature, output, sizeof(nth_signature));
+	sequence = ncm_batch_get_le16(output + 6U);
+	old_ndp_index = ncm_batch_get_le16(output + 10U);
+	if (old_ndp_index > (u16_t)(legacy_length - 8) ||
+	    nth_signature[0] != 'N' || nth_signature[1] != 'C' ||
+	    nth_signature[2] != 'M' || nth_signature[3] != 'H') {
+		return legacy_length;
+	}
+	memcpy(ndp_signature, output + old_ndp_index, sizeof(ndp_signature));
+	/* NCM1 carries a CRC per datagram. The negotiated CarPlay path is NCM0;
+	 * retain the closed single-packet implementation for any other format. */
+	if (ndp_signature[0] != 'N' || ndp_signature[1] != 'C' ||
+	    ndp_signature[2] != 'M' || ndp_signature[3] != '0') {
+		return legacy_length;
+	}
+	total = ncm_batch_wire_bytes(batch->items, batch->count);
+	if (total == UINT32_MAX || total > CONFIG_NCM_TX_BATCH_MAX_BYTES ||
+	    total > 0xffffU) {
+		return legacy_length;
+	}
+
+	ndp_length = NCM_NDP16_FIXED_SIZE +
+		NCM_NDP16_ENTRY_SIZE * (batch->count + 1U);
+	payload_offset = ncm_batch_align4(NCM_NTH16_SIZE + ndp_length);
+	memset(output, 0, payload_offset);
+	memcpy(output, nth_signature, sizeof(nth_signature));
+	ncm_batch_put_le16(output + 4U, (u16_t)NCM_NTH16_SIZE);
+	ncm_batch_put_le16(output + 6U, sequence);
+	ncm_batch_put_le16(output + 8U, (u16_t)total);
+	ncm_batch_put_le16(output + 10U, (u16_t)NCM_NTH16_SIZE);
+	memcpy(output + NCM_NTH16_SIZE, ndp_signature,
+	       sizeof(ndp_signature));
+	ncm_batch_put_le16(output + NCM_NTH16_SIZE + 4U, (u16_t)ndp_length);
+	ncm_batch_put_le16(output + NCM_NTH16_SIZE + 6U, 0U);
+
+	for (i = 0U; i < batch->count; i++) {
+		u8 *entry = output + NCM_NTH16_SIZE + NCM_NDP16_FIXED_SIZE +
+			i * NCM_NDP16_ENTRY_SIZE;
+
+		payload_offset = ncm_batch_align4(payload_offset);
+		ncm_batch_put_le16(entry, (u16_t)payload_offset);
+		ncm_batch_put_le16(entry + 2U, batch->items[i].p->tot_len);
+		ncm_batch_copy_pbuf(output + payload_offset, batch->items[i].p);
+		payload_offset += batch->items[i].p->tot_len;
+	}
+	batch->packed_count = batch->count;
+	return (int)total;
+}
+
+static err_t ncm_send_pbuf_batch_sync(struct ncm_tx_async_item *items,
+				      u32_t count, u32_t *packed_out)
+{
+	u32_t packed;
+	u32_t i;
+	int ret;
+
+	*packed_out = 0U;
+	if (count < 2U) {
+		return ncm_send_pbuf_sync(items[0].p);
+	}
+	if (items[0].p->next != NULL) {
+		for (i = 0U; i < count; i++) {
+			if (ncm_send_pbuf_sync(items[i].p) != ERR_OK) {
+				return ERR_BUF;
+			}
+		}
+		return ERR_OK;
+	}
+	g_ncm_tx_wrap_batch.items = items;
+	g_ncm_tx_wrap_batch.count = count;
+	g_ncm_tx_wrap_batch.packed_count = 0U;
+	g_ncm_tx_wrap_batch.active = 1U;
+	ret = usbh_cdc_ncm_send_data((u8 *)items[0].p->payload,
+				     items[0].p->len);
+	packed = g_ncm_tx_wrap_batch.packed_count;
+	g_ncm_tx_wrap_batch.active = 0U;
+	g_ncm_tx_wrap_batch.items = NULL;
+	g_ncm_tx_wrap_batch.count = 0U;
+	g_ncm_tx_wrap_batch.packed_count = 0U;
+	if (ret != 0) {
+		return ERR_BUF;
+	}
+	if (packed == count) {
+		*packed_out = packed;
+		return ERR_OK;
+	}
+
+	/* The wrapper rejected an unexpected negotiated layout. The first packet
+	 * has already been sent by the closed legacy builder; preserve ordering by
+	 * sending every remaining retained pbuf through the legacy path. */
+	for (i = 1U; i < count; i++) {
+		if (ncm_send_pbuf_sync(items[i].p) != ERR_OK) {
+			return ERR_BUF;
+		}
+	}
+	return ERR_OK;
+}
+#endif
 
 static void ncm_tx_async_report(u32_t now)
 {
@@ -895,9 +1122,14 @@ static void ncm_tx_async_report(u32_t now)
 	taskEXIT_CRITICAL();
 	depth_now = (u32_t)uxQueueMessagesWaiting(g_ncm_tx_async_queue);
 	sent = snapshot.sent;
-	printf("[NCMTXASYNC] window_us=%u mode=single-immediate enqueued/sent/error/full=%u/%u/%u/%u "
+	printf("[NCMTXASYNC] window_us=%u mode=%s enqueued/sent/error/full=%u/%u/%u/%u "
 	       "depth_now/max=%u/%u wait_us avg/max=%u/%u queue_payload_copy=0\n",
 	       (unsigned int)window,
+#if CONFIG_NCM_TX_BATCH
+	       "ntb-batch-5ms",
+#else
+	       "single-immediate",
+#endif
 	       (unsigned int)snapshot.enqueued,
 	       (unsigned int)sent,
 	       (unsigned int)snapshot.send_errors,
@@ -906,6 +1138,23 @@ static void ncm_tx_async_report(u32_t now)
 	       (unsigned int)snapshot.queue_depth_max,
 	       sent ? (unsigned int)(snapshot.queue_wait_total_us / sent) : 0U,
 	       (unsigned int)snapshot.queue_wait_max_us);
+#if CONFIG_NCM_TX_BATCH
+	printf("[NCMTXASYNC] ntb/packets=%u/%u batch avg/max_x100=%u/%u "
+	       "flush max_packets/max_bytes/timeout=%u/%u/%u wrap_fallback=%u "
+	       "limits packets/bytes/timeout_ms=%u/%u/%u\n",
+	       (unsigned int)snapshot.ntbs,
+	       (unsigned int)snapshot.batch_packets,
+	       snapshot.ntbs ?
+	       (unsigned int)((snapshot.batch_packets * 100U) / snapshot.ntbs) : 0U,
+	       (unsigned int)(snapshot.batch_packets_max * 100U),
+	       (unsigned int)snapshot.flush_max_packets,
+	       (unsigned int)snapshot.flush_max_bytes,
+	       (unsigned int)snapshot.flush_timeout,
+	       (unsigned int)snapshot.wrap_fallback,
+	       (unsigned int)CONFIG_NCM_TX_BATCH_MAX_PACKETS,
+	       (unsigned int)CONFIG_NCM_TX_BATCH_MAX_BYTES,
+	       (unsigned int)CONFIG_NCM_TX_BATCH_TIMEOUT_MS);
+#endif
 #else
 	(void)now;
 #endif
@@ -913,10 +1162,134 @@ static void ncm_tx_async_report(u32_t now)
 
 static void ncm_tx_async_worker(void *arg)
 {
+#if CONFIG_NCM_TX_BATCH
+	struct ncm_tx_async_item items[CONFIG_NCM_TX_BATCH_MAX_PACKETS];
+	const u32_t timeout_us = CONFIG_NCM_TX_BATCH_TIMEOUT_MS * 1000U;
+#else
 	struct ncm_tx_async_item item;
+#endif
 
 	(void)arg;
 	for (;;) {
+#if CONFIG_NCM_TX_BATCH
+		u32_t count = 1U;
+		u32_t packed = 0U;
+		u32_t flush_reason = 0U;
+		u32_t send_start;
+		u32_t i;
+		err_t result;
+
+		if (xQueueReceive(g_ncm_tx_async_queue, &items[0],
+				  portMAX_DELAY) != pdTRUE) {
+			continue;
+		}
+
+		/* A chained pbuf is already fragmented inside one lwIP packet. Keep
+		 * that uncommon case on the closed, single-datagram path. For normal
+		 * single-segment packets, the deadline is anchored to the oldest queue
+		 * entry: later arrivals never extend the 5 ms aggregation window. */
+		if (items[0].p->next == NULL) {
+			for (;;) {
+				struct ncm_tx_async_item next;
+				u32_t now;
+				u32_t elapsed;
+				u32_t remaining_us;
+				u32_t wait_ms;
+				TickType_t wait_ticks;
+
+				if (count >= CONFIG_NCM_TX_BATCH_MAX_PACKETS) {
+					flush_reason = 1U;
+					break;
+				}
+
+				/* Peek before dequeueing so a packet which would exceed the
+				 * negotiated NTB limit remains at the head of the next batch. */
+				if (xQueuePeek(g_ncm_tx_async_queue, &next, 0) == pdTRUE) {
+					items[count] = next;
+					if (next.p->next != NULL ||
+					    ncm_batch_wire_bytes(items, count + 1U) == UINT32_MAX) {
+						flush_reason = 2U;
+						break;
+					}
+					if (xQueueReceive(g_ncm_tx_async_queue, &items[count],
+							 0) == pdTRUE) {
+						count++;
+					}
+					continue;
+				}
+
+				now = hal_read_curtime_us();
+				elapsed = now - items[0].enqueue_us;
+				if (elapsed >= timeout_us) {
+					flush_reason = 3U;
+					break;
+				}
+				remaining_us = timeout_us - elapsed;
+				wait_ms = (remaining_us + 999U) / 1000U;
+				wait_ticks = pdMS_TO_TICKS(wait_ms);
+				if (wait_ticks == 0) {
+					wait_ticks = 1;
+				}
+				/* The queue itself is the wakeup primitive; no polling or
+				 * sleep loop is used while waiting for another packet. */
+				(void)xQueuePeek(g_ncm_tx_async_queue, &next, wait_ticks);
+			}
+		}
+
+		send_start = hal_read_curtime_us();
+		if (count >= 2U) {
+			result = ncm_send_pbuf_batch_sync(items, count, &packed);
+		} else {
+			result = ncm_send_pbuf_sync(items[0].p);
+		}
+
+#if CONFIG_NCM_TX_ASYNC_PROFILE
+		taskENTER_CRITICAL();
+		g_ncm_tx_async_stats.sent += count;
+		for (i = 0U; i < count; i++) {
+			u32_t wait_us = send_start - items[i].enqueue_us;
+
+			g_ncm_tx_async_stats.queue_wait_total_us += wait_us;
+			if (wait_us > g_ncm_tx_async_stats.queue_wait_max_us) {
+				g_ncm_tx_async_stats.queue_wait_max_us = wait_us;
+			}
+		}
+		if (result != ERR_OK) {
+			g_ncm_tx_async_stats.send_errors++;
+		}
+		if (packed == count && count >= 2U) {
+			g_ncm_tx_async_stats.ntbs++;
+			g_ncm_tx_async_stats.batch_packets += count;
+		} else {
+			/* The legacy fallback emits one NTB for each retained pbuf. */
+			g_ncm_tx_async_stats.ntbs += count;
+			g_ncm_tx_async_stats.batch_packets += count;
+			if (count >= 2U) {
+				g_ncm_tx_async_stats.wrap_fallback++;
+			}
+		}
+		if (count > g_ncm_tx_async_stats.batch_packets_max) {
+			g_ncm_tx_async_stats.batch_packets_max = count;
+		}
+		if (flush_reason == 1U) {
+			g_ncm_tx_async_stats.flush_max_packets++;
+		} else if (flush_reason == 2U) {
+			g_ncm_tx_async_stats.flush_max_bytes++;
+		} else if (flush_reason == 3U) {
+			g_ncm_tx_async_stats.flush_timeout++;
+		}
+		taskEXIT_CRITICAL();
+#else
+		(void)flush_reason;
+		(void)packed;
+		(void)result;
+#endif
+		for (i = 0U; i < count; i++) {
+			/* linkoutput() retained one reference before returning to lwIP. */
+			pbuf_free(items[i].p);
+		}
+		ncm_tx_async_report(hal_read_curtime_us());
+#else
 		if (xQueueReceive(g_ncm_tx_async_queue, &item, portMAX_DELAY) == pdTRUE) {
 			u32_t now = hal_read_curtime_us();
 			u32_t wait_us = now - item.enqueue_us;
@@ -941,6 +1314,7 @@ static void ncm_tx_async_worker(void *arg)
 			pbuf_free(item.p);
 			ncm_tx_async_report(hal_read_curtime_us());
 		}
+#endif
 	}
 }
 
@@ -965,10 +1339,22 @@ static int ncm_tx_async_init(void)
 		g_ncm_tx_async_task = NULL;
 		return 0;
 	}
-	printf("[NCMTXASYNC] enabled mode=single-immediate queue=%u priority=%u; "
-	       "pbuf-reference only, no payload copy\n",
+	printf("[NCMTXASYNC] enabled mode=%s queue=%u priority=%u; "
+	       "pbuf-reference queue, max_packets=%u max_bytes=%u timeout_ms=%u\n",
+#if CONFIG_NCM_TX_BATCH
+	       "ntb-batch-5ms",
+#else
+	       "single-immediate",
+#endif
 	       (unsigned int)NCM_TX_ASYNC_QUEUE_LEN,
-	       (unsigned int)NCM_TX_ASYNC_TASK_PRIORITY);
+	       (unsigned int)NCM_TX_ASYNC_TASK_PRIORITY,
+#if CONFIG_NCM_TX_BATCH
+	       (unsigned int)CONFIG_NCM_TX_BATCH_MAX_PACKETS,
+	       (unsigned int)CONFIG_NCM_TX_BATCH_MAX_BYTES,
+	       (unsigned int)CONFIG_NCM_TX_BATCH_TIMEOUT_MS);
+#else
+	       1U, 0U, 0U);
+#endif
 	return 1;
 }
 
