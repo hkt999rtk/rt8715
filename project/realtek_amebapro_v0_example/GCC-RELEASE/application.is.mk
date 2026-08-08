@@ -864,8 +864,9 @@ GCD_SYNC_PROFILE ?= 0
 # requested worker priority; set this to a non-negative value only for testing.
 GCD_WORK_PRIORITY ?= -1
 SCREEN_QUEUE_PROFILE ?= 1
-# Remove the closed AirPlay library's redundant full-frame handover allocation
-# and memcpy.  The build creates derived archives whose malloc/free references
+# Remove the closed AirPlay library's redundant full-frame handover memcpy.
+# Phase B retains the temporary allocation until queue publication is proven,
+# then frees it immediately.  The build creates derived archives whose hooks
 # are redirected only in AirPlayScreen.o and AirPlayReceiverSessionScreen.o;
 # the supplied vendor archives are never modified.
 VIDEO_HANDOVER_ZERO_COPY ?= 1
@@ -873,7 +874,9 @@ VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES ?= 4096
 # Closed AirPlay normal-frame sender optimization. Its payload memcpy is
 # deferred only after object-local allocation/header/layout validation, then
 # AES or ChaCha writes ciphertext directly into wireBuffer + 128.
-SCREEN_TX_DIRECT_CRYPTO ?= 1
+# Diagnose handover ownership independently first.  Enable this only after the
+# Phase-B pointer swap passes start/stop/reconnect and long-run testing.
+SCREEN_TX_DIRECT_CRYPTO ?= 0
 SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES ?= 4096
 # Keep the expensive, already-concluded diagnostic probes independently
 # switchable.  The normal screen timing/backlog profiler does not need them.

@@ -1161,9 +1161,12 @@ uint64_t __wrap_UpTicksToNTP(uint64_t ticks)
 void __wrap_CVector_push_back(void *vector, const void *element)
 {
 	screenprof_frame_item_t item = { NULL, 0 };
+	screenprof_frame_item_t replacement_item = { NULL, 0 };
 	screenprof_active_input_t input = { 0 };
 	uint32_t now_us = 0U;
 	int is_screen = (vector == screenprof_vector);
+	int handover_prepared = 0;
+	int size_before = 0;
 
 	if (!is_screen && screenprof_current_is_active()) {
 		screenprof_vector_view_t *view = (screenprof_vector_view_t *)vector;
@@ -1174,7 +1177,14 @@ void __wrap_CVector_push_back(void *vector, const void *element)
 		}
 	}
 	if (is_screen && (element != NULL)) {
+		screenprof_vector_view_t *view =
+			(screenprof_vector_view_t *)vector;
+
 		item = *(const screenprof_frame_item_t *)element;
+		replacement_item = item;
+		size_before = (view != NULL) ? view->size : 0;
+		handover_prepared = carbox_video_handover_prepare_push(
+			item.data, item.bytes, &replacement_item.data);
 		now_us = hal_read_curtime_us();
 		(void)screenprof_get_active_input(xTaskGetCurrentTaskHandle(),
 					  &input);
@@ -1183,7 +1193,18 @@ void __wrap_CVector_push_back(void *vector, const void *element)
 		}
 	}
 
-	__real_CVector_push_back(vector, element);
+	__real_CVector_push_back(vector,
+		handover_prepared ? (const void *)&replacement_item : element);
+	if (handover_prepared) {
+		screenprof_vector_view_t *view =
+			(screenprof_vector_view_t *)vector;
+		int pushed = (view != NULL) && (view->size == size_before + 1);
+
+		carbox_video_handover_finish_push(item.data, pushed);
+		if (pushed) {
+			item = replacement_item;
+		}
+	}
 	if (is_screen) {
 		screenprof_vector_view_t *view = (screenprof_vector_view_t *)vector;
 		taskENTER_CRITICAL();
