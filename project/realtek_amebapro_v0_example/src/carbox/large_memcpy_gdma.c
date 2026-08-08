@@ -511,7 +511,8 @@ static int large_memcpy_copyv_bus_accessible(uintptr_t start, uint32_t len)
 }
 
 static uint32_t large_memcpy_copyv_body(
-	const carbox_gdma_copy_block_t *block, uint32_t *prefix_out)
+	const carbox_gdma_copy_block_t *block, uint32_t *prefix_out,
+	int allow_unaligned_source)
 {
 	uintptr_t destination = (uintptr_t)block->dst;
 	uintptr_t source = (uintptr_t)block->src;
@@ -529,14 +530,17 @@ static uint32_t large_memcpy_copyv_body(
 	prefix = (LARGE_MEMCPY_GDMA_CACHE_LINE -
 		  (destination & (LARGE_MEMCPY_GDMA_CACHE_LINE - 1U))) &
 		 (LARGE_MEMCPY_GDMA_CACHE_LINE - 1U);
-	if (prefix >= block->len || ((source + prefix) & 3U) != 0U) {
+	if (prefix >= block->len ||
+	    (!allow_unaligned_source && ((source + prefix) & 3U) != 0U)) {
 		*prefix_out = 0U;
 		return 0U;
 	}
-	/* The non-sequential ROM linked-list helper programs a 32-bit, 16-beat
-	 * memory burst.  Unlike hal_gdma_memcpy(), it does not safely preserve the
-	 * final partial burst.  Make every descriptor body a whole 64-byte burst;
-	 * the remaining cache-line edge is copied by M33 after DMA completion. */
+	/* copyv_submit() explicitly programs byte-width descriptors, so fragmented
+	 * pbuf sources need no word alignment.  This matters for NCM TX: after an
+	 * Ethernet/IP/TCP header, a contiguous NTB destination and its external TCP
+	 * payload source commonly have different address mod-4 values.  Keep only
+	 * the destination body cache-line isolated; its remaining prefix/tail is
+	 * copied by M33 after every DMA invalidate has completed. */
 	body = (block->len - prefix) &
 		~(LARGE_MEMCPY_GDMA_LINK_BURST_BYTES - 1U);
 	if (body == 0U) {
@@ -761,9 +765,9 @@ static int large_memcpy_gdma_copyv_verify(
 }
 #endif
 
-int carbox_linked_gdma_copyv_try(const carbox_gdma_copy_block_t *blocks,
-				 size_t block_count,
-				 carbox_gdma_copyv_result_t *result)
+static int large_memcpy_gdma_copyv_try_internal(
+	const carbox_gdma_copy_block_t *blocks, size_t block_count,
+	carbox_gdma_copyv_result_t *result, int allow_unaligned_source)
 {
 	large_memcpy_gdma_context_t *context = NULL;
 	hal_gdma_block_t dma_blocks[MAX_MULTI_BLOCK_NUM];
@@ -804,7 +808,8 @@ int carbox_linked_gdma_copyv_try(const carbox_gdma_copy_block_t *blocks,
 			continue;
 		}
 		total_bytes += blocks[i].len;
-		body = large_memcpy_copyv_body(&blocks[i], &prefix);
+		body = large_memcpy_copyv_body(&blocks[i], &prefix,
+			allow_unaligned_source);
 		eligible_bytes += body;
 	}
 	if (total_bytes <= LARGE_MEMCPY_GDMA_THRESHOLD ||
@@ -856,7 +861,8 @@ int carbox_linked_gdma_copyv_try(const carbox_gdma_copy_block_t *blocks,
 		if (blocks[i].len == 0U) {
 			continue;
 		}
-		body = large_memcpy_copyv_body(&blocks[i], &prefix);
+		body = large_memcpy_copyv_body(&blocks[i], &prefix,
+			allow_unaligned_source);
 		if (body == 0U) {
 			cpu_bytes += blocks[i].len;
 			continue;
@@ -914,7 +920,8 @@ int carbox_linked_gdma_copyv_try(const carbox_gdma_copy_block_t *blocks,
 		if (blocks[i].len == 0U) {
 			continue;
 		}
-		body = large_memcpy_copyv_body(&blocks[i], &prefix);
+		body = large_memcpy_copyv_body(&blocks[i], &prefix,
+			allow_unaligned_source);
 		if (body != 0U &&
 		    context->dma.hal_gdma_adaptor.dcache_invalidate_by_addr != NULL) {
 			context->dma.hal_gdma_adaptor.dcache_invalidate_by_addr(
@@ -938,7 +945,8 @@ int carbox_linked_gdma_copyv_try(const carbox_gdma_copy_block_t *blocks,
 		if (blocks[i].len == 0U) {
 			continue;
 		}
-		body = large_memcpy_copyv_body(&blocks[i], &prefix);
+		body = large_memcpy_copyv_body(&blocks[i], &prefix,
+			allow_unaligned_source);
 		if (body == 0U) {
 			large_memcpy_copyv_cpu(destination, source, blocks[i].len);
 			continue;
@@ -975,6 +983,20 @@ out:
 	return copied;
 }
 
+int carbox_linked_gdma_copyv_try(const carbox_gdma_copy_block_t *blocks,
+				 size_t block_count,
+				 carbox_gdma_copyv_result_t *result)
+{
+	return large_memcpy_gdma_copyv_try_internal(blocks, block_count, result, 0);
+}
+
+int carbox_linked_gdma_copyv_bytes_try(const carbox_gdma_copy_block_t *blocks,
+				       size_t block_count,
+				       carbox_gdma_copyv_result_t *result)
+{
+	return large_memcpy_gdma_copyv_try_internal(blocks, block_count, result, 1);
+}
+
 #else
 
 void carbox_large_memcpy_gdma_init(void)
@@ -1007,6 +1029,13 @@ int carbox_linked_gdma_copyv_try(const carbox_gdma_copy_block_t *blocks,
 		result->dma_batches = 0U;
 	}
 	return 0;
+}
+
+int carbox_linked_gdma_copyv_bytes_try(const carbox_gdma_copy_block_t *blocks,
+				       size_t block_count,
+				       carbox_gdma_copyv_result_t *result)
+{
+	return carbox_linked_gdma_copyv_try(blocks, block_count, result);
 }
 
 #endif /* CONFIG_LARGE_MEMCPY_GDMA */

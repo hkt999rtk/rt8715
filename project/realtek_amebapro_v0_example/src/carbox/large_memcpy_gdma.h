@@ -48,6 +48,14 @@ int carbox_linked_gdma_copyv_try(const carbox_gdma_copy_block_t *blocks,
 				 size_t block_count,
 				 carbox_gdma_copyv_result_t *result);
 
+/* Byte-width variant for layouts whose source and destination addresses have
+ * different mod-4 values (notably an NCM datagram after its protocol-header
+ * pbuf).  Destination DMA bodies remain cache-line isolated exactly as in the
+ * validated socket-recv path. */
+int carbox_linked_gdma_copyv_bytes_try(const carbox_gdma_copy_block_t *blocks,
+				       size_t block_count,
+				       carbox_gdma_copyv_result_t *result);
+
 #ifdef __cplusplus
 }
 #endif

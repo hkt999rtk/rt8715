@@ -73,6 +73,9 @@
 #if defined(CONFIG_PLATFORM_8195BHP)
 #include "cmsis.h"
 #include "hal_timer.h"
+#if CONFIG_NCM_TX_BATCH_GDMA
+#include "large_memcpy_gdma.h"
+#endif
 #endif
 
 #define netifMTU                                (1500)
@@ -497,6 +500,9 @@ static u8 RX_BUFFER[MAX_BUFFER_SIZE];
 #ifndef CONFIG_NCM_TX_BATCH
 #define CONFIG_NCM_TX_BATCH 0
 #endif
+#ifndef CONFIG_NCM_TX_BATCH_GDMA
+#define CONFIG_NCM_TX_BATCH_GDMA 0
+#endif
 #ifndef CONFIG_NCM_TX_BATCH_MAX_PACKETS
 #define CONFIG_NCM_TX_BATCH_MAX_PACKETS 8U
 #endif
@@ -874,6 +880,10 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 #define NCM_NDP16_FIXED_SIZE           8U
 #define NCM_NDP16_ENTRY_SIZE           4U
 #define NCM_CLOSED_TX_BUFFER_OFFSET   43U
+/* tcp_write_owned() normally creates two pbuf segments per packet, but the
+ * generic NCM path must also tolerate unrelated lwIP chains.  Bound stack use
+ * without baking that observed two-segment layout into correctness. */
+#define NCM_TX_GDMA_MAX_BLOCKS          64U
 #endif
 
 struct ncm_tx_async_item {
@@ -898,6 +908,18 @@ struct ncm_tx_async_stats {
 	u32_t flush_max_bytes;
 	u32_t flush_timeout;
 	u32_t wrap_fallback;
+#if CONFIG_NCM_TX_BATCH_GDMA
+	u32_t gather_attempts;
+	u32_t gather_successes;
+	u32_t gather_fallbacks;
+	u32_t gather_block_overflow;
+	u32_t gather_input_blocks;
+	u32_t gather_input_bytes;
+	u32_t gather_dma_blocks;
+	u32_t gather_dma_batches;
+	u32_t gather_dma_bytes;
+	u32_t gather_cpu_edge_bytes;
+#endif
 #endif
 };
 
@@ -961,6 +983,64 @@ static void ncm_batch_copy_pbuf(u8 *destination, const struct pbuf *p)
 		destination += q->len;
 	}
 }
+
+#if CONFIG_NCM_TX_BATCH_GDMA
+static int ncm_batch_gdma_copy(struct ncm_tx_wrap_batch *batch, u8 *output,
+			       u32_t first_payload_offset)
+{
+	carbox_gdma_copy_block_t blocks[NCM_TX_GDMA_MAX_BLOCKS];
+	carbox_gdma_copyv_result_t result;
+	u32_t payload_offset = first_payload_offset;
+	u32_t input_bytes = 0U;
+	size_t block_count = 0U;
+	u32_t i;
+
+	/* The USB HCD still consumes one contiguous NTB.  Gather every retained
+	 * lwIP pbuf segment into that buffer with one logical linked-GDMA copy,
+	 * matching the already board-validated fragmented socket recv path. */
+	for (i = 0U; i < batch->count; i++) {
+		const struct pbuf *q;
+
+		payload_offset = ncm_batch_align4(payload_offset);
+		for (q = batch->items[i].p; q != NULL; q = q->next) {
+			if (q->len == 0U) {
+				continue;
+			}
+			if (block_count == NCM_TX_GDMA_MAX_BLOCKS) {
+				g_ncm_tx_async_stats.gather_block_overflow++;
+				return 0;
+			}
+			blocks[block_count].dst = output + payload_offset;
+			blocks[block_count].src = q->payload;
+			blocks[block_count].len = q->len;
+			block_count++;
+			payload_offset += q->len;
+			input_bytes += q->len;
+		}
+	}
+
+	g_ncm_tx_async_stats.gather_input_blocks += (u32_t)block_count;
+	g_ncm_tx_async_stats.gather_input_bytes += input_bytes;
+	/* Match the socket-recv copyv policy: 4 KiB itself remains on the existing
+	 * memcpy path.  copyv performs the second, stricter check that more than
+	 * 4 KiB remains after per-block alignment edges are removed. */
+	if (block_count < 2U || input_bytes <= LARGE_MEMCPY_GDMA_THRESHOLD) {
+		return 0;
+	}
+	g_ncm_tx_async_stats.gather_attempts++;
+	if (!carbox_linked_gdma_copyv_bytes_try(blocks, block_count, &result)) {
+		g_ncm_tx_async_stats.gather_fallbacks++;
+		return 0;
+	}
+
+	g_ncm_tx_async_stats.gather_successes++;
+	g_ncm_tx_async_stats.gather_dma_blocks += result.dma_blocks;
+	g_ncm_tx_async_stats.gather_dma_batches += result.dma_batches;
+	g_ncm_tx_async_stats.gather_dma_bytes += result.dma_bytes;
+	g_ncm_tx_async_stats.gather_cpu_edge_bytes += result.cpu_edge_bytes;
+	return 1;
+}
+#endif
 
 static u8 *ncm_batch_closed_output_buffer(const void *context)
 {
@@ -1040,8 +1120,20 @@ int __wrap_ncm_wrap_ntb(void *context, u8 *buffer, u32_t length)
 		payload_offset = ncm_batch_align4(payload_offset);
 		ncm_batch_put_le16(entry, (u16_t)payload_offset);
 		ncm_batch_put_le16(entry + 2U, batch->items[i].p->tot_len);
-		ncm_batch_copy_pbuf(output + payload_offset, batch->items[i].p);
 		payload_offset += batch->items[i].p->tot_len;
+	}
+#if CONFIG_NCM_TX_BATCH_GDMA
+	if (!ncm_batch_gdma_copy(batch, output,
+			ncm_batch_align4(NCM_NTH16_SIZE + ndp_length)))
+#endif
+	{
+		payload_offset = ncm_batch_align4(NCM_NTH16_SIZE + ndp_length);
+		for (i = 0U; i < batch->count; i++) {
+			payload_offset = ncm_batch_align4(payload_offset);
+			ncm_batch_copy_pbuf(output + payload_offset,
+					     batch->items[i].p);
+			payload_offset += batch->items[i].p->tot_len;
+		}
 	}
 	batch->packed_count = batch->count;
 	return (int)total;
@@ -1152,6 +1244,27 @@ static void ncm_tx_async_report(u32_t now)
 	       (unsigned int)CONFIG_NCM_TX_BATCH_MAX_PACKETS,
 	       (unsigned int)CONFIG_NCM_TX_BATCH_MAX_BYTES,
 	       (unsigned int)CONFIG_NCM_TX_BATCH_TIMEOUT_MS);
+#if CONFIG_NCM_TX_BATCH_GDMA
+	printf("[NCMTXASYNC] gather gdma attempt/success/fallback/overflow=%u/%u/%u/%u "
+	       "input blocks/bytes=%u/%u dma blocks/batches/bytes=%u/%u/%u "
+	       "cpu_edge_bytes=%u coverage=%u.%u%%\n",
+	       (unsigned int)snapshot.gather_attempts,
+	       (unsigned int)snapshot.gather_successes,
+	       (unsigned int)snapshot.gather_fallbacks,
+	       (unsigned int)snapshot.gather_block_overflow,
+	       (unsigned int)snapshot.gather_input_blocks,
+	       (unsigned int)snapshot.gather_input_bytes,
+	       (unsigned int)snapshot.gather_dma_blocks,
+	       (unsigned int)snapshot.gather_dma_batches,
+	       (unsigned int)snapshot.gather_dma_bytes,
+	       (unsigned int)snapshot.gather_cpu_edge_bytes,
+	       snapshot.gather_input_bytes != 0U ?
+	       (unsigned int)(((uint64_t)snapshot.gather_dma_bytes * 1000ULL /
+			       snapshot.gather_input_bytes) / 10ULL) : 0U,
+	       snapshot.gather_input_bytes != 0U ?
+	       (unsigned int)(((uint64_t)snapshot.gather_dma_bytes * 1000ULL /
+			       snapshot.gather_input_bytes) % 10ULL) : 0U);
+#endif
 #endif
 #else
 	(void)now;
