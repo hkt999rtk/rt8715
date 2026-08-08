@@ -815,28 +815,28 @@ NET_GDMA_COPY ?= 0
 NET_GDMA_BENCH ?= 0
 NET_GDMA_STATS ?= 0
 NET_GDMA_OWNER_BOOST_PRIORITY ?= 11
-TCP_PHASE_PROFILE ?= 1
+TCP_PHASE_PROFILE ?= 0
 # Detailed 10-second breakdown of tcp_input() processing. This is independent
 # of the compact 5-second TCP_PERF throughput/checksum summary above.
-TCP_CORE_PHASE_PROFILE ?= 1
+TCP_CORE_PHASE_PROFILE ?= 0
 # Ten-second breakdown of tcp_output() and its synchronous WLAN transmit path.
 # This distinguishes ACK/data traffic and separates lwIP preparation/checksum/IP
 # time from skb allocation, scatter-gather copy, and closed-driver submission.
-TCP_OUTPUT_PROFILE ?= 1
+TCP_OUTPUT_PROFILE ?= 0
 # Ten-second timing of the en3 CDC-NCM transmit path.  The closed NCM library
 # waits synchronously for USB completion, so measure that wait separately from
 # any lwIP pbuf-chain flattening done by ethernetif.c.
-NCM_TX_PROFILE ?= 1
+NCM_TX_PROFILE ?= 0
 # Move the closed synchronous NCM send/wait out of TCP_IP.
 NCM_TX_ASYNC ?= 1
-NCM_TX_ASYNC_PROFILE ?= 1
+NCM_TX_ASYNC_PROFILE ?= 0
 # Seal a multi-datagram NTB when it reaches either limit, or 5 ms after the
 # oldest retained Ethernet packet was queued.  The timeout is not sliding.
 NCM_TX_BATCH ?= 1
 NCM_TX_BATCH_MAX_PACKETS ?= 16
 NCM_TX_BATCH_MAX_BYTES ?= 16384
 NCM_TX_BATCH_TIMEOUT_MS ?= 5
-PC_PROFILER ?= 1
+PC_PROFILER ?= 0
 MEMCPY_TASK_PROFILE ?= 0
 LARGE_MEMCPY_GDMA ?= 1
 LARGE_MEMCPY_GDMA_THRESHOLD ?= 4096
@@ -850,7 +850,7 @@ SOCKET_RECV_PROFILE ?= 0
 # recv() batch exceeds 4 KiB.  Sources may be non-contiguous; caller output is
 # contiguous.  Cache-line edges remain on the M33 path.
 SOCKET_RECV_GDMA ?= 1
-SOCKET_RECV_GDMA_PROFILE ?= 1
+SOCKET_RECV_GDMA_PROFILE ?= 0
 SOCKET_RECV_GDMA_THRESHOLD ?= 4096
 # TCP core does not copy payload into a second socket buffer.  This probe
 # measures the pbuf-pointer handoff into recvmbox and the socket wakeup event.
@@ -863,7 +863,7 @@ GCD_SYNC_PROFILE ?= 0
 # Diagnostic A/B switch.  The production default preserves DispatchLite's
 # requested worker priority; set this to a non-negative value only for testing.
 GCD_WORK_PRIORITY ?= -1
-SCREEN_QUEUE_PROFILE ?= 1
+SCREEN_QUEUE_PROFILE ?= 0
 # Remove the closed AirPlay library's redundant full-frame handover memcpy.
 # Phase B retains the temporary allocation until queue publication is proven,
 # then frees it immediately.  The build creates derived archives whose hooks
@@ -874,8 +874,7 @@ VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES ?= 4096
 # Closed AirPlay normal-frame sender optimization. Its payload memcpy is
 # deferred only after object-local allocation/header/layout validation, then
 # AES or ChaCha writes ciphertext directly into wireBuffer + 128.
-# Diagnose handover ownership independently first.  Enable this only after the
-# Phase-B pointer swap passes start/stop/reconnect and long-run testing.
+# The direct path has passed frame correctness, ownership and long-run tests.
 SCREEN_TX_DIRECT_CRYPTO ?= 1
 SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES ?= 4096
 # Keep the expensive, already-concluded diagnostic probes independently
@@ -885,8 +884,8 @@ SCREEN_TCP_BUFFER_PROFILE ?= 0
 # When SCREEN_QUEUE_PROFILE is enabled, correlate the local tick used to
 # generate each outgoing screen NTP timestamp with that frame's receive time.
 SCREEN_TIMESTAMP_PROFILE ?= 0
-USB_HCD_PROFILE ?= 1
-NET_QUEUE_PROFILE ?= 1
+USB_HCD_PROFILE ?= 0
+NET_QUEUE_PROFILE ?= 0
 # Stage 1 validates the preallocated pbuf-pointer mailbox path without
 # aggregation, delay, or GTimer.  Each WLAN packet is still posted immediately.
 TCPIP_RX_BATCH_STAGE1 ?= 1
@@ -1022,10 +1021,11 @@ LFLAGS += -Wl,--wrap=UpTicksToNTP
 endif
 endif
 ifeq ($(VIDEO_HANDOVER_ZERO_COPY),1)
-# Needed even when the queue profiler is disabled: it provides the exact
-# task/source/length scope used by the object-local destination malloc hook.
+# In a non-profile build, retain only the two functional wrappers required for
+# exact transaction scoping and atomic CVector pointer publication.
 ifeq ($(SCREEN_QUEUE_PROFILE),0)
 LFLAGS += -Wl,--wrap=AirPlayScreen_SendVideo
+LFLAGS += -Wl,--wrap=CVector_push_back
 endif
 endif
 ifeq ($(SCREEN_TX_DIRECT_CRYPTO),1)

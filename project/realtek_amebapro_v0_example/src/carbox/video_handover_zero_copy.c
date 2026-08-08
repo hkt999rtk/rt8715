@@ -558,12 +558,57 @@ void carbox_video_handover_report(uint32_t sequence)
 
 #if !CONFIG_SCREEN_QUEUE_PROFILE
 extern void __real_AirPlayScreen_SendVideo(const void *data, int bytes);
+extern void __real_CVector_push_back(void *vector, const void *element);
+
+/* Minimal closed CVector views required by the production handover hook.
+ * Profiling builds use screen_queue_profiler.c's richer wrapper instead. */
+typedef struct video_handover_vector_view_s {
+	int capacity;
+	int size;
+	void *data;
+	int element_size;
+} video_handover_vector_view_t;
+
+typedef struct video_handover_frame_item_s {
+	void *data;
+	int bytes;
+} video_handover_frame_item_t;
 
 void __wrap_AirPlayScreen_SendVideo(const void *data, int bytes)
 {
 	carbox_video_handover_begin(data, bytes);
 	__real_AirPlayScreen_SendVideo(data, bytes);
 	carbox_video_handover_end();
+}
+
+void __wrap_CVector_push_back(void *vector, const void *element)
+{
+	video_handover_vector_view_t *view =
+		(video_handover_vector_view_t *)vector;
+	video_handover_frame_item_t original;
+	video_handover_frame_item_t replacement;
+	int size_before = 0;
+	int prepared = 0;
+
+	/* prepare_push() also validates the active task, exact temporary pointer
+	 * and exact frame length.  The element-size check prevents interpreting an
+	 * unrelated CVector item as AirPlay's {pointer, length} pair. */
+	if ((view != NULL) && (element != NULL) &&
+	    (view->element_size == (int)sizeof(video_handover_frame_item_t))) {
+		original = *(const video_handover_frame_item_t *)element;
+		replacement = original;
+		size_before = view->size;
+		prepared = carbox_video_handover_prepare_push(original.data,
+			original.bytes, &replacement.data);
+	}
+
+	__real_CVector_push_back(vector,
+		prepared ? (const void *)&replacement : element);
+	if (prepared) {
+		int pushed = (view->size == size_before + 1);
+
+		carbox_video_handover_finish_push(original.data, pushed);
+	}
 }
 #endif
 
