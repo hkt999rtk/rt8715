@@ -55,9 +55,8 @@
 #error "Select USB_IRQ_SAFE_DEDUP or the legacy stale-pending experiment, not both"
 #endif
 
-#if CONFIG_USB_IRQ_CH4_NAK_COALESCE && \
-	(!CONFIG_IRQ_PROFILE || !CONFIG_IRQ_PROFILE_USB_CAUSE)
-#error "USB IRQ CH4 NAK coalescing requires USB cause profiling support"
+#if CONFIG_USB_IRQ_CH4_NAK_COALESCE && !CONFIG_IRQ_PROFILE
+#error "USB IRQ CH4 NAK coalescing requires the IRQ profiler counter banks"
 #endif
 
 #if CONFIG_IRQ_PROFILE
@@ -67,6 +66,26 @@
 #define IRQPROF_USB_IRQ 12U
 #define IRQPROF_USB_GINTSTS_ADDR 0x400C0014U
 #define IRQPROF_USB_GINTMSK_ADDR 0x400C0018U
+
+#if CONFIG_IRQ_PROFILE_USB_CAUSE || CONFIG_USB_IRQ_CH3_ACK_FASTPATH || \
+	CONFIG_USB_IRQ_CH4_NAK_COALESCE
+#define IRQPROF_USB_HAINT_ADDR    0x400C0414U
+#define IRQPROF_USB_HAINTMSK_ADDR 0x400C0418U
+#define IRQPROF_USB_HCINT_BASE    0x400C0508U
+#define IRQPROF_USB_HCINT_STRIDE  0x20U
+#define IRQPROF_USB_HCINTMSK_OFF  0x04U
+#define IRQPROF_USB_HCINT_MASK    (1U << 25)
+#endif
+
+#if CONFIG_USB_IRQ_CH4_NAK_COALESCE
+enum irqprof_usb_ch4_coalesce_counter {
+	IRQPROF_USB_CH4_COALESCE_DEFER,
+	IRQPROF_USB_CH4_COALESCE_MERGE,
+	IRQPROF_USB_CH4_COALESCE_TIMEOUT,
+	IRQPROF_USB_CH4_COALESCE_HALT_CLEARED_NAK,
+	IRQPROF_USB_CH4_COALESCE_COUNTER_COUNT,
+};
+#endif
 
 #if CONFIG_IRQ_PROFILE_USB_CH4_NCM
 struct irqprof_usb_ch4_ncm_stats {
@@ -150,14 +169,8 @@ enum irqprof_usb_dedup_counter {
 #endif
 
 #if CONFIG_IRQ_PROFILE_USB_CAUSE
-#define IRQPROF_USB_HAINT_ADDR    0x400C0414U
-#define IRQPROF_USB_HAINTMSK_ADDR 0x400C0418U
-#define IRQPROF_USB_HCINT_BASE    0x400C0508U
-#define IRQPROF_USB_HCINT_STRIDE  0x20U
-#define IRQPROF_USB_HCINTMSK_OFF  0x04U
 #define IRQPROF_USB_SOF_MASK     (1U << 3)
 #define IRQPROF_USB_PORT_MASK    (1U << 24)
-#define IRQPROF_USB_HCINT_MASK   (1U << 25)
 #define IRQPROF_USB_KNOWN_MASK   (IRQPROF_USB_SOF_MASK | \
 				  IRQPROF_USB_PORT_MASK | \
 				  IRQPROF_USB_HCINT_MASK)
@@ -185,16 +198,6 @@ enum irqprof_usb_ch3_ack_counter {
 	IRQPROF_USB_CH3_ACK_FAST_DROP,
 	IRQPROF_USB_CH3_ACK_COUNTER_COUNT,
 };
-
-#if CONFIG_USB_IRQ_CH4_NAK_COALESCE
-enum irqprof_usb_ch4_coalesce_counter {
-	IRQPROF_USB_CH4_COALESCE_DEFER,
-	IRQPROF_USB_CH4_COALESCE_MERGE,
-	IRQPROF_USB_CH4_COALESCE_TIMEOUT,
-	IRQPROF_USB_CH4_COALESCE_HALT_CLEARED_NAK,
-	IRQPROF_USB_CH4_COALESCE_COUNTER_COUNT,
-};
-#endif
 
 #if CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE
 enum irqprof_usb_ch4_sequence_counter {
@@ -291,6 +294,15 @@ static volatile uint32_t
 	__attribute__((used));
 static uint32_t irqprof_usb_dedup_snapshot[IRQPROF_USB_DEDUP_COUNTER_COUNT];
 #endif
+#if CONFIG_USB_IRQ_CH4_NAK_COALESCE
+static volatile uint32_t irqprof_usb_ch4_coalesce_pending;
+static volatile uint32_t irqprof_usb_ch4_coalesce_start_cycles;
+static volatile uint32_t
+	irqprof_usb_ch4_coalesce_counts[2][IRQPROF_USB_CH4_COALESCE_COUNTER_COUNT]
+	__attribute__((used));
+static uint32_t
+	irqprof_usb_ch4_coalesce_snapshot[IRQPROF_USB_CH4_COALESCE_COUNTER_COUNT];
+#endif
 #if CONFIG_IRQ_PROFILE_USB_CAUSE
 static volatile uint32_t
 	irqprof_usb_counts[2][IRQPROF_USB_COUNTER_COUNT] __attribute__((used));
@@ -323,15 +335,6 @@ static uint32_t
 static uint32_t irqprof_usb_channel_hcchar_snapshot[IRQPROF_USB_CHANNEL_COUNT];
 static uint32_t
 	irqprof_usb_ch3_ack_snapshot[IRQPROF_USB_CH3_ACK_COUNTER_COUNT];
-#if CONFIG_USB_IRQ_CH4_NAK_COALESCE
-static volatile uint32_t irqprof_usb_ch4_coalesce_pending;
-static volatile uint32_t irqprof_usb_ch4_coalesce_start_cycles;
-static volatile uint32_t
-	irqprof_usb_ch4_coalesce_counts[2][IRQPROF_USB_CH4_COALESCE_COUNTER_COUNT]
-	__attribute__((used));
-static uint32_t
-	irqprof_usb_ch4_coalesce_snapshot[IRQPROF_USB_CH4_COALESCE_COUNTER_COUNT];
-#endif
 #if CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE
 static volatile uint32_t irqprof_usb_ch4_sequence_pending;
 static volatile uint32_t irqprof_usb_ch4_sequence_start_cycles;
@@ -689,8 +692,10 @@ __wrap_usb_hal_read_interrupts(void)
 			if (reasons == (1U << 5) &&
 			    (hctsiz & (1UL << 31)) == 0U) {
 				*(volatile uint32_t *)(uintptr_t)hcint_addr = 1U << 5;
+#if CONFIG_IRQ_PROFILE_USB_CAUSE
 				irqprof_usb_ch3_ack_counts[irqprof_active_bank]
 					[IRQPROF_USB_CH3_ACK_FAST_DROP]++;
+#endif
 				__DSB();
 			}
 		}
@@ -1152,6 +1157,10 @@ void carbox_irq_profiler_snapshot(uint32_t profiler_irq,
 	memset((void *)irqprof_usb_dedup_counts[new_bank], 0,
 	       sizeof(irqprof_usb_dedup_counts[new_bank]));
 #endif
+#if CONFIG_USB_IRQ_CH4_NAK_COALESCE
+	memset((void *)irqprof_usb_ch4_coalesce_counts[new_bank], 0,
+	       sizeof(irqprof_usb_ch4_coalesce_counts[new_bank]));
+#endif
 #if CONFIG_IRQ_PROFILE_USB_CAUSE
 	memset((void *)irqprof_usb_counts[new_bank], 0,
 	       sizeof(irqprof_usb_counts[new_bank]));
@@ -1165,10 +1174,6 @@ void carbox_irq_profiler_snapshot(uint32_t profiler_irq,
 	       sizeof(irqprof_usb_channel_hcchar[new_bank]));
 	memset((void *)irqprof_usb_ch3_ack_counts[new_bank], 0,
 	       sizeof(irqprof_usb_ch3_ack_counts[new_bank]));
-#if CONFIG_USB_IRQ_CH4_NAK_COALESCE
-	memset((void *)irqprof_usb_ch4_coalesce_counts[new_bank], 0,
-	       sizeof(irqprof_usb_ch4_coalesce_counts[new_bank]));
-#endif
 #if CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE
 	memset((void *)irqprof_usb_ch4_sequence_counts[new_bank], 0,
 	       sizeof(irqprof_usb_ch4_sequence_counts[new_bank]));
@@ -1212,6 +1217,12 @@ void carbox_irq_profiler_snapshot(uint32_t profiler_irq,
 			irqprof_usb_dedup_counts[old_bank][i];
 	}
 #endif
+#if CONFIG_USB_IRQ_CH4_NAK_COALESCE
+	for (i = 0U; i < IRQPROF_USB_CH4_COALESCE_COUNTER_COUNT; ++i) {
+		irqprof_usb_ch4_coalesce_snapshot[i] =
+			irqprof_usb_ch4_coalesce_counts[old_bank][i];
+	}
+#endif
 #if CONFIG_IRQ_PROFILE_USB_CAUSE
 	for (i = 0U; i < IRQPROF_USB_COUNTER_COUNT; ++i) {
 		irqprof_usb_snapshot[i] = irqprof_usb_counts[old_bank][i];
@@ -1235,12 +1246,6 @@ void carbox_irq_profiler_snapshot(uint32_t profiler_irq,
 		irqprof_usb_ch3_ack_snapshot[i] =
 			irqprof_usb_ch3_ack_counts[old_bank][i];
 	}
-#if CONFIG_USB_IRQ_CH4_NAK_COALESCE
-	for (i = 0U; i < IRQPROF_USB_CH4_COALESCE_COUNTER_COUNT; ++i) {
-		irqprof_usb_ch4_coalesce_snapshot[i] =
-			irqprof_usb_ch4_coalesce_counts[old_bank][i];
-	}
-#endif
 #if CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE
 	for (i = 0U; i < IRQPROF_USB_CH4_SEQ_COUNTER_COUNT; ++i) {
 		irqprof_usb_ch4_sequence_snapshot[i] =
@@ -1354,6 +1359,24 @@ void carbox_irq_profiler_report(uint32_t sequence, uint32_t window_ms)
 				irqprof_snapshot_profiler_accounted));
 	}
 
+#if CONFIG_USB_IRQ_CH4_NAK_COALESCE
+	rt_printf("[IRQPROF][%lu][USB_CH4_COALESCE] "
+		  "defer/merge/timeout/halt_cleared_nak=%lu/%lu/%lu/%lu "
+		  "pending=%lu saved_handoff_rate=%lu/s\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)irqprof_usb_ch4_coalesce_snapshot[
+			IRQPROF_USB_CH4_COALESCE_DEFER],
+		  (unsigned long)irqprof_usb_ch4_coalesce_snapshot[
+			IRQPROF_USB_CH4_COALESCE_MERGE],
+		  (unsigned long)irqprof_usb_ch4_coalesce_snapshot[
+			IRQPROF_USB_CH4_COALESCE_TIMEOUT],
+		  (unsigned long)irqprof_usb_ch4_coalesce_snapshot[
+			IRQPROF_USB_CH4_COALESCE_HALT_CLEARED_NAK],
+		  (unsigned long)irqprof_usb_ch4_coalesce_pending,
+		  (unsigned long)(((uint64_t)irqprof_usb_ch4_coalesce_snapshot[
+			IRQPROF_USB_CH4_COALESCE_MERGE] * 1000U) / window_ms));
+#endif
+
 #if CONFIG_IRQ_PROFILE_USB_CAUSE
 	{
 		uint32_t samples = irqprof_usb_snapshot[IRQPROF_USB_SAMPLE];
@@ -1432,25 +1455,6 @@ void carbox_irq_profiler_report(uint32_t sequence, uint32_t window_ms)
 					IRQPROF_USB_CH3_ACK_DOPING] * 10000U /
 				 irqprof_usb_ch3_ack_snapshot[IRQPROF_USB_CH3_ACK]) %
 				100U : 0U));
-#if CONFIG_USB_IRQ_CH4_NAK_COALESCE
-		rt_printf("[IRQPROF][%lu][USB_CH4_COALESCE] "
-			  "defer/merge/timeout/halt_cleared_nak=%lu/%lu/%lu/%lu "
-			  "pending=%lu saved_handoff_rate=%lu/s\r\n",
-			  (unsigned long)sequence,
-			  (unsigned long)irqprof_usb_ch4_coalesce_snapshot[
-				IRQPROF_USB_CH4_COALESCE_DEFER],
-			  (unsigned long)irqprof_usb_ch4_coalesce_snapshot[
-				IRQPROF_USB_CH4_COALESCE_MERGE],
-			  (unsigned long)irqprof_usb_ch4_coalesce_snapshot[
-				IRQPROF_USB_CH4_COALESCE_TIMEOUT],
-			  (unsigned long)irqprof_usb_ch4_coalesce_snapshot[
-				IRQPROF_USB_CH4_COALESCE_HALT_CLEARED_NAK],
-			  (unsigned long)irqprof_usb_ch4_coalesce_pending,
-			  (unsigned long)(((uint64_t)
-				irqprof_usb_ch4_coalesce_snapshot[
-					IRQPROF_USB_CH4_COALESCE_MERGE] * 1000U) /
-				window_ms));
-#endif
 		{
 			uint8_t channel_selected[IRQPROF_USB_CHANNEL_COUNT] = { 0U };
 			uint32_t rank;
@@ -1686,7 +1690,7 @@ void carbox_irq_profiler_report(uint32_t sequence, uint32_t window_ms)
 		  (unsigned long)irqprof_usb_ch4_ncm.receive_size_calls);
 #endif
 
-#if CONFIG_USB_IRQ_SAFE_DEDUP
+#if CONFIG_USB_IRQ_SAFE_DEDUP && CONFIG_IRQ_PROFILE_USB_HANDOFF
 	rt_printf("[IRQPROF][%lu][USB_DEDUP] "
 		  "calls/nvic_pending/controller_pending/repend=%lu/%lu/%lu/%lu\r\n",
 		  (unsigned long)sequence,

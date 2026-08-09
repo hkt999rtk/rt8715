@@ -856,19 +856,19 @@ PC_PROFILER_RTW_DUMP_PROFILE ?= 0
 IRQ_PROFILE ?= 1
 # Diagnose the high-rate USB interrupt source by sampling GINTSTS & GINTMSK in
 # the IRQ trampoline.  This is independent of the aggregate IRQ counters.
-IRQ_PROFILE_USB_CAUSE ?= 1
+IRQ_PROFILE_USB_CAUSE ?= 0
 # Low-overhead measurement at the existing ISR semaphore-give wrapper: count
 # successful wakeups and ISR-return yield requests only.
-IRQ_PROFILE_USB_HANDOFF ?= 1
+IRQ_PROFILE_USB_HANDOFF ?= 0
 # Attribute channel-4 NAK/CHHLTD bottom-half service time and halt calls.
 # This is diagnostic only; the wrapper always calls the vendor implementation.
-IRQ_PROFILE_USB_CH4_FLOW ?= 1
+IRQ_PROFILE_USB_CH4_FLOW ?= 0
 # Capture CDC-NCM NTB negotiation so channel-4's fixed 2 KiB receive submits
 # can be attributed to the device parameters or the host-side size selection.
-IRQ_PROFILE_USB_CH4_NCM ?= 1
+IRQ_PROFILE_USB_CH4_NCM ?= 0
 # After a channel-4 NAK, identify whether the next accepted receive submit or
 # CHHLTD arrives first. Diagnostic only; no HCD state or IRQ mask is changed.
-IRQ_PROFILE_USB_CH4_SEQUENCE ?= 1
+IRQ_PROFILE_USB_CH4_SEQUENCE ?= 0
 # Drop the stale NVIC latch just before the HCD task re-enables USB_IRQn, then
 # re-read the controller and software-pend any cause which arrived in the
 # clear/re-enable race window.
@@ -941,7 +941,7 @@ SCREEN_TIMESTAMP_PROFILE ?= 0
 USB_HCD_PROFILE ?= 0
 # Narrow NCM channel submit-size diagnostic.  This wraps only HCD submit and
 # is intentionally independent of the older verbose USB_HCD_PROFILE.
-USB_HCD_CHANNEL_PROFILE ?= 1
+USB_HCD_CHANNEL_PROFILE ?= 0
 NET_QUEUE_PROFILE ?= 0
 # Stage 1 validates the preallocated pbuf-pointer mailbox path without
 # aggregation, delay, or GTimer.  Each WLAN packet is still posted immediately.
