@@ -864,6 +864,10 @@ IRQ_PROFILE_USB_HANDOFF ?= 1
 # re-read the controller and software-pend any cause which arrived in the
 # clear/re-enable race window.
 USB_IRQ_SAFE_DEDUP ?= 1
+# Drop channel-3 ACK-only/non-PING causes in the IRQ top half.  The closed HCD
+# otherwise wakes its priority-11 task even though its ordinary ACK path is a
+# no-op.  PING ACK and every compound cause retain the vendor path.
+USB_IRQ_CH3_ACK_FASTPATH ?= 1
 # The closed HCD disables USB_IRQn in its top half and re-enables it only after
 # the ISR task drains HCINT.  Retain the original unsafe single-check experiment
 # as an off-by-default rollback reference; do not enable with SAFE_DEDUP.
@@ -894,6 +898,9 @@ GCD_SYNC_PROFILE ?= 0
 # Diagnostic A/B switch.  The production default preserves DispatchLite's
 # requested worker priority; set this to a non-negative value only for testing.
 GCD_WORK_PRIORITY ?= -1
+# The closed USB HCD bottom half is short and must run immediately after the
+# top-half ISR masks USB_IRQn.  Keep it above all normal networking tasks.
+USBH_ISR_TASK_PRIORITY ?= 11
 SCREEN_QUEUE_PROFILE ?= 0
 # Remove the closed AirPlay library's redundant full-frame handover memcpy.
 # Phase B retains the temporary allocation until queue publication is proven,
@@ -968,6 +975,7 @@ GCCFLAGS += -DCONFIG_IRQ_PROFILE=$(IRQ_PROFILE)
 GCCFLAGS += -DCONFIG_IRQ_PROFILE_USB_CAUSE=$(IRQ_PROFILE_USB_CAUSE)
 GCCFLAGS += -DCONFIG_IRQ_PROFILE_USB_HANDOFF=$(IRQ_PROFILE_USB_HANDOFF)
 GCCFLAGS += -DCONFIG_USB_IRQ_SAFE_DEDUP=$(USB_IRQ_SAFE_DEDUP)
+GCCFLAGS += -DCONFIG_USB_IRQ_CH3_ACK_FASTPATH=$(USB_IRQ_CH3_ACK_FASTPATH)
 GCCFLAGS += -DCONFIG_USB_IRQ_CLEAR_STALE_PENDING=$(USB_IRQ_CLEAR_STALE_PENDING)
 GCCFLAGS += -DCONFIG_MEMCPY_TASK_PROFILE=$(MEMCPY_TASK_PROFILE)
 GCCFLAGS += -DCONFIG_LARGE_MEMCPY_GDMA=$(LARGE_MEMCPY_GDMA)
@@ -982,6 +990,7 @@ GCCFLAGS += -DCONFIG_TCP_SOCKET_HANDOFF_PROFILE=$(TCP_SOCKET_HANDOFF_PROFILE)
 GCCFLAGS += -DCONFIG_GDMA_RESERVE_MULTIBLOCK_CHANNELS=$(GDMA_RESERVE_MULTIBLOCK_CHANNELS)
 GCCFLAGS += -DCONFIG_GCD_SYNC_PROFILE=$(GCD_SYNC_PROFILE)
 GCCFLAGS += -DCONFIG_GCD_WORK_PRIORITY=$(GCD_WORK_PRIORITY)
+GCCFLAGS += -DCONFIG_USBH_ISR_TASK_PRIORITY=$(USBH_ISR_TASK_PRIORITY)
 GCCFLAGS += -DCONFIG_SCREEN_QUEUE_PROFILE=$(SCREEN_QUEUE_PROFILE)
 GCCFLAGS += -DCONFIG_VIDEO_HANDOVER_ZERO_COPY=$(VIDEO_HANDOVER_ZERO_COPY)
 GCCFLAGS += -DVIDEO_HANDOVER_ZERO_COPY_MIN_BYTES=$(VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES)
@@ -1058,10 +1067,13 @@ endif
 ifneq ($(filter 1,$(USB_IRQ_SAFE_DEDUP) $(USB_IRQ_CLEAR_STALE_PENDING)),)
 LFLAGS += -Wl,--wrap=usb_hal_enable_interrupt
 endif
+ifeq ($(USB_IRQ_CH3_ACK_FASTPATH),1)
+LFLAGS += -Wl,--wrap=usb_hal_read_interrupts
+endif
 ifeq ($(GCD_SYNC_PROFILE),1)
 LFLAGS += -Wl,--wrap=dispatch_sync_f
 endif
-ifneq ($(GCD_WORK_PRIORITY),-1)
+ifneq ($(strip $(filter-out -1,$(GCD_WORK_PRIORITY) $(USBH_ISR_TASK_PRIORITY))),)
 LFLAGS += -Wl,--wrap=xTaskCreate
 endif
 ifeq ($(NCM_TX_BATCH),1)

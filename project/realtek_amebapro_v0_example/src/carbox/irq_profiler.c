@@ -27,6 +27,10 @@
 #define CONFIG_USB_IRQ_SAFE_DEDUP 0
 #endif
 
+#ifndef CONFIG_USB_IRQ_CH3_ACK_FASTPATH
+#define CONFIG_USB_IRQ_CH3_ACK_FASTPATH 0
+#endif
+
 #if CONFIG_USB_IRQ_SAFE_DEDUP && CONFIG_USB_IRQ_CLEAR_STALE_PENDING
 #error "Select USB_IRQ_SAFE_DEDUP or the legacy stale-pending experiment, not both"
 #endif
@@ -48,6 +52,27 @@ enum irqprof_usb_handoff_counter {
 	IRQPROF_USB_HANDOFF_NO_YIELD,
 	IRQPROF_USB_HANDOFF_COUNTER_COUNT,
 };
+
+#if CONFIG_IRQ_PROFILE_USB_CAUSE
+enum irqprof_usb_channel_handoff_counter {
+	IRQPROF_USB_CHANNEL_HANDOFF_GIVE,
+	IRQPROF_USB_CHANNEL_HANDOFF_YIELD,
+	IRQPROF_USB_CHANNEL_HANDOFF_COUNTER_COUNT,
+};
+
+enum irqprof_usb_ch4_halt_gap_counter {
+	IRQPROF_USB_CH4_GAP_SAMPLE,
+	IRQPROF_USB_CH4_GAP_LE_2US,
+	IRQPROF_USB_CH4_GAP_LE_5US,
+	IRQPROF_USB_CH4_GAP_LE_10US,
+	IRQPROF_USB_CH4_GAP_LE_20US,
+	IRQPROF_USB_CH4_GAP_LE_50US,
+	IRQPROF_USB_CH4_GAP_LE_100US,
+	IRQPROF_USB_CH4_GAP_GT_100US,
+	IRQPROF_USB_CH4_GAP_MAX_CYCLES,
+	IRQPROF_USB_CH4_GAP_COUNTER_COUNT,
+};
+#endif
 #endif
 
 #if CONFIG_USB_IRQ_SAFE_DEDUP
@@ -89,6 +114,13 @@ enum irqprof_usb_counter {
 
 #define IRQPROF_USB_CHANNEL_COUNT 16U
 #define IRQPROF_USB_HC_REASON_COUNT 14U
+
+enum irqprof_usb_ch3_ack_counter {
+	IRQPROF_USB_CH3_ACK,
+	IRQPROF_USB_CH3_ACK_DOPING,
+	IRQPROF_USB_CH3_ACK_FAST_DROP,
+	IRQPROF_USB_CH3_ACK_COUNTER_COUNT,
+};
 
 #if CONFIG_USB_IRQ_CLEAR_STALE_PENDING
 enum irqprof_usb_reenable_counter {
@@ -132,6 +164,24 @@ static volatile uint32_t
 	__attribute__((used));
 static uint32_t
 	irqprof_usb_handoff_snapshot[IRQPROF_USB_HANDOFF_COUNTER_COUNT];
+#if CONFIG_IRQ_PROFILE_USB_CAUSE
+static volatile uint32_t irqprof_usb_current_channels;
+static volatile uint32_t irqprof_usb_current_ch4_reasons;
+static volatile uint32_t irqprof_usb_ch4_reenable_cycles;
+static volatile uint32_t irqprof_usb_ch4_reenable_valid;
+static volatile uint32_t
+	irqprof_usb_channel_handoff_counts[2][IRQPROF_USB_CHANNEL_COUNT]
+		[IRQPROF_USB_CHANNEL_HANDOFF_COUNTER_COUNT]
+	__attribute__((used));
+static uint32_t
+	irqprof_usb_channel_handoff_snapshot[IRQPROF_USB_CHANNEL_COUNT]
+		[IRQPROF_USB_CHANNEL_HANDOFF_COUNTER_COUNT];
+static volatile uint32_t
+	irqprof_usb_ch4_halt_gap_counts[2][IRQPROF_USB_CH4_GAP_COUNTER_COUNT]
+	__attribute__((used));
+static uint32_t
+	irqprof_usb_ch4_halt_gap_snapshot[IRQPROF_USB_CH4_GAP_COUNTER_COUNT];
+#endif
 #endif
 #if CONFIG_IRQ_PROFILE_USB_HANDOFF || CONFIG_USB_IRQ_SAFE_DEDUP
 static volatile uint32_t irqprof_usb_handoff_reenable_expected;
@@ -157,6 +207,9 @@ static volatile uint32_t
 static volatile uint32_t
 	irqprof_usb_channel_hcchar[2][IRQPROF_USB_CHANNEL_COUNT]
 	__attribute__((used));
+static volatile uint32_t
+	irqprof_usb_ch3_ack_counts[2][IRQPROF_USB_CH3_ACK_COUNTER_COUNT]
+	__attribute__((used));
 #if CONFIG_USB_IRQ_CLEAR_STALE_PENDING
 static volatile uint32_t
 	irqprof_usb_reenable_counts[2][IRQPROF_USB_REENABLE_COUNTER_COUNT]
@@ -169,6 +222,8 @@ static uint32_t
 	irqprof_usb_channel_reason_snapshot[IRQPROF_USB_CHANNEL_COUNT]
 		[IRQPROF_USB_HC_REASON_COUNT];
 static uint32_t irqprof_usb_channel_hcchar_snapshot[IRQPROF_USB_CHANNEL_COUNT];
+static uint32_t
+	irqprof_usb_ch3_ack_snapshot[IRQPROF_USB_CH3_ACK_COUNTER_COUNT];
 #if CONFIG_USB_IRQ_CLEAR_STALE_PENDING
 static uint32_t
 	irqprof_usb_reenable_snapshot[IRQPROF_USB_REENABLE_COUNTER_COUNT];
@@ -193,6 +248,12 @@ irqprof_usb_cause_sample(void)
 	uint32_t pending = status & mask;
 	uint32_t categories = 0U;
 
+#if CONFIG_IRQ_PROFILE_USB_HANDOFF
+	/* Consumed later in this same IRQ by the HCD semaphore-give wrapper. */
+	irqprof_usb_current_channels = 0U;
+	irqprof_usb_current_ch4_reasons = 0U;
+#endif
+
 	counts[IRQPROF_USB_SAMPLE]++;
 	if (pending == 0U) {
 		counts[IRQPROF_USB_ZERO]++;
@@ -209,6 +270,10 @@ irqprof_usb_cause_sample(void)
 			*(volatile uint32_t *)(uintptr_t)IRQPROF_USB_HAINTMSK_ADDR &
 			0xFFFFU;
 		uint32_t channel;
+
+#if CONFIG_IRQ_PROFILE_USB_HANDOFF
+		irqprof_usb_current_channels = channels;
+#endif
 
 		counts[IRQPROF_USB_HCINT]++;
 		categories++;
@@ -234,6 +299,52 @@ irqprof_usb_cause_sample(void)
 				*(volatile uint32_t *)(uintptr_t)hcint_addr &
 				*(volatile uint32_t *)(uintptr_t)
 					(hcint_addr + IRQPROF_USB_HCINTMSK_OFF);
+#if CONFIG_IRQ_PROFILE_USB_HANDOFF
+			if (channel == 4U) {
+				irqprof_usb_current_ch4_reasons = reasons;
+				if ((reasons & (1U << 1)) != 0U &&
+				    irqprof_usb_ch4_reenable_valid != 0U) {
+					volatile uint32_t *gap =
+						irqprof_usb_ch4_halt_gap_counts[bank];
+					uint32_t delta = DWT->CYCCNT -
+						irqprof_usb_ch4_reenable_cycles;
+					uint32_t cycles_per_us = SystemCoreClock /
+						1000000U;
+
+					irqprof_usb_ch4_reenable_valid = 0U;
+					gap[IRQPROF_USB_CH4_GAP_SAMPLE]++;
+					if (delta > gap[IRQPROF_USB_CH4_GAP_MAX_CYCLES]) {
+						gap[IRQPROF_USB_CH4_GAP_MAX_CYCLES] = delta;
+					}
+					if (cycles_per_us == 0U ||
+					    delta <= cycles_per_us * 2U) {
+						gap[IRQPROF_USB_CH4_GAP_LE_2US]++;
+					} else if (delta <= cycles_per_us * 5U) {
+						gap[IRQPROF_USB_CH4_GAP_LE_5US]++;
+					} else if (delta <= cycles_per_us * 10U) {
+						gap[IRQPROF_USB_CH4_GAP_LE_10US]++;
+					} else if (delta <= cycles_per_us * 20U) {
+						gap[IRQPROF_USB_CH4_GAP_LE_20US]++;
+					} else if (delta <= cycles_per_us * 50U) {
+						gap[IRQPROF_USB_CH4_GAP_LE_50US]++;
+					} else if (delta <= cycles_per_us * 100U) {
+						gap[IRQPROF_USB_CH4_GAP_LE_100US]++;
+					} else {
+						gap[IRQPROF_USB_CH4_GAP_GT_100US]++;
+					}
+				}
+			}
+#endif
+			if (channel == 3U && (reasons & (1U << 5)) != 0U) {
+				uint32_t hctsiz = *(volatile uint32_t *)(uintptr_t)
+					(hcint_addr + 8U);
+
+				irqprof_usb_ch3_ack_counts[bank][IRQPROF_USB_CH3_ACK]++;
+				if ((hctsiz & (1UL << 31)) != 0U) {
+					irqprof_usb_ch3_ack_counts[bank]
+						[IRQPROF_USB_CH3_ACK_DOPING]++;
+				}
+			}
 			for (reason = 0U; reason < IRQPROF_USB_HC_REASON_COUNT;
 			     ++reason) {
 				if ((reasons & (1U << reason)) != 0U) {
@@ -263,6 +374,47 @@ irqprof_usb_cause_sample(void)
 	}
 }
 #endif /* CONFIG_IRQ_PROFILE_USB_CAUSE */
+
+#if CONFIG_USB_IRQ_CH3_ACK_FASTPATH
+extern uint32_t __real_usb_hal_read_interrupts(void);
+
+/*
+ * The closed HCD enables ACK in the non-DMA bulk-OUT mask even though its ACK
+ * branch changes state only for a successful PING.  Drop a plain channel-3
+ * ACK before the vendor top half samples GINTSTS.  Returning through the real
+ * helper then yields zero, so the vendor handler re-enables USB_IRQn without
+ * waking the HCD task.  Any ambiguity falls through untouched.
+ */
+uint32_t __wrap_usb_hal_read_interrupts(void)
+{
+	if (__get_IPSR() == (16U + IRQPROF_USB_IRQ)) {
+		uint32_t channels =
+			*(volatile uint32_t *)(uintptr_t)IRQPROF_USB_HAINT_ADDR &
+			*(volatile uint32_t *)(uintptr_t)IRQPROF_USB_HAINTMSK_ADDR &
+			0xFFFFU;
+
+		if (channels == (1U << 3)) {
+			uint32_t hcint_addr = IRQPROF_USB_HCINT_BASE +
+				3U * IRQPROF_USB_HCINT_STRIDE;
+			uint32_t reasons =
+				*(volatile uint32_t *)(uintptr_t)hcint_addr &
+				*(volatile uint32_t *)(uintptr_t)
+					(hcint_addr + IRQPROF_USB_HCINTMSK_OFF);
+			uint32_t hctsiz = *(volatile uint32_t *)(uintptr_t)
+				(hcint_addr + 8U);
+
+			if (reasons == (1U << 5) &&
+			    (hctsiz & (1UL << 31)) == 0U) {
+				*(volatile uint32_t *)(uintptr_t)hcint_addr = 1U << 5;
+				irqprof_usb_ch3_ack_counts[irqprof_active_bank]
+					[IRQPROF_USB_CH3_ACK_FAST_DROP]++;
+				__DSB();
+			}
+		}
+	}
+	return __real_usb_hal_read_interrupts();
+}
+#endif
 
 #if CONFIG_USB_IRQ_SAFE_DEDUP || CONFIG_USB_IRQ_CLEAR_STALE_PENDING
 extern void __real_usb_hal_enable_interrupt(void);
@@ -312,6 +464,17 @@ void __wrap_usb_hal_enable_interrupt(void)
 			irqprof_usb_dedup_counts[dedup_bank]
 				[IRQPROF_USB_DEDUP_REPEND]++;
 		}
+#if CONFIG_IRQ_PROFILE_USB_CAUSE && CONFIG_IRQ_PROFILE_USB_HANDOFF
+		/* A ch4 NAK is handled by the HCD task by halting the channel.  Time
+		 * how soon the resulting CHHLTD becomes visible after IRQ re-enable;
+		 * this determines whether a short bounded coalescing window is viable. */
+		if ((irqprof_usb_current_channels & (1U << 4)) != 0U &&
+		    (irqprof_usb_current_ch4_reasons & (1U << 4)) != 0U &&
+		    (irqprof_usb_current_ch4_reasons & (1U << 1)) == 0U) {
+			irqprof_usb_ch4_reenable_cycles = DWT->CYCCNT;
+			irqprof_usb_ch4_reenable_valid = 1U;
+		}
+#endif
 	}
 #endif
 #if CONFIG_USB_IRQ_CLEAR_STALE_PENDING
@@ -354,6 +517,24 @@ void carbox_irq_profiler_usb_sema_give(void *handle, int success,
 
 #if CONFIG_IRQ_PROFILE_USB_HANDOFF
 	irqprof_usb_handoff_counts[bank][IRQPROF_USB_HANDOFF_GIVE_OK]++;
+	{
+		uint32_t channel;
+		uint32_t channels = irqprof_usb_current_channels;
+
+		/* NCM currently occupies channels 2..4.  Keeping this narrow avoids
+		 * turning the diagnostic itself into measurable ISR work. */
+		for (channel = 2U; channel <= 4U; ++channel) {
+			if ((channels & (1U << channel)) == 0U) {
+				continue;
+			}
+			irqprof_usb_channel_handoff_counts[bank][channel]
+				[IRQPROF_USB_CHANNEL_HANDOFF_GIVE]++;
+			if (higher_priority_task_woken) {
+				irqprof_usb_channel_handoff_counts[bank][channel]
+					[IRQPROF_USB_CHANNEL_HANDOFF_YIELD]++;
+			}
+		}
+	}
 	if (higher_priority_task_woken) {
 		irqprof_usb_handoff_counts[bank][IRQPROF_USB_HANDOFF_YIELD]++;
 	} else {
@@ -561,6 +742,12 @@ void carbox_irq_profiler_snapshot(uint32_t profiler_irq,
 #if CONFIG_IRQ_PROFILE_USB_HANDOFF
 	memset((void *)irqprof_usb_handoff_counts[new_bank], 0,
 	       sizeof(irqprof_usb_handoff_counts[new_bank]));
+#if CONFIG_IRQ_PROFILE_USB_CAUSE
+	memset((void *)irqprof_usb_channel_handoff_counts[new_bank], 0,
+	       sizeof(irqprof_usb_channel_handoff_counts[new_bank]));
+	memset((void *)irqprof_usb_ch4_halt_gap_counts[new_bank], 0,
+	       sizeof(irqprof_usb_ch4_halt_gap_counts[new_bank]));
+#endif
 #endif
 #if CONFIG_USB_IRQ_SAFE_DEDUP
 	memset((void *)irqprof_usb_dedup_counts[new_bank], 0,
@@ -577,6 +764,8 @@ void carbox_irq_profiler_snapshot(uint32_t profiler_irq,
 	       sizeof(irqprof_usb_channel_reason_counts[new_bank]));
 	memset((void *)irqprof_usb_channel_hcchar[new_bank], 0,
 	       sizeof(irqprof_usb_channel_hcchar[new_bank]));
+	memset((void *)irqprof_usb_ch3_ack_counts[new_bank], 0,
+	       sizeof(irqprof_usb_ch3_ack_counts[new_bank]));
 #if CONFIG_USB_IRQ_CLEAR_STALE_PENDING
 	memset((void *)irqprof_usb_reenable_counts[new_bank], 0,
 	       sizeof(irqprof_usb_reenable_counts[new_bank]));
@@ -592,6 +781,17 @@ void carbox_irq_profiler_snapshot(uint32_t profiler_irq,
 		irqprof_usb_handoff_snapshot[i] =
 			irqprof_usb_handoff_counts[old_bank][i];
 	}
+#if CONFIG_IRQ_PROFILE_USB_CAUSE
+	for (i = 0U; i < IRQPROF_USB_CHANNEL_COUNT; ++i) {
+		memcpy(irqprof_usb_channel_handoff_snapshot[i],
+		       (const void *)irqprof_usb_channel_handoff_counts[old_bank][i],
+		       sizeof(irqprof_usb_channel_handoff_snapshot[i]));
+	}
+	for (i = 0U; i < IRQPROF_USB_CH4_GAP_COUNTER_COUNT; ++i) {
+		irqprof_usb_ch4_halt_gap_snapshot[i] =
+			irqprof_usb_ch4_halt_gap_counts[old_bank][i];
+	}
+#endif
 #endif
 #if CONFIG_USB_IRQ_SAFE_DEDUP
 	for (i = 0U; i < IRQPROF_USB_DEDUP_COUNTER_COUNT; ++i) {
@@ -617,6 +817,10 @@ void carbox_irq_profiler_snapshot(uint32_t profiler_irq,
 		       sizeof(irqprof_usb_channel_reason_snapshot[i]));
 		irqprof_usb_channel_hcchar_snapshot[i] =
 			irqprof_usb_channel_hcchar[old_bank][i];
+	}
+	for (i = 0U; i < IRQPROF_USB_CH3_ACK_COUNTER_COUNT; ++i) {
+		irqprof_usb_ch3_ack_snapshot[i] =
+			irqprof_usb_ch3_ack_counts[old_bank][i];
 	}
 #if CONFIG_USB_IRQ_CLEAR_STALE_PENDING
 	for (i = 0U; i < IRQPROF_USB_REENABLE_COUNTER_COUNT; ++i) {
@@ -782,6 +986,27 @@ void carbox_irq_profiler_report(uint32_t sequence, uint32_t window_ms)
 			  (unsigned long)irqprof_usb_hc_reason_snapshot[11],
 			  (unsigned long)irqprof_usb_hc_reason_snapshot[12],
 			  (unsigned long)irqprof_usb_hc_reason_snapshot[13]);
+		rt_printf("[IRQPROF][%lu][USB_CH3_ACK] total/doping/fast_drop="
+			  "%lu/%lu/%lu doping_pct=%lu.%02lu%%\r\n",
+			  (unsigned long)sequence,
+			  (unsigned long)irqprof_usb_ch3_ack_snapshot[
+				IRQPROF_USB_CH3_ACK],
+			  (unsigned long)irqprof_usb_ch3_ack_snapshot[
+				IRQPROF_USB_CH3_ACK_DOPING],
+			  (unsigned long)irqprof_usb_ch3_ack_snapshot[
+				IRQPROF_USB_CH3_ACK_FAST_DROP],
+			  (unsigned long)(irqprof_usb_ch3_ack_snapshot[
+				IRQPROF_USB_CH3_ACK] != 0U ?
+				((uint64_t)irqprof_usb_ch3_ack_snapshot[
+					IRQPROF_USB_CH3_ACK_DOPING] * 10000U /
+				 irqprof_usb_ch3_ack_snapshot[IRQPROF_USB_CH3_ACK]) /
+				100U : 0U),
+			  (unsigned long)(irqprof_usb_ch3_ack_snapshot[
+				IRQPROF_USB_CH3_ACK] != 0U ?
+				((uint64_t)irqprof_usb_ch3_ack_snapshot[
+					IRQPROF_USB_CH3_ACK_DOPING] * 10000U /
+				 irqprof_usb_ch3_ack_snapshot[IRQPROF_USB_CH3_ACK]) %
+				100U : 0U));
 		{
 			uint8_t channel_selected[IRQPROF_USB_CHANNEL_COUNT] = { 0U };
 			uint32_t rank;
@@ -866,6 +1091,58 @@ void carbox_irq_profiler_report(uint32_t sequence, uint32_t window_ms)
 			  (unsigned long)(((uint64_t)give * 1000U) / window_ms),
 			  (unsigned long)(((uint64_t)yield * 1000U) / window_ms));
 	}
+#if CONFIG_IRQ_PROFILE_USB_CAUSE
+	for (i = 2U; i <= 4U; ++i) {
+		uint32_t give = irqprof_usb_channel_handoff_snapshot[i]
+			[IRQPROF_USB_CHANNEL_HANDOFF_GIVE];
+		uint32_t yield = irqprof_usb_channel_handoff_snapshot[i]
+			[IRQPROF_USB_CHANNEL_HANDOFF_YIELD];
+
+		if (give == 0U) {
+			continue;
+		}
+		rt_printf("[IRQPROF][%lu][USB_HANDOFF_HC] "
+			  "ch=%lu give/yield/no_yield=%lu/%lu/%lu "
+			  "yield_pct=%lu.%02lu%% rate give/yield=%lu/%lu/s\r\n",
+			  (unsigned long)sequence, (unsigned long)i,
+			  (unsigned long)give, (unsigned long)yield,
+			  (unsigned long)(give - yield),
+			  (unsigned long)(((uint64_t)yield * 10000U / give) /
+					 100U),
+			  (unsigned long)(((uint64_t)yield * 10000U / give) %
+					 100U),
+			  (unsigned long)(((uint64_t)give * 1000U) / window_ms),
+			  (unsigned long)(((uint64_t)yield * 1000U) / window_ms));
+	}
+	{
+		uint32_t max_us = SystemCoreClock != 0U ?
+			(uint32_t)(((uint64_t)irqprof_usb_ch4_halt_gap_snapshot[
+				IRQPROF_USB_CH4_GAP_MAX_CYCLES] * 1000000ULL) /
+				SystemCoreClock) : 0U;
+
+		rt_printf("[IRQPROF][%lu][USB_CH4_HALT_GAP] "
+			  "samples=%lu bins_us <=2/<=5/<=10/<=20/<=50/<=100/>100="
+			  "%lu/%lu/%lu/%lu/%lu/%lu/%lu max_us=%lu\r\n",
+			  (unsigned long)sequence,
+			  (unsigned long)irqprof_usb_ch4_halt_gap_snapshot[
+				IRQPROF_USB_CH4_GAP_SAMPLE],
+			  (unsigned long)irqprof_usb_ch4_halt_gap_snapshot[
+				IRQPROF_USB_CH4_GAP_LE_2US],
+			  (unsigned long)irqprof_usb_ch4_halt_gap_snapshot[
+				IRQPROF_USB_CH4_GAP_LE_5US],
+			  (unsigned long)irqprof_usb_ch4_halt_gap_snapshot[
+				IRQPROF_USB_CH4_GAP_LE_10US],
+			  (unsigned long)irqprof_usb_ch4_halt_gap_snapshot[
+				IRQPROF_USB_CH4_GAP_LE_20US],
+			  (unsigned long)irqprof_usb_ch4_halt_gap_snapshot[
+				IRQPROF_USB_CH4_GAP_LE_50US],
+			  (unsigned long)irqprof_usb_ch4_halt_gap_snapshot[
+				IRQPROF_USB_CH4_GAP_LE_100US],
+			  (unsigned long)irqprof_usb_ch4_halt_gap_snapshot[
+				IRQPROF_USB_CH4_GAP_GT_100US],
+			  (unsigned long)max_us);
+	}
+#endif
 #endif
 
 #if CONFIG_USB_IRQ_SAFE_DEDUP
