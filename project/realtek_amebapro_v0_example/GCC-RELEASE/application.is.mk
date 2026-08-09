@@ -915,6 +915,14 @@ GCD_WORK_PRIORITY ?= -1
 # top-half ISR masks USB_IRQn.  Keep it above all normal networking tasks.
 USBH_ISR_TASK_PRIORITY ?= 11
 SCREEN_QUEUE_PROFILE ?= 0
+# Narrow backpressure diagnostic for the closed AirPlay sender's "screen block"
+# retry.  It samples only failed ScreenThread writes and stays independent of
+# the older, verbose frame/queue profiler.
+SCREEN_BLOCK_PROFILE ?= 1
+# Once a screen write identifies the video TCP PCB, summarize the returning
+# ACK cadence and advertised-window behavior.  This distinguishes a slow peer
+# reader from local USB/NCM queueing without restoring the verbose TCP profile.
+SCREEN_TCP_ACK_PROFILE ?= 1
 # Remove the closed AirPlay library's redundant full-frame handover memcpy.
 # Phase B retains the temporary allocation until queue publication is proven,
 # then frees it immediately.  The build creates derived archives whose hooks
@@ -931,6 +939,9 @@ SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES ?= 4096
 # Video-only TCP no-copy bring-up.  The legacy socket API remains COPY; only a
 # wire buffer proven by the direct-crypto transaction uses ACK-owned pbuf refs.
 TCP_OWNED_WRITE ?= 1
+# Report the ACK lifetime of video buffers independently of the retired full
+# screen queue profiler.  This is the direct measure of queued video latency.
+TCP_OWNED_AGE_PROFILE ?= 1
 # Keep the expensive, already-concluded diagnostic probes independently
 # switchable.  The normal screen timing/backlog profiler does not need them.
 SCREEN_FRAME_FORMAT_PROFILE ?= 0
@@ -1010,11 +1021,14 @@ GCCFLAGS += -DCONFIG_GCD_SYNC_PROFILE=$(GCD_SYNC_PROFILE)
 GCCFLAGS += -DCONFIG_GCD_WORK_PRIORITY=$(GCD_WORK_PRIORITY)
 GCCFLAGS += -DCONFIG_USBH_ISR_TASK_PRIORITY=$(USBH_ISR_TASK_PRIORITY)
 GCCFLAGS += -DCONFIG_SCREEN_QUEUE_PROFILE=$(SCREEN_QUEUE_PROFILE)
+GCCFLAGS += -DCONFIG_SCREEN_BLOCK_PROFILE=$(SCREEN_BLOCK_PROFILE)
+GCCFLAGS += -DCONFIG_SCREEN_TCP_ACK_PROFILE=$(SCREEN_TCP_ACK_PROFILE)
 GCCFLAGS += -DCONFIG_VIDEO_HANDOVER_ZERO_COPY=$(VIDEO_HANDOVER_ZERO_COPY)
 GCCFLAGS += -DVIDEO_HANDOVER_ZERO_COPY_MIN_BYTES=$(VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES)
 GCCFLAGS += -DCONFIG_SCREEN_TX_DIRECT_CRYPTO=$(SCREEN_TX_DIRECT_CRYPTO)
 GCCFLAGS += -DSCREEN_TX_DIRECT_CRYPTO_MIN_BYTES=$(SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES)
 GCCFLAGS += -DCONFIG_TCP_OWNED_WRITE=$(TCP_OWNED_WRITE)
+GCCFLAGS += -DCONFIG_TCP_OWNED_AGE_PROFILE=$(TCP_OWNED_AGE_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_FRAME_FORMAT_PROFILE=$(SCREEN_FRAME_FORMAT_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TCP_BUFFER_PROFILE=$(SCREEN_TCP_BUFFER_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_PROFILE=$(SCREEN_TIMESTAMP_PROFILE)

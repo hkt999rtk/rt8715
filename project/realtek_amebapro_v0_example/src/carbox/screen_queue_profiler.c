@@ -1610,6 +1610,7 @@ ssize_t __wrap_lwip_write(int socket, const void *buffer, size_t bytes)
 #else
 	result = __real_lwip_write(socket, buffer, bytes);
 #endif
+	carbox_screen_block_profile_write(socket, bytes, (int)result);
 
 	if (measured) {
 		uint32_t now_us = hal_read_curtime_us();

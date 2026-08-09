@@ -91,6 +91,321 @@ static struct pbuf *recv_data;
 
 struct tcp_pcb *tcp_input_pcb;
 
+#if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
+struct tcp_screen_ack_profile_stats {
+  u32_t ack_packets;
+  u32_t new_acks;
+  u32_t duplicate_or_window_acks;
+  u32_t window_updates;
+  u32_t window_grows;
+  u32_t window_shrinks;
+  u32_t acked_bytes;
+  u32_t acked_bytes_max;
+  u32_t first_ack_ms;
+  u32_t last_ack_ms;
+  u32_t interval_sum_ms;
+  u32_t interval_max_ms;
+  u32_t interval_samples;
+  u32_t interval_bins[7];
+  u32_t window_min;
+  u32_t window_max;
+  u32_t window_current;
+  u32_t available_min;
+  u32_t available_max;
+  u32_t small_window_packets;
+  u32_t zero_window_packets;
+  u32_t small_window_enters;
+  u32_t small_window_recovers;
+  u32_t small_window_duration_sum_ms;
+  u32_t small_window_duration_max_ms;
+  u32_t rtt_samples;
+  u32_t rtt_sum_ms;
+  u32_t rtt_max_ms;
+  u32_t edge_advances;
+  u32_t edge_stalls;
+  u32_t edge_retracts;
+  u32_t edge_advance_bytes;
+  u32_t edge_advance_max;
+  u32_t edge_stall_enters;
+  u32_t edge_stall_recovers;
+  u32_t edge_stall_duration_sum_ms;
+  u32_t edge_stall_duration_max_ms;
+};
+
+static struct tcp_pcb *tcp_screen_ack_profile_pcb;
+static struct tcp_screen_ack_profile_stats tcp_screen_ack_profile_stats = {
+  .window_min = 0xffffffffU,
+  .available_min = 0xffffffffU
+};
+static u32_t tcp_screen_ack_last_ms;
+static u32_t tcp_screen_ack_small_since_ms;
+static u8_t tcp_screen_ack_small_active;
+static u32_t tcp_screen_ack_last_edge;
+static u32_t tcp_screen_ack_stall_since_ms;
+static u8_t tcp_screen_ack_edge_valid;
+static u8_t tcp_screen_ack_stall_active;
+
+static void
+tcp_screen_ack_profile_reset_stats(void)
+{
+  memset(&tcp_screen_ack_profile_stats, 0,
+         sizeof(tcp_screen_ack_profile_stats));
+  tcp_screen_ack_profile_stats.window_min = 0xffffffffU;
+  tcp_screen_ack_profile_stats.available_min = 0xffffffffU;
+}
+
+void
+tcp_screen_ack_profile_track(struct tcp_pcb *pcb)
+{
+  if (tcp_screen_ack_profile_pcb != pcb) {
+    tcp_screen_ack_profile_pcb = pcb;
+    tcp_screen_ack_last_ms = 0;
+    tcp_screen_ack_small_since_ms = 0;
+    tcp_screen_ack_small_active = 0;
+    tcp_screen_ack_last_edge = 0;
+    tcp_screen_ack_stall_since_ms = 0;
+    tcp_screen_ack_edge_valid = 0;
+    tcp_screen_ack_stall_active = 0;
+    tcp_screen_ack_profile_reset_stats();
+  }
+}
+
+static void
+tcp_screen_ack_profile_record(struct tcp_pcb *pcb, tcpwnd_size_t acked,
+                              tcpwnd_size_t old_window, u8_t window_updated,
+                              u32_t rtt_ms)
+{
+  struct tcp_screen_ack_profile_stats *s = &tcp_screen_ack_profile_stats;
+  u32_t now;
+  u32_t interval;
+  u32_t flight;
+  u32_t available;
+  u32_t duration;
+  u32_t edge;
+  u32_t edge_advance;
+  u8_t bin;
+
+  if (pcb != tcp_screen_ack_profile_pcb) {
+    return;
+  }
+  now = sys_now();
+  if (s->first_ack_ms == 0U) {
+    s->first_ack_ms = now;
+  }
+  s->last_ack_ms = now;
+  s->ack_packets++;
+  if (acked != 0U) {
+    s->new_acks++;
+    s->acked_bytes += (u32_t)acked;
+    if ((u32_t)acked > s->acked_bytes_max) {
+      s->acked_bytes_max = (u32_t)acked;
+    }
+  } else {
+    s->duplicate_or_window_acks++;
+  }
+  if (tcp_screen_ack_last_ms != 0U) {
+    interval = now - tcp_screen_ack_last_ms;
+    s->interval_samples++;
+    s->interval_sum_ms += interval;
+    if (interval > s->interval_max_ms) {
+      s->interval_max_ms = interval;
+    }
+    bin = interval <= 1U ? 0U : interval <= 5U ? 1U :
+          interval <= 10U ? 2U : interval <= 20U ? 3U :
+          interval <= 50U ? 4U : interval <= 100U ? 5U : 6U;
+    s->interval_bins[bin]++;
+  }
+  tcp_screen_ack_last_ms = now;
+
+  if (window_updated) {
+    s->window_updates++;
+    if (pcb->snd_wnd > old_window) {
+      s->window_grows++;
+    } else if (pcb->snd_wnd < old_window) {
+      s->window_shrinks++;
+    }
+  }
+  if ((u32_t)pcb->snd_wnd < s->window_min) {
+    s->window_min = (u32_t)pcb->snd_wnd;
+  }
+  if ((u32_t)pcb->snd_wnd > s->window_max) {
+    s->window_max = (u32_t)pcb->snd_wnd;
+  }
+  s->window_current = (u32_t)pcb->snd_wnd;
+  flight = pcb->snd_nxt - pcb->lastack;
+  available = (u32_t)pcb->snd_wnd > flight ?
+              (u32_t)pcb->snd_wnd - flight : 0U;
+  if (available < s->available_min) {
+    s->available_min = available;
+  }
+  if (available > s->available_max) {
+    s->available_max = available;
+  }
+  if (available < pcb->mss) {
+    s->small_window_packets++;
+    if (available == 0U) {
+      s->zero_window_packets++;
+    }
+    if (!tcp_screen_ack_small_active) {
+      tcp_screen_ack_small_active = 1U;
+      tcp_screen_ack_small_since_ms = now;
+      s->small_window_enters++;
+    }
+  } else if (tcp_screen_ack_small_active) {
+    duration = now - tcp_screen_ack_small_since_ms;
+    tcp_screen_ack_small_active = 0U;
+    s->small_window_recovers++;
+    s->small_window_duration_sum_ms += duration;
+    if (duration > s->small_window_duration_max_ms) {
+      s->small_window_duration_max_ms = duration;
+    }
+  }
+  if (rtt_ms != 0U) {
+    s->rtt_samples++;
+    s->rtt_sum_ms += rtt_ms;
+    if (rtt_ms > s->rtt_max_ms) {
+      s->rtt_max_ms = rtt_ms;
+    }
+  }
+
+  /* ACK + advertised window is the receiver's right edge.  Forward motion
+   * means the peer actually freed receive capacity; a constant edge means
+   * ACK progress merely consumed the previously granted window. */
+  edge = pcb->snd_wl2 + (u32_t)pcb->snd_wnd;
+  if (tcp_screen_ack_edge_valid) {
+    if (TCP_SEQ_GT(edge, tcp_screen_ack_last_edge)) {
+      edge_advance = edge - tcp_screen_ack_last_edge;
+      s->edge_advances++;
+      s->edge_advance_bytes += edge_advance;
+      if (edge_advance > s->edge_advance_max) {
+        s->edge_advance_max = edge_advance;
+      }
+      if (tcp_screen_ack_stall_active) {
+        duration = now - tcp_screen_ack_stall_since_ms;
+        tcp_screen_ack_stall_active = 0U;
+        s->edge_stall_recovers++;
+        s->edge_stall_duration_sum_ms += duration;
+        if (duration > s->edge_stall_duration_max_ms) {
+          s->edge_stall_duration_max_ms = duration;
+        }
+      }
+    } else {
+      if (edge == tcp_screen_ack_last_edge) {
+        s->edge_stalls++;
+      } else {
+        s->edge_retracts++;
+      }
+      if (!tcp_screen_ack_stall_active) {
+        tcp_screen_ack_stall_active = 1U;
+        tcp_screen_ack_stall_since_ms = now;
+        s->edge_stall_enters++;
+      }
+    }
+  } else {
+    tcp_screen_ack_edge_valid = 1U;
+  }
+  tcp_screen_ack_last_edge = edge;
+}
+
+void
+lwip_diag_screen_tcp_ack_report(unsigned int sequence)
+{
+  struct tcp_screen_ack_profile_stats s;
+  u32_t pending_age_ms = 0;
+  u32_t edge_pending_age_ms = 0;
+  u32_t elapsed_ms;
+  u32_t primask;
+
+  primask = __get_PRIMASK();
+  __disable_irq();
+  s = tcp_screen_ack_profile_stats;
+  if (tcp_screen_ack_small_active) {
+    pending_age_ms = sys_now() - tcp_screen_ack_small_since_ms;
+  }
+  if (tcp_screen_ack_stall_active) {
+    edge_pending_age_ms = sys_now() - tcp_screen_ack_stall_since_ms;
+  }
+  tcp_screen_ack_profile_reset_stats();
+  if (primask == 0U) {
+    __enable_irq();
+  }
+  if (s.ack_packets == 0U) {
+    return;
+  }
+  elapsed_ms = s.last_ack_ms - s.first_ack_ms;
+  rt_printf("[SCREENACK][%u] elapsed_ms=%lu packets/new/other=%lu/%lu/%lu "
+            "acked_bytes total/avg/max=%lu/%lu/%lu rate_kbps=%llu "
+            "interval_ms avg/max=%lu/%lu "
+            "bins <=1/5/10/20/50/100/>100=%lu/%lu/%lu/%lu/%lu/%lu/%lu\r\n",
+            sequence, (unsigned long)elapsed_ms,
+            (unsigned long)s.ack_packets,
+            (unsigned long)s.new_acks,
+            (unsigned long)s.duplicate_or_window_acks,
+            (unsigned long)s.acked_bytes,
+            (unsigned long)(s.new_acks != 0U ?
+                            s.acked_bytes / s.new_acks : 0U),
+            (unsigned long)s.acked_bytes_max,
+            (unsigned long long)(elapsed_ms != 0U ?
+                                 ((unsigned long long)s.acked_bytes * 8ULL) /
+                                 elapsed_ms : 0ULL),
+            (unsigned long)(s.interval_samples != 0U ?
+                            s.interval_sum_ms / s.interval_samples : 0U),
+            (unsigned long)s.interval_max_ms,
+            (unsigned long)s.interval_bins[0],
+            (unsigned long)s.interval_bins[1],
+            (unsigned long)s.interval_bins[2],
+            (unsigned long)s.interval_bins[3],
+            (unsigned long)s.interval_bins[4],
+            (unsigned long)s.interval_bins[5],
+            (unsigned long)s.interval_bins[6]);
+  rt_printf("[SCREENACK][%u] wnd current/min/max=%lu/%lu/%lu "
+            "avail_min/max=%lu/%lu update/grow/shrink=%lu/%lu/%lu "
+            "small/zero=%lu/%lu episode enter/recover/pending_age_ms=%lu/%lu/%lu "
+            "duration_ms avg/max=%lu/%lu rtt_ms samples/avg/max=%lu/%lu/%lu\r\n",
+            sequence, (unsigned long)s.window_current,
+            (unsigned long)(s.window_min == 0xffffffffU ? 0U : s.window_min),
+            (unsigned long)s.window_max,
+            (unsigned long)(s.available_min == 0xffffffffU ? 0U :
+                            s.available_min),
+            (unsigned long)s.available_max,
+            (unsigned long)s.window_updates,
+            (unsigned long)s.window_grows,
+            (unsigned long)s.window_shrinks,
+            (unsigned long)s.small_window_packets,
+            (unsigned long)s.zero_window_packets,
+            (unsigned long)s.small_window_enters,
+            (unsigned long)s.small_window_recovers,
+            (unsigned long)pending_age_ms,
+            (unsigned long)(s.small_window_recovers != 0U ?
+                            s.small_window_duration_sum_ms /
+                            s.small_window_recovers : 0U),
+            (unsigned long)s.small_window_duration_max_ms,
+            (unsigned long)s.rtt_samples,
+            (unsigned long)(s.rtt_samples != 0U ?
+                            s.rtt_sum_ms / s.rtt_samples : 0U),
+            (unsigned long)s.rtt_max_ms);
+  rt_printf("[SCREENACK][%u] right_edge advance/stall/retract=%lu/%lu/%lu "
+            "advance_bytes total/avg/max=%lu/%lu/%lu "
+            "stall_episode enter/recover/pending_age_ms=%lu/%lu/%lu "
+            "duration_ms avg/max=%lu/%lu\r\n",
+            sequence,
+            (unsigned long)s.edge_advances,
+            (unsigned long)s.edge_stalls,
+            (unsigned long)s.edge_retracts,
+            (unsigned long)s.edge_advance_bytes,
+            (unsigned long)(s.edge_advances != 0U ?
+                            s.edge_advance_bytes / s.edge_advances : 0U),
+            (unsigned long)s.edge_advance_max,
+            (unsigned long)s.edge_stall_enters,
+            (unsigned long)s.edge_stall_recovers,
+            (unsigned long)edge_pending_age_ms,
+            (unsigned long)(s.edge_stall_recovers != 0U ?
+                            s.edge_stall_duration_sum_ms /
+                            s.edge_stall_recovers : 0U),
+            (unsigned long)s.edge_stall_duration_max_ms);
+}
+#endif
+
 #ifndef CONFIG_TCP_CORE_PHASE_PROFILE
 #define CONFIG_TCP_CORE_PHASE_PROFILE 0
 #endif
@@ -1485,6 +1800,12 @@ tcp_receive(struct tcp_pcb *pcb)
   s16_t m;
   u32_t right_wnd_edge;
   int found_dupack = 0;
+#if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
+  tcpwnd_size_t screen_ack_acked = 0;
+  tcpwnd_size_t screen_ack_old_window = pcb->snd_wnd;
+  u32_t screen_ack_rtt_ms = 0;
+  u8_t screen_ack_window_updated = 0;
+#endif
 
   LWIP_ASSERT("tcp_receive: invalid pcb", pcb != NULL);
   LWIP_ASSERT("tcp_receive: wrong state", pcb->state >= ESTABLISHED);
@@ -1504,6 +1825,9 @@ tcp_receive(struct tcp_pcb *pcb)
       }
       pcb->snd_wl1 = seqno;
       pcb->snd_wl2 = ackno;
+#if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
+      screen_ack_window_updated = 1U;
+#endif
       LWIP_DEBUGF(TCP_WND_DEBUG, ("tcp_receive: window update %"TCPWNDSIZE_F"\n", pcb->snd_wnd));
 #if TCP_WND_DEBUG
     } else {
@@ -1590,6 +1914,9 @@ tcp_receive(struct tcp_pcb *pcb)
 
       /* Record how much data this ACK acks */
       acked = (tcpwnd_size_t)(ackno - pcb->lastack);
+#if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
+      screen_ack_acked = acked;
+#endif
 
       /* Reset the fast retransmit variables. */
       pcb->dupacks = 0;
@@ -1689,6 +2016,9 @@ tcp_receive(struct tcp_pcb *pcb)
       /* diff between this shouldn't exceed 32K since this are tcp timer ticks
          and a round-trip shouldn't be that long... */
       m = (s16_t)(tcp_ticks - pcb->rttest);
+#if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
+      screen_ack_rtt_ms = (u32_t)((u16_t)m * TCP_SLOW_INTERVAL);
+#endif
 
       LWIP_DEBUGF(TCP_RTO_DEBUG, ("tcp_receive: experienced rtt %"U16_F" ticks (%"U16_F" msec).\n",
                                   m, (u16_t)(m * TCP_SLOW_INTERVAL)));
@@ -1710,6 +2040,12 @@ tcp_receive(struct tcp_pcb *pcb)
 
       pcb->rttest = 0;
     }
+#if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
+    tcp_screen_ack_profile_record(pcb, screen_ack_acked,
+                                  screen_ack_old_window,
+                                  screen_ack_window_updated,
+                                  screen_ack_rtt_ms);
+#endif
   }
 
   /* If the incoming segment contains data, we must process it

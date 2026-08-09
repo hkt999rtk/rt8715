@@ -934,6 +934,27 @@ struct ncm_tx_async_stats {
 static QueueHandle_t g_ncm_tx_async_queue;
 static TaskHandle_t g_ncm_tx_async_task;
 static struct ncm_tx_async_stats g_ncm_tx_async_stats;
+static volatile u32_t g_ncm_tx_inflight_packets;
+static volatile u32_t g_ncm_tx_inflight_start_us;
+
+int rltk_ncm_tx_diag_snapshot(rltk_ncm_tx_diag_t *diag)
+{
+	u32_t start_us;
+
+	if (diag == NULL) {
+		return -1;
+	}
+	diag->queue_capacity = NCM_TX_ASYNC_QUEUE_LEN;
+	diag->queue_depth = g_ncm_tx_async_queue != NULL ?
+		(u32_t)uxQueueMessagesWaiting(g_ncm_tx_async_queue) : 0U;
+	taskENTER_CRITICAL();
+	diag->inflight_packets = g_ncm_tx_inflight_packets;
+	start_us = g_ncm_tx_inflight_start_us;
+	taskEXIT_CRITICAL();
+	diag->inflight_age_us = diag->inflight_packets != 0U ?
+		hal_read_curtime_us() - start_us : 0U;
+	return g_ncm_tx_async_task != NULL ? 0 : -1;
+}
 
 #if CONFIG_NCM_TX_BATCH
 struct ncm_tx_wrap_batch {
@@ -1354,11 +1375,19 @@ static void ncm_tx_async_worker(void *arg)
 		}
 
 		send_start = hal_read_curtime_us();
+		taskENTER_CRITICAL();
+		g_ncm_tx_inflight_packets = count;
+		g_ncm_tx_inflight_start_us = send_start;
+		taskEXIT_CRITICAL();
 		if (count >= 2U) {
 			result = ncm_send_pbuf_batch_sync(items, count, &packed);
 		} else {
 			result = ncm_send_pbuf_sync(items[0].p);
 		}
+		taskENTER_CRITICAL();
+		g_ncm_tx_inflight_packets = 0U;
+		g_ncm_tx_inflight_start_us = 0U;
+		taskEXIT_CRITICAL();
 
 #if CONFIG_NCM_TX_ASYNC_PROFILE
 		taskENTER_CRITICAL();
@@ -1410,7 +1439,17 @@ static void ncm_tx_async_worker(void *arg)
 		if (xQueueReceive(g_ncm_tx_async_queue, &item, portMAX_DELAY) == pdTRUE) {
 			u32_t now = hal_read_curtime_us();
 			u32_t wait_us = now - item.enqueue_us;
-			err_t result = ncm_send_pbuf_sync(item.p);
+			err_t result;
+
+			taskENTER_CRITICAL();
+			g_ncm_tx_inflight_packets = 1U;
+			g_ncm_tx_inflight_start_us = now;
+			taskEXIT_CRITICAL();
+			result = ncm_send_pbuf_sync(item.p);
+			taskENTER_CRITICAL();
+			g_ncm_tx_inflight_packets = 0U;
+			g_ncm_tx_inflight_start_us = 0U;
+			taskEXIT_CRITICAL();
 
 #if CONFIG_NCM_TX_ASYNC_PROFILE
 			taskENTER_CRITICAL();

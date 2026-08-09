@@ -24,7 +24,10 @@ void carbox_screen_tx_crypto_materialized(void *destination, size_t length);
 void carbox_screen_tx_crypto_complete(void *destination, size_t length,
 				      uint32_t kind, int status);
 void carbox_screen_tx_before_write(const void *buffer, size_t length);
+void carbox_screen_block_profile_write(int socket, size_t requested,
+				       int result);
 void carbox_screen_tx_direct_crypto_report(uint32_t sequence);
+void carbox_screen_block_profile_report(uint32_t sequence);
 
 #define CARBOX_SCREEN_TX_CRYPTO_AES     1U
 #define CARBOX_SCREEN_TX_CRYPTO_CHACHA  2U

@@ -57,6 +57,10 @@ extern "C" {
 
 /* Functions for interfacing with TCP: */
 
+#if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
+void tcp_screen_ack_profile_track(struct tcp_pcb *pcb);
+#endif
+
 /* Lower layer interface to TCP: */
 void             tcp_init    (void);  /* Initialize this module. */
 void             tcp_tmr     (void);  /* Must be called every

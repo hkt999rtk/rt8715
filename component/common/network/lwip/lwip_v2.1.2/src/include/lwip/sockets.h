@@ -666,7 +666,8 @@ int lwip_fcntl(int s, int cmd, int val);
 const char *lwip_inet_ntop(int af, const void *src, char *dst, socklen_t size);
 int lwip_inet_pton(int af, const char *src, void *dst);
 
-#if defined(CONFIG_SCREEN_TCP_BUFFER_PROFILE) && CONFIG_SCREEN_TCP_BUFFER_PROFILE
+#if (defined(CONFIG_SCREEN_TCP_BUFFER_PROFILE) && CONFIG_SCREEN_TCP_BUFFER_PROFILE) || \
+    (defined(CONFIG_SCREEN_BLOCK_PROFILE) && CONFIG_SCREEN_BLOCK_PROFILE)
 /* Read-only TCP queue snapshot used by the CarPlay diagnostic profiler. */
 struct lwip_tcp_buffer_diag {
   u32_t rx_pending_bytes;
@@ -678,8 +679,19 @@ struct lwip_tcp_buffer_diag {
   u32_t tx_buffer_available;
   u32_t tx_queue_len;
   u32_t tx_queue_capacity;
+  u32_t tx_unsent_bytes;
+  u32_t tx_unsent_segments;
+  u32_t tx_unacked_bytes;
+  u32_t tx_unacked_segments;
+  u32_t tx_send_window;
+  u32_t tx_congestion_window;
+  u32_t tx_mss;
 };
 int lwip_diag_tcp_buffer_state(int s, struct lwip_tcp_buffer_diag *diag);
+#endif
+#if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
+int lwip_diag_screen_tcp_ack_track(int s);
+void lwip_diag_screen_tcp_ack_report(unsigned int sequence);
 #endif
 
 #if LWIP_COMPAT_SOCKETS

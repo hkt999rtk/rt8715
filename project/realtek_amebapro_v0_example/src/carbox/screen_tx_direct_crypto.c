@@ -7,6 +7,8 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "diag.h"
+#include "hal_timer.h"
+#include "lwip_intf.h"
 #include "lwip/sockets.h"
 
 #ifndef CONFIG_SCREEN_TX_DIRECT_CRYPTO
@@ -18,6 +20,9 @@
 #endif
 #ifndef CONFIG_TCP_OWNED_WRITE
 #define CONFIG_TCP_OWNED_WRITE 0
+#endif
+#ifndef CONFIG_SCREEN_BLOCK_PROFILE
+#define CONFIG_SCREEN_BLOCK_PROFILE 0
 #endif
 
 #if CONFIG_SCREEN_TX_DIRECT_CRYPTO
@@ -75,6 +80,80 @@ typedef struct screen_tx_direct_stats_s {
 static screen_tx_direct_slot_t screen_tx_slots[SCREEN_TX_DIRECT_SLOTS];
 static screen_tx_direct_stats_t screen_tx_stats;
 static uint8_t screen_tx_enabled = 1U;
+
+#if CONFIG_SCREEN_BLOCK_PROFILE
+typedef struct screen_block_stats_s {
+	uint32_t writes;
+	uint32_t successful;
+	uint32_t partial;
+	uint32_t eagain;
+	uint32_t other_error;
+	int32_t last_errno;
+	uint32_t probe_error;
+	uint32_t tx_buffer_capacity;
+	uint32_t tx_buffer_min;
+	uint32_t tx_queue_capacity;
+	uint32_t tx_queue_max;
+	uint32_t unsent_bytes_max;
+	uint32_t unsent_segments_max;
+	uint32_t unacked_bytes_max;
+	uint32_t unacked_segments_max;
+	uint32_t send_window_min;
+	uint32_t send_window_available_min;
+	uint32_t congestion_window_min;
+	uint32_t buffer_empty;
+	uint32_t queue_full;
+	uint32_t send_window_limited;
+	uint32_t ncm_queue_max;
+	uint32_t ncm_queue_capacity;
+	uint32_t ncm_inflight_max;
+	uint32_t ncm_inflight_age_max_us;
+	uint32_t block_episodes;
+	uint32_t block_recoveries;
+	uint32_t block_retries;
+	uint32_t recovery_max_us;
+	uint64_t recovery_sum_us;
+} screen_block_stats_t;
+
+static screen_block_stats_t screen_block_stats = {
+	.tx_buffer_min = UINT32_MAX,
+	.send_window_min = UINT32_MAX,
+	.send_window_available_min = UINT32_MAX,
+	.congestion_window_min = UINT32_MAX,
+};
+static TaskHandle_t screen_block_task;
+static uint8_t screen_block_active;
+static uint32_t screen_block_start_us;
+static uint32_t screen_block_active_retries;
+
+static int screen_block_is_sender(void)
+{
+	TaskHandle_t current = xTaskGetCurrentTaskHandle();
+
+	if (current == screen_block_task) {
+		return 1;
+	}
+	if (strcmp(pcTaskGetTaskName(current), "ScreenThread") == 0) {
+		screen_block_task = current;
+		return 1;
+	}
+	return 0;
+}
+
+static void screen_block_min(uint32_t *value, uint32_t sample)
+{
+	if ((*value == UINT32_MAX) || (sample < *value)) {
+		*value = sample;
+	}
+}
+
+static void screen_block_max(uint32_t *value, uint32_t sample)
+{
+	if (sample > *value) {
+		*value = sample;
+	}
+}
+#endif
 
 static __attribute__((always_inline)) inline int screen_tx_in_isr(void)
 {
@@ -474,6 +553,203 @@ void carbox_screen_tx_before_write(const void *buffer, size_t length)
 	}
 }
 
+void carbox_screen_block_profile_write(int socket, size_t requested, int result)
+{
+#if CONFIG_SCREEN_BLOCK_PROFILE
+	struct lwip_tcp_buffer_diag tcp;
+	rltk_ncm_tx_diag_t ncm;
+	/* sock_set_errno() updates the lwIP global errno.  Realtek's
+	 * lwip_getsocklasterr() returns sock->errevent (an event count), not errno,
+	 * and also fails to release the socket reference, so it must not be used
+	 * here.  Capture errno before any diagnostic helper can disturb it. */
+	int socket_error = result < 0 ? lwip_err : 0;
+	int tcp_ok = -1;
+	int ncm_ok = -1;
+	uint32_t now_us = hal_read_curtime_us();
+
+	if (!screen_block_is_sender()) {
+		return;
+	}
+#if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
+	/* Register on normal traffic as well: waiting for the first EAGAIN loses
+	 * the baseline window and can leave quiet 10-second windows unprofiled. */
+	(void)lwip_diag_screen_tcp_ack_track(socket);
+#endif
+	if (result < 0) {
+		tcp_ok = lwip_diag_tcp_buffer_state(socket, &tcp);
+		ncm_ok = rltk_ncm_tx_diag_snapshot(&ncm);
+	}
+
+	taskENTER_CRITICAL();
+	screen_block_stats.writes++;
+	if (result >= 0) {
+		screen_block_stats.successful++;
+		if ((size_t)result < requested) {
+			screen_block_stats.partial++;
+		}
+		if (screen_block_active) {
+			uint32_t recovery_us = now_us - screen_block_start_us;
+
+			screen_block_stats.block_recoveries++;
+			screen_block_stats.block_retries +=
+				screen_block_active_retries;
+			screen_block_stats.recovery_sum_us += recovery_us;
+			screen_block_max(&screen_block_stats.recovery_max_us,
+					 recovery_us);
+			screen_block_active = 0U;
+			screen_block_active_retries = 0U;
+		}
+	} else {
+		screen_block_stats.last_errno = socket_error;
+		if ((socket_error == EAGAIN) || (socket_error == EWOULDBLOCK)) {
+			screen_block_stats.eagain++;
+			if (!screen_block_active) {
+				screen_block_active = 1U;
+				screen_block_start_us = now_us;
+				screen_block_active_retries = 1U;
+				screen_block_stats.block_episodes++;
+			} else {
+				screen_block_active_retries++;
+			}
+		} else {
+			screen_block_stats.other_error++;
+		}
+		if (tcp_ok == 0) {
+			uint32_t window_available =
+				tcp.tx_send_window > tcp.tx_unacked_bytes ?
+				tcp.tx_send_window - tcp.tx_unacked_bytes : 0U;
+
+			screen_block_stats.tx_buffer_capacity =
+				tcp.tx_buffer_capacity;
+			screen_block_stats.tx_queue_capacity = tcp.tx_queue_capacity;
+			screen_block_min(&screen_block_stats.tx_buffer_min,
+					 tcp.tx_buffer_available);
+			screen_block_max(&screen_block_stats.tx_queue_max,
+					 tcp.tx_queue_len);
+			screen_block_max(&screen_block_stats.unsent_bytes_max,
+					 tcp.tx_unsent_bytes);
+			screen_block_max(&screen_block_stats.unsent_segments_max,
+					 tcp.tx_unsent_segments);
+			screen_block_max(&screen_block_stats.unacked_bytes_max,
+					 tcp.tx_unacked_bytes);
+			screen_block_max(&screen_block_stats.unacked_segments_max,
+					 tcp.tx_unacked_segments);
+			screen_block_min(&screen_block_stats.send_window_min,
+					 tcp.tx_send_window);
+			screen_block_min(&screen_block_stats.send_window_available_min,
+					 window_available);
+			screen_block_min(&screen_block_stats.congestion_window_min,
+					 tcp.tx_congestion_window);
+			screen_block_stats.buffer_empty +=
+				tcp.tx_buffer_available == 0U;
+			screen_block_stats.queue_full +=
+				tcp.tx_queue_len >= tcp.tx_queue_capacity;
+			screen_block_stats.send_window_limited +=
+				window_available < tcp.tx_mss;
+		} else {
+			screen_block_stats.probe_error++;
+		}
+		if (ncm_ok == 0) {
+			screen_block_stats.ncm_queue_capacity = ncm.queue_capacity;
+			screen_block_max(&screen_block_stats.ncm_queue_max,
+					 ncm.queue_depth);
+			screen_block_max(&screen_block_stats.ncm_inflight_max,
+					 ncm.inflight_packets);
+			screen_block_max(&screen_block_stats.ncm_inflight_age_max_us,
+					 ncm.inflight_age_us);
+		}
+	}
+	taskEXIT_CRITICAL();
+	/* Preserve the exact error observed by the closed sender. */
+	if (result < 0) {
+		lwip_err = socket_error;
+	}
+#else
+	(void)socket;
+	(void)requested;
+	(void)result;
+#endif
+}
+
+void carbox_screen_block_profile_report(uint32_t sequence)
+{
+#if CONFIG_SCREEN_BLOCK_PROFILE
+	screen_block_stats_t stats;
+	uint32_t pending;
+	uint32_t pending_retries;
+	uint32_t pending_age_us;
+
+	taskENTER_CRITICAL();
+	stats = screen_block_stats;
+	pending = screen_block_active;
+	pending_retries = screen_block_active_retries;
+	pending_age_us = pending ?
+		hal_read_curtime_us() - screen_block_start_us : 0U;
+		screen_block_stats = (screen_block_stats_t){
+		.tx_buffer_min = UINT32_MAX,
+		.send_window_min = UINT32_MAX,
+		.send_window_available_min = UINT32_MAX,
+		.congestion_window_min = UINT32_MAX,
+	};
+	taskEXIT_CRITICAL();
+	if (stats.writes == 0U) {
+		return;
+	}
+	rt_printf("[SCREENBLOCK][%lu] write ok/partial/eagain/other/probe_err="
+		  "%lu/%lu/%lu/%lu/%lu last_errno=%ld\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)stats.successful, (unsigned long)stats.partial,
+		  (unsigned long)stats.eagain, (unsigned long)stats.other_error,
+		  (unsigned long)stats.probe_error, (long)stats.last_errno);
+	rt_printf("[SCREENBLOCK][%lu] episode start/recover/pending="
+		  "%lu/%lu/%lu retries=%lu pending_retries/age_us=%lu/%lu "
+		  "recovery_us_avg/max=%llu/%lu\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)stats.block_episodes,
+		  (unsigned long)stats.block_recoveries,
+		  (unsigned long)pending,
+		  (unsigned long)stats.block_retries,
+		  (unsigned long)pending_retries,
+		  (unsigned long)pending_age_us,
+		  (unsigned long long)(stats.block_recoveries != 0U ?
+			stats.recovery_sum_us / stats.block_recoveries : 0U),
+		  (unsigned long)stats.recovery_max_us);
+	if ((stats.eagain == 0U) && (stats.other_error == 0U)) {
+		return;
+	}
+	rt_printf("[SCREENBLOCK][%lu] tcp buf_min/cap=%lu/%luB qlen_max/cap="
+		  "%lu/%lu unsent_max=%luB/%lu unacked_max=%luB/%lu "
+		  "wnd_min/avail_min/cwnd_min=%lu/%lu/%lu "
+		  "limited buf0/qlen/wnd=%lu/%lu/%lu "
+		  "ncm qmax/cap=%lu/%lu inflight_max/age_max_us=%lu/%lu\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)(stats.tx_buffer_min == UINT32_MAX ? 0U :
+				  stats.tx_buffer_min),
+		  (unsigned long)stats.tx_buffer_capacity,
+		  (unsigned long)stats.tx_queue_max,
+		  (unsigned long)stats.tx_queue_capacity,
+		  (unsigned long)stats.unsent_bytes_max,
+		  (unsigned long)stats.unsent_segments_max,
+		  (unsigned long)stats.unacked_bytes_max,
+		  (unsigned long)stats.unacked_segments_max,
+		  (unsigned long)(stats.send_window_min == UINT32_MAX ? 0U :
+				  stats.send_window_min),
+		  (unsigned long)(stats.send_window_available_min == UINT32_MAX ?
+				  0U : stats.send_window_available_min),
+		  (unsigned long)(stats.congestion_window_min == UINT32_MAX ? 0U :
+				  stats.congestion_window_min),
+		  (unsigned long)stats.buffer_empty,
+		  (unsigned long)stats.queue_full,
+		  (unsigned long)stats.send_window_limited,
+		  (unsigned long)stats.ncm_queue_max,
+		  (unsigned long)stats.ncm_queue_capacity,
+		  (unsigned long)stats.ncm_inflight_max,
+		  (unsigned long)stats.ncm_inflight_age_max_us);
+#else
+	(void)sequence;
+#endif
+}
+
 void carbox_screen_tx_direct_crypto_report(uint32_t sequence)
 {
 	screen_tx_direct_stats_t stats;
@@ -548,14 +824,21 @@ extern int __real_lwip_write(int socket, const void *buffer, size_t bytes);
 
 int __wrap_lwip_write(int socket, const void *buffer, size_t bytes)
 {
+	int result;
+
 	carbox_screen_tx_before_write(buffer, bytes);
 #if CONFIG_TCP_OWNED_WRITE
 	if (carbox_screen_tx_owned_begin(buffer, bytes)) {
-		return lwip_write_owned(socket, buffer, bytes,
+		result = lwip_write_owned(socket, buffer, bytes,
 			carbox_screen_tx_owned_complete, (void *)(uintptr_t)buffer);
+	} else {
+		result = __real_lwip_write(socket, buffer, bytes);
 	}
+#else
+	result = __real_lwip_write(socket, buffer, bytes);
 #endif
-	return __real_lwip_write(socket, buffer, bytes);
+	carbox_screen_block_profile_write(socket, bytes, result);
+	return result;
 }
 #endif
 
@@ -619,7 +902,17 @@ void carbox_screen_tx_before_write(const void *buffer, size_t length)
 	(void)buffer;
 	(void)length;
 }
+void carbox_screen_block_profile_write(int socket, size_t requested, int result)
+{
+	(void)socket;
+	(void)requested;
+	(void)result;
+}
 void carbox_screen_tx_direct_crypto_report(uint32_t sequence)
+{
+	(void)sequence;
+}
+void carbox_screen_block_profile_report(uint32_t sequence)
 {
 	(void)sequence;
 }

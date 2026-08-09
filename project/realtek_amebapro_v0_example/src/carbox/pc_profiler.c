@@ -944,6 +944,17 @@ static void pcprof_task(void *arg)
 			      interval_count, late_10us, late_100us,
 			      caller_attributed);
 		carbox_irq_profiler_report(sequence, PCPROF_REPORT_PERIOD_MS);
+#if defined(CONFIG_SCREEN_BLOCK_PROFILE) && CONFIG_SCREEN_BLOCK_PROFILE
+		carbox_screen_block_profile_report(sequence);
+#endif
+#if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
+		lwip_diag_screen_tcp_ack_report(sequence);
+#endif
+#if defined(CONFIG_TCP_OWNED_AGE_PROFILE) && CONFIG_TCP_OWNED_AGE_PROFILE && \
+	defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE && \
+	(!defined(CONFIG_SCREEN_QUEUE_PROFILE) || !CONFIG_SCREEN_QUEUE_PROFILE)
+		lwip_tcp_owned_report(sequence);
+#endif
 #if CONFIG_PC_PROFILER_RTW_DUMP_PROFILE
 		pcprof_rtw_dump_report(sequence, old_buffer);
 #endif

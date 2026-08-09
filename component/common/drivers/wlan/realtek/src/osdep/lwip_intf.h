@@ -84,6 +84,16 @@ int rltk_network_gdma_copy_socket_rx(void *dst, const void *src,
 				     unsigned int len);
 int rltk_network_gdma_copy_tcp_tx(void *dst, const void *src,
 				  unsigned int len, unsigned int *dma_len);
+
+/* Read-only snapshot used to distinguish TCP backpressure from a backed-up
+ * asynchronous USB-NCM transport. */
+typedef struct rltk_ncm_tx_diag_s {
+	unsigned int queue_depth;
+	unsigned int queue_capacity;
+	unsigned int inflight_packets;
+	unsigned int inflight_age_us;
+} rltk_ncm_tx_diag_t;
+int rltk_ncm_tx_diag_snapshot(rltk_ncm_tx_diag_t *diag);
 unsigned int rltk_tcp_perf_now_us(void);
 void rltk_tcp_perf_rx_complete(unsigned int start_us, unsigned int bytes,
 			       unsigned int checksum_us);

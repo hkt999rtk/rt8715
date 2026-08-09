@@ -53,11 +53,17 @@
 #include "lwip/pbuf.h"
 #include "lwip/netif.h"
 #include "lwip/priv/tcpip_priv.h"
+#if (defined(CONFIG_SCREEN_TCP_BUFFER_PROFILE) && CONFIG_SCREEN_TCP_BUFFER_PROFILE) || \
+    (defined(CONFIG_SCREEN_BLOCK_PROFILE) && CONFIG_SCREEN_BLOCK_PROFILE) || \
+    (defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE)
+#include "lwip/priv/tcp_priv.h"
+#endif
 #include "lwip/mld6.h"
 #if defined(CONFIG_PLATFORM_8195BHP)
 #include <lwip_intf.h>
 #include "large_memcpy_gdma.h"
 #endif
+
 #if LWIP_CHECKSUM_ON_COPY
 #include "lwip/inet_chksum.h"
 #endif
@@ -4817,7 +4823,34 @@ lwip_ioctl(int s, long cmd, void *argp)
   return -1;
 }
 
-#if defined(CONFIG_SCREEN_TCP_BUFFER_PROFILE) && CONFIG_SCREEN_TCP_BUFFER_PROFILE
+#if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
+int
+lwip_diag_screen_tcp_ack_track(int s)
+{
+  struct lwip_sock *sock;
+  struct tcp_pcb *pcb;
+
+  sock = get_socket(s);
+  if ((sock == NULL) || (sock->conn == NULL) ||
+      (NETCONNTYPE_GROUP(netconn_type(sock->conn)) != NETCONN_TCP)) {
+    if (sock != NULL) {
+      done_socket(sock);
+    }
+    return -1;
+  }
+  LOCK_TCPIP_CORE();
+  pcb = sock->conn->pcb.tcp;
+  if (pcb != NULL) {
+    tcp_screen_ack_profile_track(pcb);
+  }
+  UNLOCK_TCPIP_CORE();
+  done_socket(sock);
+  return pcb != NULL ? 0 : -1;
+}
+#endif
+
+#if (defined(CONFIG_SCREEN_TCP_BUFFER_PROFILE) && CONFIG_SCREEN_TCP_BUFFER_PROFILE) || \
+    (defined(CONFIG_SCREEN_BLOCK_PROFILE) && CONFIG_SCREEN_BLOCK_PROFILE)
 /*
  * Diagnostic-only, read-only snapshot of a TCP socket.  Keeping this inside
  * sockets.c lets the profiler use the same descriptor lifetime protection as
@@ -4829,6 +4862,7 @@ lwip_diag_tcp_buffer_state(int s, struct lwip_tcp_buffer_diag *diag)
 {
   struct lwip_sock *sock;
   struct tcp_pcb *pcb;
+  struct tcp_seg *seg;
   int recv_avail = 0;
 
   if (diag == NULL) {
@@ -4850,6 +4884,10 @@ lwip_diag_tcp_buffer_state(int s, struct lwip_tcp_buffer_diag *diag)
     done_socket(sock);
     return -1;
   }
+#if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
+  /* A failed screen write gives us an unambiguous, lifetime-protected PCB. */
+  tcp_screen_ack_profile_track(pcb);
+#endif
 #if LWIP_SO_RCVBUF
   SYS_ARCH_GET(sock->conn->recv_avail, recv_avail);
   if (recv_avail < 0) {
@@ -4867,6 +4905,21 @@ lwip_diag_tcp_buffer_state(int s, struct lwip_tcp_buffer_diag *diag)
   diag->tx_buffer_available = (u32_t)pcb->snd_buf;
   diag->tx_queue_len = (u32_t)pcb->snd_queuelen;
   diag->tx_queue_capacity = (u32_t)TCP_SND_QUEUELEN;
+  diag->tx_unsent_bytes = 0;
+  diag->tx_unsent_segments = 0;
+  for (seg = pcb->unsent; seg != NULL; seg = seg->next) {
+    diag->tx_unsent_bytes += seg->len;
+    diag->tx_unsent_segments++;
+  }
+  diag->tx_unacked_bytes = 0;
+  diag->tx_unacked_segments = 0;
+  for (seg = pcb->unacked; seg != NULL; seg = seg->next) {
+    diag->tx_unacked_bytes += seg->len;
+    diag->tx_unacked_segments++;
+  }
+  diag->tx_send_window = (u32_t)pcb->snd_wnd;
+  diag->tx_congestion_window = (u32_t)pcb->cwnd;
+  diag->tx_mss = (u32_t)pcb->mss;
   UNLOCK_TCPIP_CORE();
   done_socket(sock);
   return 0;
