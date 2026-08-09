@@ -7,6 +7,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "diag.h"
+#include "hal_timer.h"
 #include "screen_tx_direct_crypto.h"
 
 #ifndef CONFIG_VIDEO_HANDOVER_ZERO_COPY
@@ -15,6 +16,18 @@
 
 #ifndef VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES
 #define VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES 4096U
+#endif
+
+#ifndef CONFIG_VIDEO_HANDOVER_BACKPRESSURE
+#define CONFIG_VIDEO_HANDOVER_BACKPRESSURE 0
+#endif
+
+#ifndef VIDEO_HANDOVER_MAX_INFLIGHT
+#define VIDEO_HANDOVER_MAX_INFLIGHT 2U
+#endif
+
+#ifndef VIDEO_HANDOVER_GATE_POLL_TICKS
+#define VIDEO_HANDOVER_GATE_POLL_TICKS 1U
 #endif
 
 #ifndef CONFIG_SCREEN_QUEUE_PROFILE
@@ -78,11 +91,21 @@ typedef struct video_handover_stats_s {
 	uint32_t inflight_max;
 } video_handover_stats_t;
 
+typedef struct video_handover_gate_stats_s {
+	uint32_t calls;
+	uint32_t waits;
+	uint32_t wait_loops;
+	uint64_t wait_sum_us;
+	uint32_t wait_max_us;
+	uint32_t observed_max;
+} video_handover_gate_stats_t;
+
 static video_handover_owner_t video_handover_owners[
 	VIDEO_HANDOVER_SOURCE_SLOTS];
 static video_handover_active_t video_handover_active[
 	VIDEO_HANDOVER_ACTIVE_SLOTS];
 static video_handover_stats_t video_handover_stats;
+static video_handover_gate_stats_t video_handover_gate_stats;
 static uint32_t video_handover_sequence;
 static uint8_t video_handover_enabled = 1U;
 static uint8_t video_handover_first_commit_logged;
@@ -142,6 +165,75 @@ static void video_handover_disable(const char *reason, const void *pointer)
 	rt_printf("[VIDEOHOF][FATAL] reason=%s pointer=0x%08lx; "
 		  "new substitutions disabled\r\n", reason,
 		  (unsigned long)(uintptr_t)pointer);
+}
+
+void carbox_video_handover_gate(const void *source, int frame_length)
+{
+#if CONFIG_VIDEO_HANDOVER_BACKPRESSURE
+	TaskHandle_t task = xTaskGetCurrentTaskHandle();
+	uint32_t start_us = 0U;
+	uint32_t wait_us;
+	uint32_t inflight;
+	uint32_t loops = 0U;
+	int owner_index;
+	int waited = 0;
+
+	if ((source == NULL) ||
+	    (frame_length < (int)VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES) ||
+	    (VIDEO_HANDOVER_MAX_INFLIGHT == 0U)) {
+		return;
+	}
+
+	/* This hook runs before the closed AirPlayScreen_SendVideo() takes
+	 * mutexScreen.  Waiting inside CVector_push_back() would deadlock the
+	 * ScreenThread that needs the same mutex to dequeue a frame. */
+	for (;;) {
+		taskENTER_CRITICAL();
+		owner_index = video_handover_find_owner_locked(source);
+		if (!video_handover_enabled || (owner_index < 0) ||
+		    (video_handover_owners[owner_index].state !=
+			VIDEO_HANDOVER_SOURCE) ||
+		    (video_handover_owners[owner_index].producer_task != task) ||
+		    (video_handover_owners[owner_index].allocation_length <
+			(size_t)frame_length)) {
+			taskEXIT_CRITICAL();
+			return;
+		}
+		inflight = video_handover_inflight_locked();
+		if (!waited) {
+			video_handover_gate_stats.calls++;
+			if (inflight > video_handover_gate_stats.observed_max) {
+				video_handover_gate_stats.observed_max = inflight;
+			}
+		}
+		if (inflight < VIDEO_HANDOVER_MAX_INFLIGHT) {
+			taskEXIT_CRITICAL();
+			break;
+		}
+		if (!waited) {
+			video_handover_gate_stats.waits++;
+			start_us = hal_read_curtime_us();
+			waited = 1;
+		}
+		taskEXIT_CRITICAL();
+		loops++;
+		vTaskDelay((TickType_t)VIDEO_HANDOVER_GATE_POLL_TICKS);
+	}
+
+	if (waited) {
+		wait_us = hal_read_curtime_us() - start_us;
+		taskENTER_CRITICAL();
+		video_handover_gate_stats.wait_loops += loops;
+		video_handover_gate_stats.wait_sum_us += wait_us;
+		if (wait_us > video_handover_gate_stats.wait_max_us) {
+			video_handover_gate_stats.wait_max_us = wait_us;
+		}
+		taskEXIT_CRITICAL();
+	}
+#else
+	(void)source;
+	(void)frame_length;
+#endif
 }
 
 void *carbox_video_handover_source_malloc(size_t length)
@@ -579,6 +671,37 @@ void carbox_video_handover_report(uint32_t sequence)
 		  (unsigned long)stats.anomalies);
 }
 
+void carbox_video_handover_gate_report(uint32_t sequence)
+{
+#if CONFIG_VIDEO_HANDOVER_BACKPRESSURE
+	video_handover_gate_stats_t stats;
+	uint32_t live;
+
+	taskENTER_CRITICAL();
+	stats = video_handover_gate_stats;
+	video_handover_gate_stats = (video_handover_gate_stats_t){ 0 };
+	live = video_handover_inflight_locked();
+	taskEXIT_CRITICAL();
+	if (stats.calls == 0U) {
+		return;
+	}
+	rt_printf("[VIDEOHOF_GATE][%lu] calls/wait/loops=%lu/%lu/%lu "
+		  "wait_us avg/max=%llu/%lu inflight live/seen/limit=%lu/%lu/%u\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)stats.calls,
+		  (unsigned long)stats.waits,
+		  (unsigned long)stats.wait_loops,
+		  (unsigned long long)(stats.waits != 0U ?
+			stats.wait_sum_us / stats.waits : 0U),
+		  (unsigned long)stats.wait_max_us,
+		  (unsigned long)live,
+		  (unsigned long)stats.observed_max,
+		  (unsigned int)VIDEO_HANDOVER_MAX_INFLIGHT);
+#else
+	(void)sequence;
+#endif
+}
+
 #if !CONFIG_SCREEN_QUEUE_PROFILE
 extern void __real_AirPlayScreen_SendVideo(const void *data, int bytes);
 extern void __real_CVector_push_back(void *vector, const void *element);
@@ -599,6 +722,7 @@ typedef struct video_handover_frame_item_s {
 
 void __wrap_AirPlayScreen_SendVideo(const void *data, int bytes)
 {
+	carbox_video_handover_gate(data, bytes);
 	carbox_video_handover_begin(data, bytes);
 	__real_AirPlayScreen_SendVideo(data, bytes);
 	carbox_video_handover_end();
@@ -642,6 +766,11 @@ void carbox_video_handover_begin(const void *source, int frame_length)
 	(void)source;
 	(void)frame_length;
 }
+void carbox_video_handover_gate(const void *source, int frame_length)
+{
+	(void)source;
+	(void)frame_length;
+}
 void carbox_video_handover_end(void) { }
 void *carbox_video_handover_source_malloc(size_t length) { return malloc(length); }
 void *carbox_video_handover_destination_malloc(size_t length)
@@ -680,5 +809,6 @@ void carbox_video_handover_finish_push(void *temporary, int pushed)
 	(void)pushed;
 }
 void carbox_video_handover_report(uint32_t sequence) { (void)sequence; }
+void carbox_video_handover_gate_report(uint32_t sequence) { (void)sequence; }
 
 #endif

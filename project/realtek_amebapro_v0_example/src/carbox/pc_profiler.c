@@ -930,9 +930,11 @@ static void pcprof_task(void *arg)
 		pcprof_late_100us_count = 0U;
 		pcprof_caller_attributed_samples = 0U;
 		pcprof_timer_callbacks = 0U;
+#if defined(CONFIG_IRQ_PROFILE_REPORT) && CONFIG_IRQ_PROFILE_REPORT
 		/* Keep the IRQ and PC sample windows aligned, and deduct this
 		 * profiler timer callbacks from the IRQ totals. */
 		carbox_irq_profiler_snapshot(timer_irq, timer_callbacks);
+#endif
 		if (primask == 0U) {
 			__enable_irq();
 		}
@@ -943,7 +945,13 @@ static void pcprof_task(void *arg)
 			      interval_cycles_sum, interval_cycles_max,
 			      interval_count, late_10us, late_100us,
 			      caller_attributed);
+#if defined(CONFIG_IRQ_PROFILE_REPORT) && CONFIG_IRQ_PROFILE_REPORT
 		carbox_irq_profiler_report(sequence, PCPROF_REPORT_PERIOD_MS);
+#endif
+#if defined(CONFIG_VIDEO_HANDOVER_BACKPRESSURE) && \
+	CONFIG_VIDEO_HANDOVER_BACKPRESSURE
+		carbox_video_handover_gate_report(sequence);
+#endif
 #if defined(CONFIG_SCREEN_BLOCK_PROFILE) && CONFIG_SCREEN_BLOCK_PROFILE
 		carbox_screen_block_profile_report(sequence);
 #endif
@@ -992,8 +1000,10 @@ static void pcprof_task(void *arg)
 
 void carbox_pc_profiler_start(void)
 {
+#if defined(CONFIG_IRQ_PROFILE_REPORT) && CONFIG_IRQ_PROFILE_REPORT
 	/* Install before later drivers register or replace their IRQ vectors. */
 	carbox_irq_profiler_init();
+#endif
 	if (xTaskCreate(pcprof_task, "pcprof",
 			PCPROF_TASK_STACK_BYTES / sizeof(StackType_t), NULL,
 			tskIDLE_PRIORITY + 1U, NULL) != pdPASS) {

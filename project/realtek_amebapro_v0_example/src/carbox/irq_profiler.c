@@ -11,6 +11,10 @@
 #define CONFIG_IRQ_PROFILE 0
 #endif
 
+#ifndef CONFIG_IRQ_PROFILE_REPORT
+#define CONFIG_IRQ_PROFILE_REPORT 0
+#endif
+
 #ifndef CONFIG_IRQ_PROFILE_USB_CAUSE
 #define CONFIG_IRQ_PROFILE_USB_CAUSE 0
 #endif
@@ -1109,11 +1113,13 @@ void carbox_irq_profiler_init(void)
 		__enable_irq();
 	}
 
+	#if CONFIG_IRQ_PROFILE_REPORT
 	rt_printf("[IRQPROF] enabled scope=external irq=0..31 hook=HAL-api-table "
 		  "api_visible=%lu initial_vectors=%lu "
 		  "fallback=periodic-vector-audit hotpath=naked-counter-tailbranch\r\n",
 		  (unsigned long)irqprof_api_hook_visible,
 		  (unsigned long)irqprof_initial_vectors);
+	#endif
 }
 
 void carbox_irq_profiler_snapshot(uint32_t profiler_irq,

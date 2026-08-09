@@ -1109,6 +1109,7 @@ void __wrap_AirPlayScreen_SendVideo(const void *data, int bytes)
 	/* The ownership scope is independent of profiling.  It lets the
 	 * object-local handover malloc hook prove that this allocation belongs to
 	 * the exact receiver source and frame length before returning source. */
+	carbox_video_handover_gate(data, bytes);
 	carbox_video_handover_begin(data, bytes);
 	__real_AirPlayScreen_SendVideo(data, bytes);
 	carbox_video_handover_end();

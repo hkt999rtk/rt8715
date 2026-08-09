@@ -110,6 +110,10 @@ struct tcp_screen_ack_profile_stats {
   u32_t window_min;
   u32_t window_max;
   u32_t window_current;
+  u32_t raw_window_min;
+  u32_t raw_window_max;
+  u32_t raw_window_current;
+  u32_t scale_mismatch_updates;
   u32_t available_min;
   u32_t available_max;
   u32_t small_window_packets;
@@ -132,11 +136,24 @@ struct tcp_screen_ack_profile_stats {
   u32_t edge_stall_duration_max_ms;
 };
 
+struct tcp_screen_ack_negotiation {
+  u32_t snd_wnd_at_track;
+  u32_t snd_wnd_max_at_track;
+  u16_t mss;
+  u8_t wnd_scale_enabled;
+  u8_t snd_scale;
+  u8_t rcv_scale;
+  u8_t valid;
+  u8_t reported;
+};
+
 static struct tcp_pcb *tcp_screen_ack_profile_pcb;
 static struct tcp_screen_ack_profile_stats tcp_screen_ack_profile_stats = {
   .window_min = 0xffffffffU,
+  .raw_window_min = 0xffffffffU,
   .available_min = 0xffffffffU
 };
+static struct tcp_screen_ack_negotiation tcp_screen_ack_negotiation;
 static u32_t tcp_screen_ack_last_ms;
 static u32_t tcp_screen_ack_small_since_ms;
 static u8_t tcp_screen_ack_small_active;
@@ -151,6 +168,7 @@ tcp_screen_ack_profile_reset_stats(void)
   memset(&tcp_screen_ack_profile_stats, 0,
          sizeof(tcp_screen_ack_profile_stats));
   tcp_screen_ack_profile_stats.window_min = 0xffffffffU;
+  tcp_screen_ack_profile_stats.raw_window_min = 0xffffffffU;
   tcp_screen_ack_profile_stats.available_min = 0xffffffffU;
 }
 
@@ -167,6 +185,16 @@ tcp_screen_ack_profile_track(struct tcp_pcb *pcb)
     tcp_screen_ack_edge_valid = 0;
     tcp_screen_ack_stall_active = 0;
     tcp_screen_ack_profile_reset_stats();
+    tcp_screen_ack_negotiation.snd_wnd_at_track = (u32_t)pcb->snd_wnd;
+    tcp_screen_ack_negotiation.snd_wnd_max_at_track =
+      (u32_t)pcb->snd_wnd_max;
+    tcp_screen_ack_negotiation.mss = pcb->mss;
+    tcp_screen_ack_negotiation.wnd_scale_enabled =
+      (pcb->flags & TF_WND_SCALE) != 0U;
+    tcp_screen_ack_negotiation.snd_scale = pcb->snd_scale;
+    tcp_screen_ack_negotiation.rcv_scale = pcb->rcv_scale;
+    tcp_screen_ack_negotiation.valid = 1U;
+    tcp_screen_ack_negotiation.reported = 0U;
   }
 }
 
@@ -232,6 +260,17 @@ tcp_screen_ack_profile_record(struct tcp_pcb *pcb, tcpwnd_size_t acked,
     s->window_max = (u32_t)pcb->snd_wnd;
   }
   s->window_current = (u32_t)pcb->snd_wnd;
+  if ((u32_t)tcphdr->wnd < s->raw_window_min) {
+    s->raw_window_min = (u32_t)tcphdr->wnd;
+  }
+  if ((u32_t)tcphdr->wnd > s->raw_window_max) {
+    s->raw_window_max = (u32_t)tcphdr->wnd;
+  }
+  s->raw_window_current = (u32_t)tcphdr->wnd;
+  if (window_updated &&
+      ((u32_t)pcb->snd_wnd != (u32_t)SND_WND_SCALE(pcb, tcphdr->wnd))) {
+    s->scale_mismatch_updates++;
+  }
   flight = pcb->snd_nxt - pcb->lastack;
   available = (u32_t)pcb->snd_wnd > flight ?
               (u32_t)pcb->snd_wnd - flight : 0U;
@@ -311,6 +350,7 @@ void
 lwip_diag_screen_tcp_ack_report(unsigned int sequence)
 {
   struct tcp_screen_ack_profile_stats s;
+  struct tcp_screen_ack_negotiation negotiation;
   u32_t pending_age_ms = 0;
   u32_t edge_pending_age_ms = 0;
   u32_t elapsed_ms;
@@ -319,6 +359,12 @@ lwip_diag_screen_tcp_ack_report(unsigned int sequence)
   primask = __get_PRIMASK();
   __disable_irq();
   s = tcp_screen_ack_profile_stats;
+  negotiation = tcp_screen_ack_negotiation;
+  if (tcp_screen_ack_negotiation.valid &&
+      !tcp_screen_ack_negotiation.reported &&
+      (s.ack_packets != 0U)) {
+    tcp_screen_ack_negotiation.reported = 1U;
+  }
   if (tcp_screen_ack_small_active) {
     pending_age_ms = sys_now() - tcp_screen_ack_small_since_ms;
   }
@@ -331,6 +377,15 @@ lwip_diag_screen_tcp_ack_report(unsigned int sequence)
   }
   if (s.ack_packets == 0U) {
     return;
+  }
+  if (negotiation.valid && !negotiation.reported) {
+    rt_printf("[SCREENACK][%u][NEGO] wnd_scale=%u snd_scale(peer)=%u "
+              "rcv_scale(local)=%u mss=%u snd_wnd/max_at_track=%lu/%lu\r\n",
+              sequence, negotiation.wnd_scale_enabled,
+              negotiation.snd_scale, negotiation.rcv_scale,
+              negotiation.mss,
+              (unsigned long)negotiation.snd_wnd_at_track,
+              (unsigned long)negotiation.snd_wnd_max_at_track);
   }
   elapsed_ms = s.last_ack_ms - s.first_ack_ms;
   rt_printf("[SCREENACK][%u] elapsed_ms=%lu packets/new/other=%lu/%lu/%lu "
@@ -359,12 +414,18 @@ lwip_diag_screen_tcp_ack_report(unsigned int sequence)
             (unsigned long)s.interval_bins[5],
             (unsigned long)s.interval_bins[6]);
   rt_printf("[SCREENACK][%u] wnd current/min/max=%lu/%lu/%lu "
+            "raw current/min/max=%lu/%lu/%lu scale_mismatch=%lu "
             "avail_min/max=%lu/%lu update/grow/shrink=%lu/%lu/%lu "
             "small/zero=%lu/%lu episode enter/recover/pending_age_ms=%lu/%lu/%lu "
             "duration_ms avg/max=%lu/%lu rtt_ms samples/avg/max=%lu/%lu/%lu\r\n",
             sequence, (unsigned long)s.window_current,
             (unsigned long)(s.window_min == 0xffffffffU ? 0U : s.window_min),
             (unsigned long)s.window_max,
+            (unsigned long)s.raw_window_current,
+            (unsigned long)(s.raw_window_min == 0xffffffffU ? 0U :
+                            s.raw_window_min),
+            (unsigned long)s.raw_window_max,
+            (unsigned long)s.scale_mismatch_updates,
             (unsigned long)(s.available_min == 0xffffffffU ? 0U :
                             s.available_min),
             (unsigned long)s.available_max,

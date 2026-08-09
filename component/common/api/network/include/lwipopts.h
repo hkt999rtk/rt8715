@@ -361,15 +361,15 @@ extern unsigned int sys_now(void);
 #define IP_REASS_MAX_PBUFS 40
 
 /*
- * TCP_SND_BUF: per-connection send buffer. Raised to 65535*4 (~262KB)
- * matching the known-working COM3 configuration for CarPlay reliability.
+ * Keep one head-unit receive window plus modest write/ACK headroom queued
+ * locally.  This preserves the downstream pipeline without hiding another
+ * large portion of a video frame in TCP.
  */
 #undef TCP_SND_BUF
-#define TCP_SND_BUF (65535 * 4)
+#define TCP_SND_BUF (32 * 1024)
 
-/* TCP_SNDLOWAT: must be < u16_t overflow (0xFFFF - 4*MSS ≈ 59695).
- * 65535/2 = 32767 matches COM3 known-working config. */
-#define TCP_SNDLOWAT (65535 / 2)
+/* Keep writable readiness proportional to the reduced send buffer. */
+#define TCP_SNDLOWAT (TCP_SND_BUF / 2)
 
 #undef TCP_SND_QUEUELEN
 #define TCP_SND_QUEUELEN (12*TCP_SND_BUF/TCP_MSS)
@@ -378,13 +378,12 @@ extern unsigned int sys_now(void);
 #define MEMP_NUM_TCP_SEG TCP_SND_QUEUELEN
 
 /*
- * TCP_WND: per-connection receive window.  Board profiling observed short
- * bursts reaching about 80% of the former 128-KiB window.  Keep twice that
- * headroom so those bursts do not throttle the sender.  TCP_RCV_SCALE must
- * be 2: a scale of 1 can advertise at most 65535*2 bytes on the wire.
+ * Keep the upstream receive window close to one video frame.  Together with
+ * the bounded handover this makes downstream congestion close the window
+ * toward the iPhone promptly instead of buffering another 262 KiB.
  */
 #undef TCP_WND
-#define TCP_WND (65535 * 4)
+#define TCP_WND (32 * 1024)
 
 /*
  * CONFIG_ETHERNET lowered MEMP_NUM_NETCONN to 10 above;

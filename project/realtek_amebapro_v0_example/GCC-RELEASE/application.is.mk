@@ -835,13 +835,14 @@ TCP_OUTPUT_PROFILE ?= 0
 NCM_TX_PROFILE ?= 0
 # Move the closed synchronous NCM send/wait out of TCP_IP.
 NCM_TX_ASYNC ?= 1
-NCM_TX_ASYNC_PROFILE ?= 0
+# Compact 10-second batch health report used to validate aggregation limits.
+NCM_TX_ASYNC_PROFILE ?= 1
 # Seal a multi-datagram NTB when it reaches either limit, or 5 ms after the
 # oldest retained Ethernet packet was queued.  The timeout is not sliding.
 NCM_TX_BATCH ?= 1
 NCM_TX_BATCH_MAX_PACKETS ?= 16
-NCM_TX_BATCH_MAX_BYTES ?= 16384
-NCM_TX_BATCH_TIMEOUT_MS ?= 5
+NCM_TX_BATCH_MAX_BYTES ?= 4096
+NCM_TX_BATCH_TIMEOUT_MS ?= 1
 # Gather all pbuf fragments of a sealed NTB into the closed driver's contiguous
 # USB buffer with the linked-GDMA copyv path already validated by socket recv.
 # Header/table/cache-line edges stay on M33 and any busy/error falls back to a
@@ -853,7 +854,10 @@ PC_PROFILER ?= 1
 PC_PROFILER_PC_DETAIL ?= 0
 PC_PROFILER_RTW_RECV_DETAIL ?= 0
 PC_PROFILER_RTW_DUMP_PROFILE ?= 0
+# Keep the IRQ hook/counter banks required by USB CH4 NAK coalescing, but stop
+# periodic IRQPROF reports once validation is complete.
 IRQ_PROFILE ?= 1
+IRQ_PROFILE_REPORT ?= 0
 # Diagnose the high-rate USB interrupt source by sampling GINTSTS & GINTMSK in
 # the IRQ trampoline.  This is independent of the aggregate IRQ counters.
 IRQ_PROFILE_USB_CAUSE ?= 0
@@ -930,6 +934,12 @@ SCREEN_TCP_ACK_PROFILE ?= 1
 # the supplied vendor archives are never modified.
 VIDEO_HANDOVER_ZERO_COPY ?= 1
 VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES ?= 4096
+# Bound queued plus actively-sent screen frames before entering the closed
+# AirPlayScreen mutex.  This lets downstream TCP/USB pressure stop the receiver
+# callback and naturally close the upstream TCP window toward the iPhone.
+VIDEO_HANDOVER_BACKPRESSURE ?= 1
+VIDEO_HANDOVER_MAX_INFLIGHT ?= 2
+VIDEO_HANDOVER_GATE_POLL_TICKS ?= 1
 # Closed AirPlay normal-frame sender optimization. Its payload memcpy is
 # deferred only after object-local allocation/header/layout validation, then
 # AES or ChaCha writes ciphertext directly into wireBuffer + 128.
@@ -996,6 +1006,7 @@ GCCFLAGS += -DCONFIG_PC_PROFILER_PC_DETAIL=$(PC_PROFILER_PC_DETAIL)
 GCCFLAGS += -DCONFIG_PC_PROFILER_RTW_RECV_DETAIL=$(PC_PROFILER_RTW_RECV_DETAIL)
 GCCFLAGS += -DCONFIG_PC_PROFILER_RTW_DUMP_PROFILE=$(PC_PROFILER_RTW_DUMP_PROFILE)
 GCCFLAGS += -DCONFIG_IRQ_PROFILE=$(IRQ_PROFILE)
+GCCFLAGS += -DCONFIG_IRQ_PROFILE_REPORT=$(IRQ_PROFILE_REPORT)
 GCCFLAGS += -DCONFIG_IRQ_PROFILE_USB_CAUSE=$(IRQ_PROFILE_USB_CAUSE)
 GCCFLAGS += -DCONFIG_IRQ_PROFILE_USB_HANDOFF=$(IRQ_PROFILE_USB_HANDOFF)
 GCCFLAGS += -DCONFIG_IRQ_PROFILE_USB_CH4_FLOW=$(IRQ_PROFILE_USB_CH4_FLOW)
@@ -1025,6 +1036,9 @@ GCCFLAGS += -DCONFIG_SCREEN_BLOCK_PROFILE=$(SCREEN_BLOCK_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TCP_ACK_PROFILE=$(SCREEN_TCP_ACK_PROFILE)
 GCCFLAGS += -DCONFIG_VIDEO_HANDOVER_ZERO_COPY=$(VIDEO_HANDOVER_ZERO_COPY)
 GCCFLAGS += -DVIDEO_HANDOVER_ZERO_COPY_MIN_BYTES=$(VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES)
+GCCFLAGS += -DCONFIG_VIDEO_HANDOVER_BACKPRESSURE=$(VIDEO_HANDOVER_BACKPRESSURE)
+GCCFLAGS += -DVIDEO_HANDOVER_MAX_INFLIGHT=$(VIDEO_HANDOVER_MAX_INFLIGHT)
+GCCFLAGS += -DVIDEO_HANDOVER_GATE_POLL_TICKS=$(VIDEO_HANDOVER_GATE_POLL_TICKS)
 GCCFLAGS += -DCONFIG_SCREEN_TX_DIRECT_CRYPTO=$(SCREEN_TX_DIRECT_CRYPTO)
 GCCFLAGS += -DSCREEN_TX_DIRECT_CRYPTO_MIN_BYTES=$(SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES)
 GCCFLAGS += -DCONFIG_TCP_OWNED_WRITE=$(TCP_OWNED_WRITE)

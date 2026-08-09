@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 /* Scope established by the AirPlayScreen_SendVideo linker wrapper. */
+void carbox_video_handover_gate(const void *source, int frame_length);
 void carbox_video_handover_begin(const void *source, int frame_length);
 void carbox_video_handover_end(void);
 
@@ -27,5 +28,6 @@ int carbox_video_handover_prepare_push(void *temporary, int frame_length,
 void carbox_video_handover_finish_push(void *temporary, int pushed);
 
 void carbox_video_handover_report(uint32_t sequence);
+void carbox_video_handover_gate_report(uint32_t sequence);
 
 #endif /* CARBOX_VIDEO_HANDOVER_ZERO_COPY_H */
