@@ -404,6 +404,24 @@ void rtw_memcpy(void* dst, void* src, u32 sz)
 
 int rtw_memcmp(void *dst, void *src, u32 sz)
 {
+	const u8 *a = (const u8 *)dst;
+	const u8 *b = (const u8 *)src;
+
+	/*
+	 * WLAN receive paths compare MAC addresses and 4-byte selectors for
+	 * nearly every packet.  Avoid the OS-service dispatch and generic libc
+	 * alignment/loop setup for these short, fixed-size equality checks.
+	 */
+	if (sz == 6U) {
+		return (a[0] == b[0] && a[1] == b[1] &&
+			a[2] == b[2] && a[3] == b[3] &&
+			a[4] == b[4] && a[5] == b[5]) ? _TRUE : _FALSE;
+	}
+	if (sz == 4U) {
+		return (a[0] == b[0] && a[1] == b[1] &&
+			a[2] == b[2] && a[3] == b[3]) ? _TRUE : _FALSE;
+	}
+
 	if(osdep_service.rtw_memcmp)
 		return osdep_service.rtw_memcmp(dst, src, sz);
 	else

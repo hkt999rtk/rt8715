@@ -716,6 +716,7 @@ SRC_C += ../../../component/common/drivers/wlan/realtek/src/core/option/rtw_opt_
 SRC_C += ../src/main.c
 SRC_C += ../src/carbox/carbox_diag.c
 SRC_C += ../src/carbox/pc_profiler.c
+SRC_C += ../src/carbox/irq_profiler.c
 SRC_C += ../src/carbox/gcd_sync_profiler.c
 SRC_C += ../src/carbox/screen_queue_profiler.c
 SRC_C += ../src/carbox/memcheck.c
@@ -818,23 +819,23 @@ NET_GDMA_OWNER_BOOST_PRIORITY ?= 11
 # Descriptor/skb validation and 10-second diagnostics for the closed-driver
 # RX ring hook. WLAN_RX_RING_SWAP enables the validated spare-buffer rotation;
 # disabling it leaves this as an observation-only legacy memcpy probe.
-WLAN_RX_SWAP_BRINGUP_PROFILE ?= 1
+WLAN_RX_SWAP_BRINGUP_PROFILE ?= 0
 WLAN_RX_RING_SWAP ?= 1
-TCP_PHASE_PROFILE ?= 1
+TCP_PHASE_PROFILE ?= 0
 # Detailed 10-second breakdown of tcp_input() processing. This is independent
 # of the compact 5-second TCP_PERF throughput/checksum summary above.
-TCP_CORE_PHASE_PROFILE ?= 1
+TCP_CORE_PHASE_PROFILE ?= 0
 # Ten-second breakdown of tcp_output() and its synchronous WLAN transmit path.
 # This distinguishes ACK/data traffic and separates lwIP preparation/checksum/IP
 # time from skb allocation, scatter-gather copy, and closed-driver submission.
-TCP_OUTPUT_PROFILE ?= 1
+TCP_OUTPUT_PROFILE ?= 0
 # Ten-second timing of the en3 CDC-NCM transmit path.  The closed NCM library
 # waits synchronously for USB completion, so measure that wait separately from
 # any lwIP pbuf-chain flattening done by ethernetif.c.
-NCM_TX_PROFILE ?= 1
+NCM_TX_PROFILE ?= 0
 # Move the closed synchronous NCM send/wait out of TCP_IP.
 NCM_TX_ASYNC ?= 1
-NCM_TX_ASYNC_PROFILE ?= 1
+NCM_TX_ASYNC_PROFILE ?= 0
 # Seal a multi-datagram NTB when it reaches either limit, or 5 ms after the
 # oldest retained Ethernet packet was queued.  The timeout is not sliding.
 NCM_TX_BATCH ?= 1
@@ -847,6 +848,26 @@ NCM_TX_BATCH_TIMEOUT_MS ?= 5
 # complete CPU copy before the USB request is submitted.
 NCM_TX_BATCH_GDMA ?= 1
 PC_PROFILER ?= 1
+# Optional PC-level reports. Keep task utilization sampling enabled while
+# suppressing the verbose per-PC reports during IRQ-count investigation.
+PC_PROFILER_PC_DETAIL ?= 0
+PC_PROFILER_RTW_RECV_DETAIL ?= 0
+PC_PROFILER_RTW_DUMP_PROFILE ?= 0
+IRQ_PROFILE ?= 1
+# Diagnose the high-rate USB interrupt source by sampling GINTSTS & GINTMSK in
+# the IRQ trampoline.  This is independent of the aggregate IRQ counters.
+IRQ_PROFILE_USB_CAUSE ?= 1
+# Low-overhead measurement at the existing ISR semaphore-give wrapper: count
+# successful wakeups and ISR-return yield requests only.
+IRQ_PROFILE_USB_HANDOFF ?= 1
+# Drop the stale NVIC latch just before the HCD task re-enables USB_IRQn, then
+# re-read the controller and software-pend any cause which arrived in the
+# clear/re-enable race window.
+USB_IRQ_SAFE_DEDUP ?= 1
+# The closed HCD disables USB_IRQn in its top half and re-enables it only after
+# the ISR task drains HCINT.  Retain the original unsafe single-check experiment
+# as an off-by-default rollback reference; do not enable with SAFE_DEDUP.
+USB_IRQ_CLEAR_STALE_PENDING ?= 0
 MEMCPY_TASK_PROFILE ?= 0
 LARGE_MEMCPY_GDMA ?= 1
 LARGE_MEMCPY_GDMA_THRESHOLD ?= 4096
@@ -855,12 +876,12 @@ LARGE_MEMCPY_GDMA_OWNER_BOOST_PRIORITY ?= 11
 # Every completed DMA batch is compared by M33 before its pbufs are released;
 # mismatch prints the exact byte and forces a full CPU recopy of that batch.
 LARGE_MEMCPY_GDMA_COPYV_VERIFY ?= 0
-SOCKET_RECV_PROFILE ?= 1
+SOCKET_RECV_PROFILE ?= 0
 # Gather fragmented TCP pbuf payloads into one linked-GDMA submission when a
 # recv() batch exceeds 4 KiB.  Sources may be non-contiguous; caller output is
 # contiguous.  Cache-line edges remain on the M33 path.
 SOCKET_RECV_GDMA ?= 1
-SOCKET_RECV_GDMA_PROFILE ?= 1
+SOCKET_RECV_GDMA_PROFILE ?= 0
 SOCKET_RECV_GDMA_THRESHOLD ?= 4096
 # TCP core does not copy payload into a second socket buffer.  This probe
 # measures the pbuf-pointer handoff into recvmbox and the socket wakeup event.
@@ -873,7 +894,7 @@ GCD_SYNC_PROFILE ?= 0
 # Diagnostic A/B switch.  The production default preserves DispatchLite's
 # requested worker priority; set this to a non-negative value only for testing.
 GCD_WORK_PRIORITY ?= -1
-SCREEN_QUEUE_PROFILE ?= 1
+SCREEN_QUEUE_PROFILE ?= 0
 # Remove the closed AirPlay library's redundant full-frame handover memcpy.
 # Phase B retains the temporary allocation until queue publication is proven,
 # then frees it immediately.  The build creates derived archives whose hooks
@@ -893,12 +914,15 @@ TCP_OWNED_WRITE ?= 1
 # Keep the expensive, already-concluded diagnostic probes independently
 # switchable.  The normal screen timing/backlog profiler does not need them.
 SCREEN_FRAME_FORMAT_PROFILE ?= 0
-SCREEN_TCP_BUFFER_PROFILE ?= 1
+SCREEN_TCP_BUFFER_PROFILE ?= 0
 # When SCREEN_QUEUE_PROFILE is enabled, correlate the local tick used to
 # generate each outgoing screen NTP timestamp with that frame's receive time.
-SCREEN_TIMESTAMP_PROFILE ?= 1
-USB_HCD_PROFILE ?= 1
-NET_QUEUE_PROFILE ?= 1
+SCREEN_TIMESTAMP_PROFILE ?= 0
+USB_HCD_PROFILE ?= 0
+# Narrow NCM channel submit-size diagnostic.  This wraps only HCD submit and
+# is intentionally independent of the older verbose USB_HCD_PROFILE.
+USB_HCD_CHANNEL_PROFILE ?= 1
+NET_QUEUE_PROFILE ?= 0
 # Stage 1 validates the preallocated pbuf-pointer mailbox path without
 # aggregation, delay, or GTimer.  Each WLAN packet is still posted immediately.
 TCPIP_RX_BATCH_STAGE1 ?= 1
@@ -937,6 +961,14 @@ GCCFLAGS += -DCONFIG_NCM_TX_BATCH_MAX_BYTES=$(NCM_TX_BATCH_MAX_BYTES)
 GCCFLAGS += -DCONFIG_NCM_TX_BATCH_TIMEOUT_MS=$(NCM_TX_BATCH_TIMEOUT_MS)
 GCCFLAGS += -DCONFIG_NCM_TX_BATCH_GDMA=$(NCM_TX_BATCH_GDMA)
 GCCFLAGS += -DCONFIG_PC_PROFILER=$(PC_PROFILER)
+GCCFLAGS += -DCONFIG_PC_PROFILER_PC_DETAIL=$(PC_PROFILER_PC_DETAIL)
+GCCFLAGS += -DCONFIG_PC_PROFILER_RTW_RECV_DETAIL=$(PC_PROFILER_RTW_RECV_DETAIL)
+GCCFLAGS += -DCONFIG_PC_PROFILER_RTW_DUMP_PROFILE=$(PC_PROFILER_RTW_DUMP_PROFILE)
+GCCFLAGS += -DCONFIG_IRQ_PROFILE=$(IRQ_PROFILE)
+GCCFLAGS += -DCONFIG_IRQ_PROFILE_USB_CAUSE=$(IRQ_PROFILE_USB_CAUSE)
+GCCFLAGS += -DCONFIG_IRQ_PROFILE_USB_HANDOFF=$(IRQ_PROFILE_USB_HANDOFF)
+GCCFLAGS += -DCONFIG_USB_IRQ_SAFE_DEDUP=$(USB_IRQ_SAFE_DEDUP)
+GCCFLAGS += -DCONFIG_USB_IRQ_CLEAR_STALE_PENDING=$(USB_IRQ_CLEAR_STALE_PENDING)
 GCCFLAGS += -DCONFIG_MEMCPY_TASK_PROFILE=$(MEMCPY_TASK_PROFILE)
 GCCFLAGS += -DCONFIG_LARGE_MEMCPY_GDMA=$(LARGE_MEMCPY_GDMA)
 GCCFLAGS += -DLARGE_MEMCPY_GDMA_THRESHOLD=$(LARGE_MEMCPY_GDMA_THRESHOLD)
@@ -960,6 +992,7 @@ GCCFLAGS += -DCONFIG_SCREEN_FRAME_FORMAT_PROFILE=$(SCREEN_FRAME_FORMAT_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TCP_BUFFER_PROFILE=$(SCREEN_TCP_BUFFER_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_PROFILE=$(SCREEN_TIMESTAMP_PROFILE)
 GCCFLAGS += -DCONFIG_USB_HCD_PROFILE=$(USB_HCD_PROFILE)
+GCCFLAGS += -DCONFIG_USB_HCD_CHANNEL_PROFILE=$(USB_HCD_CHANNEL_PROFILE)
 GCCFLAGS += -DCONFIG_NET_QUEUE_PROFILE=$(NET_QUEUE_PROFILE)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_STAGE1=$(TCPIP_RX_BATCH_STAGE1)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_TIMER_PROBE=$(TCPIP_RX_BATCH_TIMER_PROBE)
@@ -1018,6 +1051,13 @@ CPPFLAGS += -Wall -Wpointer-arith -Wundef -Wno-write-strings -Wno-maybe-uninitia
 LFLAGS = 
 LFLAGS += -march=armv8-m.main+dsp -mthumb -mcmse -mfloat-abi=softfp -mfpu=fpv5-sp-d16 -Os -nostartfiles -specs=nosys.specs -nodefaultlibs -nostdlib
 LFLAGS += -Wl,--gc-sections -Wl,-Map=$(BIN_DIR)/$(TARGET).map -Wl,--cref -Wl,--build-id=none -Wl,--use-blx 
+ifeq ($(PC_PROFILER_RTW_DUMP_PROFILE),1)
+LFLAGS += -Wl,--wrap=rtw_enter_critical -Wl,--wrap=rtw_exit_critical \
+	-Wl,--wrap=clean_cache_wlan -Wl,--wrap=rtl8195b_update_txdesc
+endif
+ifneq ($(filter 1,$(USB_IRQ_SAFE_DEDUP) $(USB_IRQ_CLEAR_STALE_PENDING)),)
+LFLAGS += -Wl,--wrap=usb_hal_enable_interrupt
+endif
 ifeq ($(GCD_SYNC_PROFILE),1)
 LFLAGS += -Wl,--wrap=dispatch_sync_f
 endif
@@ -1055,6 +1095,11 @@ ifeq ($(USB_HCD_PROFILE),1)
 LFLAGS += -Wl,--wrap=usbh_hcd_hc_submit_request
 LFLAGS += -Wl,--wrap=usbh_hcd_hc_get_urb_state
 LFLAGS += -Wl,--wrap=usbh_hcd_hc_get_transfer_size
+endif
+ifeq ($(USB_HCD_CHANNEL_PROFILE),1)
+ifneq ($(USB_HCD_PROFILE),1)
+LFLAGS += -Wl,--wrap=usbh_hcd_hc_submit_request
+endif
 endif
 ifeq ($(CRYPTO_ENGINE_PROFILE),1)
 LFLAGS += -Wl,--wrap=device_mutex_lock -Wl,--wrap=device_mutex_unlock

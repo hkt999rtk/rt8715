@@ -1775,9 +1775,17 @@ static CHACHA_UNUSED int chacha_build_poly_input(
 
   buffer = (uint8_t *)malloc(*poly_input_len);
   if (!buffer) return CHACHA_RTL_SKIP_MEMORY;
-  memset(buffer, 0, *poly_input_len);
   if (aad_len != 0u) chacha_copy_bytes(buffer, aad, aad_len);
+  if (aad_padded != aad_len) {
+    memset(buffer + aad_len, 0, aad_padded - aad_len);
+  }
   chacha_copy_bytes(buffer + aad_padded, ciphertext, ciphertext_len);
+  if (data_padded != ciphertext_len) {
+    memset(
+      buffer + aad_padded + ciphertext_len, 0,
+      data_padded - ciphertext_len
+    );
+  }
   store64_le_u(buffer + aad_padded + data_padded, (uint64_t)aad_len);
   store64_le_u(
     buffer + aad_padded + data_padded + 8u, (uint64_t)ciphertext_len

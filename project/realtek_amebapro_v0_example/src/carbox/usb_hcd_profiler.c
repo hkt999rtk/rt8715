@@ -12,6 +12,10 @@
 #define CONFIG_USB_HCD_PROFILE 0
 #endif
 
+#ifndef CONFIG_USB_HCD_CHANNEL_PROFILE
+#define CONFIG_USB_HCD_CHANNEL_PROFILE 0
+#endif
+
 #if CONFIG_USB_HCD_PROFILE
 
 #define USBPROF_CHANNEL_COUNT 16U
@@ -201,6 +205,141 @@ void usb_hcd_profiler_report(uint32_t sequence)
 		  (unsigned long)usbprof_snapshot.isr_sema_gives,
 		  (unsigned long)usbprof_snapshot.isr_task_wakes,
 		  (unsigned long)usbprof_snapshot.isr_sema_errors);
+}
+
+#elif CONFIG_USB_HCD_CHANNEL_PROFILE
+
+/*
+ * Narrow diagnostic for the NCM channels.  Unlike CONFIG_USB_HCD_PROFILE,
+ * this deliberately wraps only submit_request: wrapping the very frequent
+ * URB-state polling path would perturb the IRQ/CPU measurement we are trying
+ * to explain.
+ */
+#define USBHCH_FIRST_CHANNEL 2U
+#define USBHCH_LAST_CHANNEL  4U
+#define USBHCH_CHANNEL_COUNT (USBHCH_LAST_CHANNEL - USBHCH_FIRST_CHANNEL + 1U)
+#define USBHCH_LENGTH_BINS   5U
+
+typedef struct usbhch_channel_stats_s {
+	uint32_t calls;
+	uint32_t errors;
+	uint32_t bytes;
+	uint32_t in_calls;
+	uint32_t out_calls;
+	uint32_t ep_type[4];
+	uint32_t length_bins[USBHCH_LENGTH_BINS];
+	uint16_t min_length;
+	uint16_t max_length;
+} usbhch_channel_stats_t;
+
+static usbhch_channel_stats_t usbhch_live[USBHCH_CHANNEL_COUNT];
+static usbhch_channel_stats_t usbhch_snapshot[USBHCH_CHANNEL_COUNT];
+
+extern uint8_t __real_usbh_hcd_hc_submit_request(
+	void *hcd, uint8_t channel, uint8_t direction, uint8_t ep_type,
+	uint8_t token, uint8_t *buffer, uint16_t length);
+
+static uint32_t usbhch_length_bin(uint16_t length)
+{
+	if (length <= 64U) {
+		return 0U;
+	}
+	if (length <= 512U) {
+		return 1U;
+	}
+	if (length <= 4096U) {
+		return 2U;
+	}
+	if (length <= 16384U) {
+		return 3U;
+	}
+	return 4U;
+}
+
+uint8_t __wrap_usbh_hcd_hc_submit_request(
+	void *hcd, uint8_t channel, uint8_t direction, uint8_t ep_type,
+	uint8_t token, uint8_t *buffer, uint16_t length)
+{
+	uint8_t result = __real_usbh_hcd_hc_submit_request(
+		hcd, channel, direction, ep_type, token, buffer, length);
+
+	if (channel >= USBHCH_FIRST_CHANNEL && channel <= USBHCH_LAST_CHANNEL) {
+		usbhch_channel_stats_t *stats =
+			&usbhch_live[channel - USBHCH_FIRST_CHANNEL];
+
+		stats->calls++;
+		stats->bytes += length;
+		stats->length_bins[usbhch_length_bin(length)]++;
+		if (direction != 0U) {
+			stats->in_calls++;
+		} else {
+			stats->out_calls++;
+		}
+		if (ep_type < 4U) {
+			stats->ep_type[ep_type]++;
+		}
+		if (stats->calls == 1U || length < stats->min_length) {
+			stats->min_length = length;
+		}
+		if (length > stats->max_length) {
+			stats->max_length = length;
+		}
+		if (result != 0U) {
+			stats->errors++;
+		}
+	}
+
+	return result;
+}
+
+void usb_hcd_profiler_isr_sema_give(int success, int task_woken)
+{
+	(void)success;
+	(void)task_woken;
+}
+
+void usb_hcd_profiler_report(uint32_t sequence)
+{
+	uint32_t i;
+
+	taskENTER_CRITICAL();
+	memcpy(usbhch_snapshot, usbhch_live, sizeof(usbhch_snapshot));
+	memset(usbhch_live, 0, sizeof(usbhch_live));
+	taskEXIT_CRITICAL();
+
+	for (i = 0U; i < USBHCH_CHANNEL_COUNT; i++) {
+		const usbhch_channel_stats_t *stats = &usbhch_snapshot[i];
+		uint32_t average = stats->calls != 0U ?
+			stats->bytes / stats->calls : 0U;
+
+		if (stats->calls == 0U) {
+			continue;
+		}
+		rt_printf("[USBHCH][%lu] ch=%lu submit=%lu(%lu/s)/%luB "
+			  "avg/min/max=%lu/%u/%u in/out=%lu/%lu error=%lu "
+			  "type=ctrl/isoc/bulk/intr:%lu/%lu/%lu/%lu "
+			  "len=<=64/<=512/<=4K/<=16K/>16K:%lu/%lu/%lu/%lu/%lu\r\n",
+			  (unsigned long)sequence,
+			  (unsigned long)(i + USBHCH_FIRST_CHANNEL),
+			  (unsigned long)stats->calls,
+			  (unsigned long)(stats->calls / 10U),
+			  (unsigned long)stats->bytes,
+			  (unsigned long)average,
+			  (unsigned int)stats->min_length,
+			  (unsigned int)stats->max_length,
+			  (unsigned long)stats->in_calls,
+			  (unsigned long)stats->out_calls,
+			  (unsigned long)stats->errors,
+			  (unsigned long)stats->ep_type[0],
+			  (unsigned long)stats->ep_type[1],
+			  (unsigned long)stats->ep_type[2],
+			  (unsigned long)stats->ep_type[3],
+			  (unsigned long)stats->length_bins[0],
+			  (unsigned long)stats->length_bins[1],
+			  (unsigned long)stats->length_bins[2],
+			  (unsigned long)stats->length_bins[3],
+			  (unsigned long)stats->length_bins[4]);
+	}
 }
 
 #else

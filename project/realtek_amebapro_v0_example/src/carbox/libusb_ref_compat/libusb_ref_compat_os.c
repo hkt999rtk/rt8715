@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "FreeRTOS.h"
+#include "irq_profiler.h"
 #include "usb_hcd_profiler.h"
 #include "cmsis.h"
 #include "queue.h"
@@ -332,6 +333,10 @@ int __wrap_usb_os_sema_give(void *p_handle)
 
 	if (rtos_critical_is_in_interrupt()) {
 		ret = xSemaphoreGiveFromISR((SemaphoreHandle_t)p_handle, &task_woken);
+#if CONFIG_IRQ_PROFILE_USB_HANDOFF || CONFIG_USB_IRQ_SAFE_DEDUP
+		carbox_irq_profiler_usb_sema_give(p_handle, ret == pdTRUE,
+					       task_woken == pdTRUE);
+#endif
 		carbox_libusb_ref_yield_from_isr(task_woken);
 
 		return ret == pdTRUE ? 0 : 4;

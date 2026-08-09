@@ -45,7 +45,8 @@ typedef struct video_handover_owner_s {
 } video_handover_owner_t;
 
 typedef struct video_handover_active_s {
-	TaskHandle_t task;
+	/* Read without the critical section by the global memcpy fast reject. */
+	TaskHandle_t volatile task;
 	void *source;
 	void *temporary;
 	size_t frame_length;
@@ -213,10 +214,11 @@ void carbox_video_handover_begin(const void *source, int frame_length)
 		taskEXIT_CRITICAL();
 		return;
 	}
-	active->task = task;
 	active->source = (void *)source;
 	active->frame_length = (size_t)frame_length;
 	active->owner_index = (uint32_t)owner_index;
+	/* Publish the task last, after the transaction fields are initialized. */
+	active->task = task;
 	video_handover_stats.eligible++;
 	taskEXIT_CRITICAL();
 }
@@ -249,6 +251,7 @@ int carbox_video_handover_memcpy_is_elided(void *destination,
 {
 	TaskHandle_t task;
 	video_handover_active_t *active;
+	uint32_t i;
 	uint32_t ipsr;
 	int elide = 0;
 
@@ -264,6 +267,23 @@ int carbox_video_handover_memcpy_is_elided(void *destination,
 		return 0;
 	}
 	task = xTaskGetCurrentTaskHandle();
+	/* __wrap_memcpy() is global, while handover transactions belong only to
+	 * the AirPlay producer task.  Inspect the volatile task publications
+	 * without entering a critical section; the locked lookup below remains
+	 * authoritative.  A concurrent teardown can only cause a harmless false
+	 * positive here, while begin() publishes task last to avoid false matches
+	 * against a partially initialized transaction. */
+	if (task == NULL) {
+		return 0;
+	}
+	for (i = 0U; i < VIDEO_HANDOVER_ACTIVE_SLOTS; i++) {
+		if (video_handover_active[i].task == task) {
+			break;
+		}
+	}
+	if (i == VIDEO_HANDOVER_ACTIVE_SLOTS) {
+		return 0;
+	}
 	taskENTER_CRITICAL();
 	active = video_handover_find_active_locked(task);
 	if ((active != NULL) &&

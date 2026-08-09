@@ -1833,12 +1833,14 @@ static int wlan_rx_swap_readable(uintptr_t address, u32 bytes)
 #define WLAN_RX_SWAP_POOL_CAPACITY \
 	(WLAN_RX_SWAP_SPARE_COUNT + WLAN_RX_SWAP_MAX_SLOTS)
 #define WLAN_RX_SWAP_ENTRY_COUNT                224U
+#define WLAN_RX_SWAP_HASH_BUCKETS                64U
 
 #define WLAN_RX_SWAP_ENTRY_FREE                   0U
 #define WLAN_RX_SWAP_ENTRY_CALLBACK               1U
 #define WLAN_RX_SWAP_ENTRY_RETAINED               2U
 
 typedef struct wlan_rx_swap_entry_s {
+	struct wlan_rx_swap_entry_s *index_next;
 	struct sk_buff *skb;
 	u8 *ring_buffer;
 	u8 *old_head;
@@ -1881,7 +1883,32 @@ static u8 g_wlan_rx_swap_storage[WLAN_RX_SWAP_SPARE_COUNT]
 	[WLAN_RX_SWAP_RING_BYTES] __attribute__((aligned(32)));
 static u8 *g_wlan_rx_swap_pool[WLAN_RX_SWAP_POOL_CAPACITY];
 static wlan_rx_swap_entry_t g_wlan_rx_swap_entries[WLAN_RX_SWAP_ENTRY_COUNT];
+static wlan_rx_swap_entry_t *g_wlan_rx_swap_hash[WLAN_RX_SWAP_HASH_BUCKETS];
+static wlan_rx_swap_entry_t *g_wlan_rx_swap_free;
 static wlan_rx_swap_runtime_t g_wlan_rx_swap_runtime;
+
+static u32 wlan_rx_swap_hash_key(const struct sk_buff *skb)
+{
+	uintptr_t value = (uintptr_t)skb;
+
+	/* skb objects are aligned, so fold higher address bits into the bucket. */
+	return (u32)(((value >> 4) ^ (value >> 10)) &
+		(WLAN_RX_SWAP_HASH_BUCKETS - 1U));
+}
+
+static void wlan_rx_swap_index_init_locked(void)
+{
+	u32 i;
+
+	rtw_memset(g_wlan_rx_swap_hash, 0, sizeof(g_wlan_rx_swap_hash));
+	g_wlan_rx_swap_free = NULL;
+	for (i = WLAN_RX_SWAP_ENTRY_COUNT; i != 0U; i--) {
+		wlan_rx_swap_entry_t *entry = &g_wlan_rx_swap_entries[i - 1U];
+
+		entry->index_next = g_wlan_rx_swap_free;
+		g_wlan_rx_swap_free = entry;
+	}
+}
 
 static void wlan_rx_swap_runtime_init_locked(void)
 {
@@ -1898,33 +1925,68 @@ static void wlan_rx_swap_runtime_init_locked(void)
 		rt->pool[i] = &g_wlan_rx_swap_storage[i][0];
 	}
 	rtw_memset(rt->entries, 0, sizeof(g_wlan_rx_swap_entries));
+	wlan_rx_swap_index_init_locked();
 	rt->initialized = 1U;
 }
 
 static wlan_rx_swap_entry_t *
 wlan_rx_swap_entry_find_locked(struct sk_buff *skb, u8 state)
 {
-	u32 i;
+	wlan_rx_swap_entry_t *entry;
 
-	for (i = 0; i < WLAN_RX_SWAP_ENTRY_COUNT; i++) {
-		if (g_wlan_rx_swap_entries[i].state == state &&
-		    g_wlan_rx_swap_entries[i].skb == skb) {
-			return &g_wlan_rx_swap_entries[i];
+	/* Only CALLBACK entries are looked up by skb on the receive hot path. */
+	if (state != WLAN_RX_SWAP_ENTRY_CALLBACK || skb == NULL) {
+		return NULL;
+	}
+	entry = g_wlan_rx_swap_hash[wlan_rx_swap_hash_key(skb)];
+	while (entry != NULL) {
+		if (entry->state == state && entry->skb == skb) {
+			return entry;
 		}
+		entry = entry->index_next;
 	}
 	return NULL;
 }
 
 static wlan_rx_swap_entry_t *wlan_rx_swap_entry_alloc_locked(void)
 {
-	u32 i;
+	wlan_rx_swap_entry_t *entry = g_wlan_rx_swap_free;
 
-	for (i = 0; i < WLAN_RX_SWAP_ENTRY_COUNT; i++) {
-		if (g_wlan_rx_swap_entries[i].state == WLAN_RX_SWAP_ENTRY_FREE) {
-			return &g_wlan_rx_swap_entries[i];
-		}
+	if (entry != NULL) {
+		g_wlan_rx_swap_free = entry->index_next;
+		entry->index_next = NULL;
 	}
-	return NULL;
+	return entry;
+}
+
+static void wlan_rx_swap_entry_index_locked(wlan_rx_swap_entry_t *entry)
+{
+	u32 bucket = wlan_rx_swap_hash_key(entry->skb);
+
+	entry->index_next = g_wlan_rx_swap_hash[bucket];
+	g_wlan_rx_swap_hash[bucket] = entry;
+}
+
+static void wlan_rx_swap_entry_unindex_locked(wlan_rx_swap_entry_t *entry)
+{
+	u32 bucket = wlan_rx_swap_hash_key(entry->skb);
+	wlan_rx_swap_entry_t **link = &g_wlan_rx_swap_hash[bucket];
+
+	while (*link != NULL) {
+		if (*link == entry) {
+			*link = entry->index_next;
+			entry->index_next = NULL;
+			return;
+		}
+		link = &(*link)->index_next;
+	}
+}
+
+static void wlan_rx_swap_entry_free_locked(wlan_rx_swap_entry_t *entry)
+{
+	rtw_memset(entry, 0, sizeof(*entry));
+	entry->index_next = g_wlan_rx_swap_free;
+	g_wlan_rx_swap_free = entry;
 }
 
 static int wlan_rx_swap_handle_is_entry(void *handle)
@@ -2052,6 +2114,7 @@ static int wlan_rx_swap_try(void *dst, void *src, u32 len,
 	entry->old_end = skb->end;
 	entry->old_len = skb->len;
 	entry->state = WLAN_RX_SWAP_ENTRY_CALLBACK;
+	wlan_rx_swap_entry_index_locked(entry);
 	rt->swapped++;
 	rt->live++;
 	if (rt->live > rt->live_max) {
@@ -2101,6 +2164,7 @@ static int wlan_rx_swap_ref_acquire(struct sk_buff *skb,
 			*handle = entry;
 			*payload = skb->data;
 			wlan_rx_swap_restore_skb_locked(entry);
+			wlan_rx_swap_entry_unindex_locked(entry);
 			entry->state = WLAN_RX_SWAP_ENTRY_RETAINED;
 			entry->retained_tick = rtw_get_current_time();
 			g_wlan_rx_swap_runtime.acquired++;
@@ -2131,7 +2195,7 @@ static void wlan_rx_swap_release_entry(wlan_rx_swap_entry_t *entry)
 	save_and_cli();
 	if (entry->state == WLAN_RX_SWAP_ENTRY_RETAINED) {
 		wlan_rx_swap_pool_put_locked(entry->ring_buffer);
-		rtw_memset(entry, 0, sizeof(*entry));
+		wlan_rx_swap_entry_free_locked(entry);
 		g_wlan_rx_swap_runtime.released++;
 		if (g_wlan_rx_swap_runtime.live != 0U) {
 			g_wlan_rx_swap_runtime.live--;
@@ -2152,7 +2216,8 @@ static void wlan_rx_swap_complete_skb(struct sk_buff *skb)
 	if (entry != NULL) {
 		wlan_rx_swap_restore_skb_locked(entry);
 		wlan_rx_swap_pool_put_locked(entry->ring_buffer);
-		rtw_memset(entry, 0, sizeof(*entry));
+		wlan_rx_swap_entry_unindex_locked(entry);
+		wlan_rx_swap_entry_free_locked(entry);
 		g_wlan_rx_swap_runtime.copied_complete++;
 		if (g_wlan_rx_swap_runtime.live != 0U) {
 			g_wlan_rx_swap_runtime.live--;
@@ -2239,6 +2304,7 @@ void rltk_wlan_rx_swap_deinit_complete(void)
 		g_wlan_rx_swap_runtime.pool[i] = &g_wlan_rx_swap_storage[i][0];
 	}
 	rtw_memset(g_wlan_rx_swap_entries, 0, sizeof(g_wlan_rx_swap_entries));
+	wlan_rx_swap_index_init_locked();
 	restore_flags();
 }
 #else
