@@ -860,6 +860,15 @@ IRQ_PROFILE_USB_CAUSE ?= 1
 # Low-overhead measurement at the existing ISR semaphore-give wrapper: count
 # successful wakeups and ISR-return yield requests only.
 IRQ_PROFILE_USB_HANDOFF ?= 1
+# Attribute channel-4 NAK/CHHLTD bottom-half service time and halt calls.
+# This is diagnostic only; the wrapper always calls the vendor implementation.
+IRQ_PROFILE_USB_CH4_FLOW ?= 1
+# Capture CDC-NCM NTB negotiation so channel-4's fixed 2 KiB receive submits
+# can be attributed to the device parameters or the host-side size selection.
+IRQ_PROFILE_USB_CH4_NCM ?= 1
+# After a channel-4 NAK, identify whether the next accepted receive submit or
+# CHHLTD arrives first. Diagnostic only; no HCD state or IRQ mask is changed.
+IRQ_PROFILE_USB_CH4_SEQUENCE ?= 1
 # Drop the stale NVIC latch just before the HCD task re-enables USB_IRQn, then
 # re-read the controller and software-pend any cause which arrived in the
 # clear/re-enable race window.
@@ -868,6 +877,10 @@ USB_IRQ_SAFE_DEDUP ?= 1
 # otherwise wakes its priority-11 task even though its ordinary ACK path is a
 # no-op.  PING ACK and every compound cause retain the vendor path.
 USB_IRQ_CH3_ACK_FASTPATH ?= 1
+# Defer a channel-4 NAK-only handoff until the hardware's following CHHLTD,
+# allowing the closed HCD to consume both latched reasons in one task wake.
+USB_IRQ_CH4_NAK_COALESCE ?= 1
+USB_IRQ_CH4_NAK_COALESCE_TIMEOUT_US ?= 50000
 # The closed HCD disables USB_IRQn in its top half and re-enables it only after
 # the ISR task drains HCINT.  Retain the original unsafe single-check experiment
 # as an off-by-default rollback reference; do not enable with SAFE_DEDUP.
@@ -974,8 +987,13 @@ GCCFLAGS += -DCONFIG_PC_PROFILER_RTW_DUMP_PROFILE=$(PC_PROFILER_RTW_DUMP_PROFILE
 GCCFLAGS += -DCONFIG_IRQ_PROFILE=$(IRQ_PROFILE)
 GCCFLAGS += -DCONFIG_IRQ_PROFILE_USB_CAUSE=$(IRQ_PROFILE_USB_CAUSE)
 GCCFLAGS += -DCONFIG_IRQ_PROFILE_USB_HANDOFF=$(IRQ_PROFILE_USB_HANDOFF)
+GCCFLAGS += -DCONFIG_IRQ_PROFILE_USB_CH4_FLOW=$(IRQ_PROFILE_USB_CH4_FLOW)
+GCCFLAGS += -DCONFIG_IRQ_PROFILE_USB_CH4_NCM=$(IRQ_PROFILE_USB_CH4_NCM)
+GCCFLAGS += -DCONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE=$(IRQ_PROFILE_USB_CH4_SEQUENCE)
 GCCFLAGS += -DCONFIG_USB_IRQ_SAFE_DEDUP=$(USB_IRQ_SAFE_DEDUP)
 GCCFLAGS += -DCONFIG_USB_IRQ_CH3_ACK_FASTPATH=$(USB_IRQ_CH3_ACK_FASTPATH)
+GCCFLAGS += -DCONFIG_USB_IRQ_CH4_NAK_COALESCE=$(USB_IRQ_CH4_NAK_COALESCE)
+GCCFLAGS += -DUSB_IRQ_CH4_NAK_COALESCE_TIMEOUT_US=$(USB_IRQ_CH4_NAK_COALESCE_TIMEOUT_US)
 GCCFLAGS += -DCONFIG_USB_IRQ_CLEAR_STALE_PENDING=$(USB_IRQ_CLEAR_STALE_PENDING)
 GCCFLAGS += -DCONFIG_MEMCPY_TASK_PROFILE=$(MEMCPY_TASK_PROFILE)
 GCCFLAGS += -DCONFIG_LARGE_MEMCPY_GDMA=$(LARGE_MEMCPY_GDMA)
@@ -1067,8 +1085,14 @@ endif
 ifneq ($(filter 1,$(USB_IRQ_SAFE_DEDUP) $(USB_IRQ_CLEAR_STALE_PENDING)),)
 LFLAGS += -Wl,--wrap=usb_hal_enable_interrupt
 endif
-ifeq ($(USB_IRQ_CH3_ACK_FASTPATH),1)
+ifneq ($(filter 1,$(USB_IRQ_CH3_ACK_FASTPATH) $(USB_IRQ_CH4_NAK_COALESCE)),)
 LFLAGS += -Wl,--wrap=usb_hal_read_interrupts
+endif
+ifeq ($(IRQ_PROFILE_USB_CH4_FLOW),1)
+LFLAGS += -Wl,--wrap=usbh_hal_hc_halt
+endif
+ifeq ($(IRQ_PROFILE_USB_CH4_NCM),1)
+LFLAGS += -Wl,--wrap=usbh_ctrl_request -Wl,--wrap=ncm_receive_buf_size
 endif
 ifeq ($(GCD_SYNC_PROFILE),1)
 LFLAGS += -Wl,--wrap=dispatch_sync_f

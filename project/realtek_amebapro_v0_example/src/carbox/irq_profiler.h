@@ -32,6 +32,9 @@ void carbox_irq_profiler_report(uint32_t sequence, uint32_t window_ms);
 void carbox_irq_profiler_usb_sema_give(void *handle, int success,
 				       int higher_priority_task_woken);
 
+/* Narrow channel-4 ordering probe called by the existing HCD submit wrapper. */
+void carbox_irq_profiler_usb_ch4_submit(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -19,6 +19,18 @@
 #define CONFIG_IRQ_PROFILE_USB_HANDOFF 0
 #endif
 
+#ifndef CONFIG_IRQ_PROFILE_USB_CH4_FLOW
+#define CONFIG_IRQ_PROFILE_USB_CH4_FLOW 0
+#endif
+
+#ifndef CONFIG_IRQ_PROFILE_USB_CH4_NCM
+#define CONFIG_IRQ_PROFILE_USB_CH4_NCM 0
+#endif
+
+#ifndef CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE
+#define CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE 0
+#endif
+
 #ifndef CONFIG_USB_IRQ_CLEAR_STALE_PENDING
 #define CONFIG_USB_IRQ_CLEAR_STALE_PENDING 0
 #endif
@@ -31,8 +43,21 @@
 #define CONFIG_USB_IRQ_CH3_ACK_FASTPATH 0
 #endif
 
+#ifndef CONFIG_USB_IRQ_CH4_NAK_COALESCE
+#define CONFIG_USB_IRQ_CH4_NAK_COALESCE 0
+#endif
+
+#ifndef USB_IRQ_CH4_NAK_COALESCE_TIMEOUT_US
+#define USB_IRQ_CH4_NAK_COALESCE_TIMEOUT_US 50000U
+#endif
+
 #if CONFIG_USB_IRQ_SAFE_DEDUP && CONFIG_USB_IRQ_CLEAR_STALE_PENDING
 #error "Select USB_IRQ_SAFE_DEDUP or the legacy stale-pending experiment, not both"
+#endif
+
+#if CONFIG_USB_IRQ_CH4_NAK_COALESCE && \
+	(!CONFIG_IRQ_PROFILE || !CONFIG_IRQ_PROFILE_USB_CAUSE)
+#error "USB IRQ CH4 NAK coalescing requires USB cause profiling support"
 #endif
 
 #if CONFIG_IRQ_PROFILE
@@ -42,6 +67,30 @@
 #define IRQPROF_USB_IRQ 12U
 #define IRQPROF_USB_GINTSTS_ADDR 0x400C0014U
 #define IRQPROF_USB_GINTMSK_ADDR 0x400C0018U
+
+#if CONFIG_IRQ_PROFILE_USB_CH4_NCM
+struct irqprof_usb_ch4_ncm_stats {
+	volatile uint32_t get_calls;
+	volatile uint32_t get_ok;
+	volatile uint32_t get_fail;
+	volatile uint32_t device_in_max;
+	volatile uint32_t device_out_max;
+	volatile uint32_t set_calls;
+	volatile uint32_t set_ok;
+	volatile uint32_t set_fail;
+	volatile uint32_t set_requested;
+	volatile uint32_t receive_size;
+	volatile uint32_t receive_size_calls;
+};
+
+static struct irqprof_usb_ch4_ncm_stats irqprof_usb_ch4_ncm;
+
+static uint32_t irqprof_get_le32(const uint8_t *p)
+{
+	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+	       ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+#endif
 
 #if CONFIG_IRQ_PROFILE_USB_HANDOFF
 enum irqprof_usb_handoff_counter {
@@ -72,6 +121,21 @@ enum irqprof_usb_ch4_halt_gap_counter {
 	IRQPROF_USB_CH4_GAP_MAX_CYCLES,
 	IRQPROF_USB_CH4_GAP_COUNTER_COUNT,
 };
+
+#if CONFIG_IRQ_PROFILE_USB_CH4_FLOW
+enum irqprof_usb_ch4_flow_counter {
+	IRQPROF_USB_CH4_NAK_SERVICE,
+	IRQPROF_USB_CH4_NAK_SERVICE_CYCLES,
+	IRQPROF_USB_CH4_NAK_SERVICE_MAX_CYCLES,
+	IRQPROF_USB_CH4_HALT_SERVICE,
+	IRQPROF_USB_CH4_HALT_SERVICE_CYCLES,
+	IRQPROF_USB_CH4_HALT_SERVICE_MAX_CYCLES,
+	IRQPROF_USB_CH4_OTHER_SERVICE,
+	IRQPROF_USB_CH4_NAK_HALT_CALL,
+	IRQPROF_USB_CH4_OTHER_HALT_CALL,
+	IRQPROF_USB_CH4_FLOW_COUNTER_COUNT,
+};
+#endif
 #endif
 #endif
 
@@ -121,6 +185,31 @@ enum irqprof_usb_ch3_ack_counter {
 	IRQPROF_USB_CH3_ACK_FAST_DROP,
 	IRQPROF_USB_CH3_ACK_COUNTER_COUNT,
 };
+
+#if CONFIG_USB_IRQ_CH4_NAK_COALESCE
+enum irqprof_usb_ch4_coalesce_counter {
+	IRQPROF_USB_CH4_COALESCE_DEFER,
+	IRQPROF_USB_CH4_COALESCE_MERGE,
+	IRQPROF_USB_CH4_COALESCE_TIMEOUT,
+	IRQPROF_USB_CH4_COALESCE_HALT_CLEARED_NAK,
+	IRQPROF_USB_CH4_COALESCE_COUNTER_COUNT,
+};
+#endif
+
+#if CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE
+enum irqprof_usb_ch4_sequence_counter {
+	IRQPROF_USB_CH4_SEQ_NAK,
+	IRQPROF_USB_CH4_SEQ_SAME_IRQ,
+	IRQPROF_USB_CH4_SEQ_SUBMIT_FIRST,
+	IRQPROF_USB_CH4_SEQ_HALT_FIRST,
+	IRQPROF_USB_CH4_SEQ_NAK_OVERLAP,
+	IRQPROF_USB_CH4_SEQ_SUBMIT_US,
+	IRQPROF_USB_CH4_SEQ_SUBMIT_MAX_US,
+	IRQPROF_USB_CH4_SEQ_HALT_US,
+	IRQPROF_USB_CH4_SEQ_HALT_MAX_US,
+	IRQPROF_USB_CH4_SEQ_COUNTER_COUNT,
+};
+#endif
 
 #if CONFIG_USB_IRQ_CLEAR_STALE_PENDING
 enum irqprof_usb_reenable_counter {
@@ -181,6 +270,16 @@ static volatile uint32_t
 	__attribute__((used));
 static uint32_t
 	irqprof_usb_ch4_halt_gap_snapshot[IRQPROF_USB_CH4_GAP_COUNTER_COUNT];
+#if CONFIG_IRQ_PROFILE_USB_CH4_FLOW
+static volatile uint32_t irqprof_usb_ch4_service_start_cycles;
+static volatile uint32_t irqprof_usb_ch4_service_reasons;
+static volatile uint32_t irqprof_usb_ch4_service_valid;
+static volatile uint32_t
+	irqprof_usb_ch4_flow_counts[2][IRQPROF_USB_CH4_FLOW_COUNTER_COUNT]
+	__attribute__((used));
+static uint32_t
+	irqprof_usb_ch4_flow_snapshot[IRQPROF_USB_CH4_FLOW_COUNTER_COUNT];
+#endif
 #endif
 #endif
 #if CONFIG_IRQ_PROFILE_USB_HANDOFF || CONFIG_USB_IRQ_SAFE_DEDUP
@@ -224,9 +323,72 @@ static uint32_t
 static uint32_t irqprof_usb_channel_hcchar_snapshot[IRQPROF_USB_CHANNEL_COUNT];
 static uint32_t
 	irqprof_usb_ch3_ack_snapshot[IRQPROF_USB_CH3_ACK_COUNTER_COUNT];
+#if CONFIG_USB_IRQ_CH4_NAK_COALESCE
+static volatile uint32_t irqprof_usb_ch4_coalesce_pending;
+static volatile uint32_t irqprof_usb_ch4_coalesce_start_cycles;
+static volatile uint32_t
+	irqprof_usb_ch4_coalesce_counts[2][IRQPROF_USB_CH4_COALESCE_COUNTER_COUNT]
+	__attribute__((used));
+static uint32_t
+	irqprof_usb_ch4_coalesce_snapshot[IRQPROF_USB_CH4_COALESCE_COUNTER_COUNT];
+#endif
+#if CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE
+static volatile uint32_t irqprof_usb_ch4_sequence_pending;
+static volatile uint32_t irqprof_usb_ch4_sequence_start_cycles;
+static volatile uint32_t
+	irqprof_usb_ch4_sequence_counts[2][IRQPROF_USB_CH4_SEQ_COUNTER_COUNT]
+	__attribute__((used));
+static uint32_t
+	irqprof_usb_ch4_sequence_snapshot[IRQPROF_USB_CH4_SEQ_COUNTER_COUNT];
+#endif
 #if CONFIG_USB_IRQ_CLEAR_STALE_PENDING
 static uint32_t
 	irqprof_usb_reenable_snapshot[IRQPROF_USB_REENABLE_COUNTER_COUNT];
+#endif
+
+#if CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE
+static void irqprof_usb_ch4_sequence_record(uint32_t count_index,
+					     uint32_t us_index,
+					     uint32_t max_index,
+					     uint32_t now)
+{
+	volatile uint32_t *sequence =
+		irqprof_usb_ch4_sequence_counts[irqprof_active_bank];
+	uint32_t delta = now - irqprof_usb_ch4_sequence_start_cycles;
+	uint32_t cycles_per_us = SystemCoreClock / 1000000U;
+	uint32_t delta_us = cycles_per_us != 0U ? delta / cycles_per_us : 0U;
+
+	sequence[count_index]++;
+	sequence[us_index] += delta_us;
+	if (delta_us > sequence[max_index]) {
+		sequence[max_index] = delta_us;
+	}
+	irqprof_usb_ch4_sequence_pending = 0U;
+}
+
+void carbox_irq_profiler_usb_ch4_submit(void)
+{
+	uint32_t primask;
+
+	if (irqprof_usb_ch4_sequence_pending == 0U) {
+		return;
+	}
+
+	primask = __get_PRIMASK();
+	__disable_irq();
+	if (irqprof_usb_ch4_sequence_pending != 0U) {
+		irqprof_usb_ch4_sequence_record(
+			IRQPROF_USB_CH4_SEQ_SUBMIT_FIRST,
+			IRQPROF_USB_CH4_SEQ_SUBMIT_US,
+			IRQPROF_USB_CH4_SEQ_SUBMIT_MAX_US,
+			DWT->CYCCNT);
+	}
+	__set_PRIMASK(primask);
+}
+#else
+void carbox_irq_profiler_usb_ch4_submit(void)
+{
+}
 #endif
 
 /*
@@ -302,6 +464,39 @@ irqprof_usb_cause_sample(void)
 #if CONFIG_IRQ_PROFILE_USB_HANDOFF
 			if (channel == 4U) {
 				irqprof_usb_current_ch4_reasons = reasons;
+#if CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE
+				{
+					volatile uint32_t *sequence =
+						irqprof_usb_ch4_sequence_counts[bank];
+					uint32_t now = DWT->CYCCNT;
+					uint32_t nak = reasons & (1U << 4);
+					uint32_t halt = reasons & (1U << 1);
+
+					if (nak != 0U && halt != 0U) {
+						sequence[IRQPROF_USB_CH4_SEQ_NAK]++;
+						sequence[IRQPROF_USB_CH4_SEQ_SAME_IRQ]++;
+						irqprof_usb_ch4_sequence_pending = 0U;
+					} else {
+						if (halt != 0U &&
+						    irqprof_usb_ch4_sequence_pending != 0U) {
+							irqprof_usb_ch4_sequence_record(
+								IRQPROF_USB_CH4_SEQ_HALT_FIRST,
+								IRQPROF_USB_CH4_SEQ_HALT_US,
+								IRQPROF_USB_CH4_SEQ_HALT_MAX_US,
+								now);
+						}
+						if (nak != 0U) {
+							sequence[IRQPROF_USB_CH4_SEQ_NAK]++;
+							if (irqprof_usb_ch4_sequence_pending != 0U) {
+								sequence[IRQPROF_USB_CH4_SEQ_NAK_OVERLAP]++;
+							} else {
+								irqprof_usb_ch4_sequence_start_cycles = now;
+								irqprof_usb_ch4_sequence_pending = 1U;
+							}
+						}
+					}
+				}
+#endif
 				if ((reasons & (1U << 1)) != 0U &&
 				    irqprof_usb_ch4_reenable_valid != 0U) {
 					volatile uint32_t *gap =
@@ -375,19 +570,107 @@ irqprof_usb_cause_sample(void)
 }
 #endif /* CONFIG_IRQ_PROFILE_USB_CAUSE */
 
-#if CONFIG_USB_IRQ_CH3_ACK_FASTPATH
+#if CONFIG_USB_IRQ_CH3_ACK_FASTPATH || CONFIG_USB_IRQ_CH4_NAK_COALESCE
 extern uint32_t __real_usb_hal_read_interrupts(void);
 
-/*
- * The closed HCD enables ACK in the non-DMA bulk-OUT mask even though its ACK
- * branch changes state only for a successful PING.  Drop a plain channel-3
- * ACK before the vendor top half samples GINTSTS.  Returning through the real
- * helper then yields zero, so the vendor handler re-enables USB_IRQn without
- * waking the HCD task.  Any ambiguity falls through untouched.
- */
-uint32_t __wrap_usb_hal_read_interrupts(void)
+#if CONFIG_USB_IRQ_CH4_NAK_COALESCE
+static void irqprof_usb_ch4_restore_nak_mask(uint32_t hcint_addr)
 {
-	if (__get_IPSR() == (16U + IRQPROF_USB_IRQ)) {
+	volatile uint32_t *hcintmsk = (volatile uint32_t *)(uintptr_t)
+		(hcint_addr + IRQPROF_USB_HCINTMSK_OFF);
+
+	*hcintmsk |= 1U << 4;
+	__DSB();
+}
+#endif
+
+/*
+ * Filter only causes whose complete controller state is unambiguous:
+ *
+ * - A plain channel-3 non-PING ACK is cleared because the closed HCD's normal
+ *   ACK branch is a no-op.
+ * - A plain channel-4 NAK temporarily disables its own mask and does not wake
+ *   the task.  Hardware then auto-halts the bulk-IN channel and clears raw
+ *   NAK.  The following CHHLTD restores the NAK mask and lets the closed HCD's
+ *   normal CHHLTD-only bulk-IN path finish and resubmit the transfer.
+ *
+ * Compound causes and timeout recovery always fall through to the real helper.
+ */
+uint32_t __attribute__((noinline, used,
+	section(".itcm.text.usb_irq_filter")))
+__wrap_usb_hal_read_interrupts(void)
+{
+	uint32_t in_usb_irq =
+		__get_IPSR() == (16U + IRQPROF_USB_IRQ);
+
+#if CONFIG_USB_IRQ_CH4_NAK_COALESCE
+	{
+		uint32_t hcint_addr = IRQPROF_USB_HCINT_BASE +
+			4U * IRQPROF_USB_HCINT_STRIDE;
+		uint32_t raw = *(volatile uint32_t *)(uintptr_t)hcint_addr;
+		volatile uint32_t *coalesce =
+			irqprof_usb_ch4_coalesce_counts[irqprof_active_bank];
+
+		if (irqprof_usb_ch4_coalesce_pending != 0U) {
+			uint32_t cycles_per_us = SystemCoreClock / 1000000U;
+			uint32_t timeout_cycles = cycles_per_us *
+				USB_IRQ_CH4_NAK_COALESCE_TIMEOUT_US;
+			uint32_t elapsed = DWT->CYCCNT -
+				irqprof_usb_ch4_coalesce_start_cycles;
+
+			if ((raw & (1U << 1)) != 0U) {
+				irqprof_usb_ch4_restore_nak_mask(hcint_addr);
+				if ((raw & (1U << 4)) == 0U) {
+					coalesce[
+						IRQPROF_USB_CH4_COALESCE_HALT_CLEARED_NAK]++;
+				}
+				coalesce[IRQPROF_USB_CH4_COALESCE_MERGE]++;
+				irqprof_usb_ch4_coalesce_pending = 0U;
+				return __real_usb_hal_read_interrupts();
+			} else if (cycles_per_us != 0U &&
+				   elapsed >= timeout_cycles) {
+				irqprof_usb_ch4_restore_nak_mask(hcint_addr);
+				coalesce[IRQPROF_USB_CH4_COALESCE_TIMEOUT]++;
+				irqprof_usb_ch4_coalesce_pending = 0U;
+				return __real_usb_hal_read_interrupts();
+			}
+		}
+
+		if (in_usb_irq && irqprof_usb_ch4_coalesce_pending == 0U) {
+			uint32_t global_pending =
+				*(volatile uint32_t *)(uintptr_t)
+					IRQPROF_USB_GINTSTS_ADDR &
+				*(volatile uint32_t *)(uintptr_t)
+					IRQPROF_USB_GINTMSK_ADDR;
+			uint32_t channels =
+				*(volatile uint32_t *)(uintptr_t)
+					IRQPROF_USB_HAINT_ADDR &
+				*(volatile uint32_t *)(uintptr_t)
+					IRQPROF_USB_HAINTMSK_ADDR &
+				0xFFFFU;
+			uint32_t reasons = raw &
+				*(volatile uint32_t *)(uintptr_t)
+					(hcint_addr + IRQPROF_USB_HCINTMSK_OFF);
+
+			if (global_pending == IRQPROF_USB_HCINT_MASK &&
+			    channels == (1U << 4) && reasons == (1U << 4)) {
+				volatile uint32_t *hcintmsk =
+					(volatile uint32_t *)(uintptr_t)
+						(hcint_addr + IRQPROF_USB_HCINTMSK_OFF);
+
+				*hcintmsk &= ~(1U << 4);
+				irqprof_usb_ch4_coalesce_start_cycles = DWT->CYCCNT;
+				irqprof_usb_ch4_coalesce_pending = 1U;
+				coalesce[IRQPROF_USB_CH4_COALESCE_DEFER]++;
+				__DSB();
+				return 0U;
+			}
+		}
+	}
+#endif
+
+#if CONFIG_USB_IRQ_CH3_ACK_FASTPATH
+	if (in_usb_irq) {
 		uint32_t channels =
 			*(volatile uint32_t *)(uintptr_t)IRQPROF_USB_HAINT_ADDR &
 			*(volatile uint32_t *)(uintptr_t)IRQPROF_USB_HAINTMSK_ADDR &
@@ -412,6 +695,7 @@ uint32_t __wrap_usb_hal_read_interrupts(void)
 			}
 		}
 	}
+#endif
 	return __real_usb_hal_read_interrupts();
 }
 #endif
@@ -465,6 +749,37 @@ void __wrap_usb_hal_enable_interrupt(void)
 				[IRQPROF_USB_DEDUP_REPEND]++;
 		}
 #if CONFIG_IRQ_PROFILE_USB_CAUSE && CONFIG_IRQ_PROFILE_USB_HANDOFF
+	#if CONFIG_IRQ_PROFILE_USB_CH4_FLOW
+	if (__get_IPSR() == 0U && irqprof_usb_ch4_service_valid != 0U) {
+		volatile uint32_t *flow =
+			irqprof_usb_ch4_flow_counts[irqprof_active_bank];
+		uint32_t delta = DWT->CYCCNT - irqprof_usb_ch4_service_start_cycles;
+		uint32_t reasons = irqprof_usb_ch4_service_reasons;
+		uint32_t count_index;
+		uint32_t cycles_index;
+		uint32_t max_index;
+
+		irqprof_usb_ch4_service_valid = 0U;
+		if (reasons == (1U << 4)) {
+			count_index = IRQPROF_USB_CH4_NAK_SERVICE;
+			cycles_index = IRQPROF_USB_CH4_NAK_SERVICE_CYCLES;
+			max_index = IRQPROF_USB_CH4_NAK_SERVICE_MAX_CYCLES;
+		} else if (reasons == (1U << 1)) {
+			count_index = IRQPROF_USB_CH4_HALT_SERVICE;
+			cycles_index = IRQPROF_USB_CH4_HALT_SERVICE_CYCLES;
+			max_index = IRQPROF_USB_CH4_HALT_SERVICE_MAX_CYCLES;
+		} else {
+			flow[IRQPROF_USB_CH4_OTHER_SERVICE]++;
+			goto ch4_service_done;
+		}
+		flow[count_index]++;
+		flow[cycles_index] += delta;
+		if (delta > flow[max_index]) {
+			flow[max_index] = delta;
+		}
+	}
+ch4_service_done:
+	#endif
 		/* A ch4 NAK is handled by the HCD task by halting the channel.  Time
 		 * how soon the resulting CHHLTD becomes visible after IRQ re-enable;
 		 * this determines whether a short bounded coalescing window is viable. */
@@ -491,6 +806,78 @@ void __wrap_usb_hal_enable_interrupt(void)
 	__DMB();
 #endif
 	__real_usb_hal_enable_interrupt();
+}
+#endif
+
+#if CONFIG_IRQ_PROFILE_USB_CH4_NCM
+extern int __real_usbh_ctrl_request(void *host, const void *setup,
+				    uint8_t *data);
+extern uint32_t __real_ncm_receive_buf_size(void);
+
+int __wrap_usbh_ctrl_request(void *host, const void *setup, uint8_t *data)
+{
+	const uint8_t *request = (const uint8_t *)setup;
+	uint8_t request_type = request != NULL ? request[0] : 0U;
+	uint8_t request_code = request != NULL ? request[1] : 0U;
+	int result;
+
+	/* CDC-NCM GET_NTB_PARAMETERS and SET_NTB_INPUT_SIZE. */
+	if (request_type == 0x21U && request_code == 0x86U && data != NULL) {
+		irqprof_usb_ch4_ncm.set_calls++;
+		irqprof_usb_ch4_ncm.set_requested = irqprof_get_le32(data);
+	}
+
+	result = __real_usbh_ctrl_request(host, setup, data);
+
+	if (request_type == 0xA1U && request_code == 0x80U) {
+		irqprof_usb_ch4_ncm.get_calls++;
+		if (result == 0 && data != NULL) {
+			irqprof_usb_ch4_ncm.get_ok++;
+			irqprof_usb_ch4_ncm.device_in_max =
+				irqprof_get_le32(data + 4U);
+			irqprof_usb_ch4_ncm.device_out_max =
+				irqprof_get_le32(data + 16U);
+		} else {
+			irqprof_usb_ch4_ncm.get_fail++;
+		}
+	} else if (request_type == 0x21U && request_code == 0x86U) {
+		if (result == 0) {
+			irqprof_usb_ch4_ncm.set_ok++;
+		} else {
+			irqprof_usb_ch4_ncm.set_fail++;
+		}
+	}
+
+	return result;
+}
+
+uint32_t __wrap_ncm_receive_buf_size(void)
+{
+	uint32_t size = __real_ncm_receive_buf_size();
+
+	irqprof_usb_ch4_ncm.receive_size = size;
+	irqprof_usb_ch4_ncm.receive_size_calls++;
+	return size;
+}
+#endif
+
+#if CONFIG_IRQ_PROFILE_USB_CH4_FLOW
+extern void __real_usbh_hal_hc_halt(uint8_t channel);
+
+void __wrap_usbh_hal_hc_halt(uint8_t channel)
+{
+	if (channel == 4U && __get_IPSR() == 0U &&
+	    irqprof_usb_ch4_service_valid != 0U) {
+		volatile uint32_t *flow =
+			irqprof_usb_ch4_flow_counts[irqprof_active_bank];
+
+		if (irqprof_usb_ch4_service_reasons == (1U << 4)) {
+			flow[IRQPROF_USB_CH4_NAK_HALT_CALL]++;
+		} else {
+			flow[IRQPROF_USB_CH4_OTHER_HALT_CALL]++;
+		}
+	}
+	__real_usbh_hal_hc_halt(channel);
 }
 #endif
 
@@ -534,6 +921,14 @@ void carbox_irq_profiler_usb_sema_give(void *handle, int success,
 					[IRQPROF_USB_CHANNEL_HANDOFF_YIELD]++;
 			}
 		}
+#if CONFIG_IRQ_PROFILE_USB_CH4_FLOW
+		if ((channels & (1U << 4)) != 0U) {
+			irqprof_usb_ch4_service_start_cycles = DWT->CYCCNT;
+			irqprof_usb_ch4_service_reasons =
+				irqprof_usb_current_ch4_reasons;
+			irqprof_usb_ch4_service_valid = 1U;
+		}
+#endif
 	}
 	if (higher_priority_task_woken) {
 		irqprof_usb_handoff_counts[bank][IRQPROF_USB_HANDOFF_YIELD]++;
@@ -747,6 +1142,10 @@ void carbox_irq_profiler_snapshot(uint32_t profiler_irq,
 	       sizeof(irqprof_usb_channel_handoff_counts[new_bank]));
 	memset((void *)irqprof_usb_ch4_halt_gap_counts[new_bank], 0,
 	       sizeof(irqprof_usb_ch4_halt_gap_counts[new_bank]));
+#if CONFIG_IRQ_PROFILE_USB_CH4_FLOW
+	memset((void *)irqprof_usb_ch4_flow_counts[new_bank], 0,
+	       sizeof(irqprof_usb_ch4_flow_counts[new_bank]));
+#endif
 #endif
 #endif
 #if CONFIG_USB_IRQ_SAFE_DEDUP
@@ -766,6 +1165,14 @@ void carbox_irq_profiler_snapshot(uint32_t profiler_irq,
 	       sizeof(irqprof_usb_channel_hcchar[new_bank]));
 	memset((void *)irqprof_usb_ch3_ack_counts[new_bank], 0,
 	       sizeof(irqprof_usb_ch3_ack_counts[new_bank]));
+#if CONFIG_USB_IRQ_CH4_NAK_COALESCE
+	memset((void *)irqprof_usb_ch4_coalesce_counts[new_bank], 0,
+	       sizeof(irqprof_usb_ch4_coalesce_counts[new_bank]));
+#endif
+#if CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE
+	memset((void *)irqprof_usb_ch4_sequence_counts[new_bank], 0,
+	       sizeof(irqprof_usb_ch4_sequence_counts[new_bank]));
+#endif
 #if CONFIG_USB_IRQ_CLEAR_STALE_PENDING
 	memset((void *)irqprof_usb_reenable_counts[new_bank], 0,
 	       sizeof(irqprof_usb_reenable_counts[new_bank]));
@@ -791,6 +1198,12 @@ void carbox_irq_profiler_snapshot(uint32_t profiler_irq,
 		irqprof_usb_ch4_halt_gap_snapshot[i] =
 			irqprof_usb_ch4_halt_gap_counts[old_bank][i];
 	}
+#if CONFIG_IRQ_PROFILE_USB_CH4_FLOW
+	for (i = 0U; i < IRQPROF_USB_CH4_FLOW_COUNTER_COUNT; ++i) {
+		irqprof_usb_ch4_flow_snapshot[i] =
+			irqprof_usb_ch4_flow_counts[old_bank][i];
+	}
+#endif
 #endif
 #endif
 #if CONFIG_USB_IRQ_SAFE_DEDUP
@@ -822,6 +1235,18 @@ void carbox_irq_profiler_snapshot(uint32_t profiler_irq,
 		irqprof_usb_ch3_ack_snapshot[i] =
 			irqprof_usb_ch3_ack_counts[old_bank][i];
 	}
+#if CONFIG_USB_IRQ_CH4_NAK_COALESCE
+	for (i = 0U; i < IRQPROF_USB_CH4_COALESCE_COUNTER_COUNT; ++i) {
+		irqprof_usb_ch4_coalesce_snapshot[i] =
+			irqprof_usb_ch4_coalesce_counts[old_bank][i];
+	}
+#endif
+#if CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE
+	for (i = 0U; i < IRQPROF_USB_CH4_SEQ_COUNTER_COUNT; ++i) {
+		irqprof_usb_ch4_sequence_snapshot[i] =
+			irqprof_usb_ch4_sequence_counts[old_bank][i];
+	}
+#endif
 #if CONFIG_USB_IRQ_CLEAR_STALE_PENDING
 	for (i = 0U; i < IRQPROF_USB_REENABLE_COUNTER_COUNT; ++i) {
 		irqprof_usb_reenable_snapshot[i] =
@@ -1007,6 +1432,25 @@ void carbox_irq_profiler_report(uint32_t sequence, uint32_t window_ms)
 					IRQPROF_USB_CH3_ACK_DOPING] * 10000U /
 				 irqprof_usb_ch3_ack_snapshot[IRQPROF_USB_CH3_ACK]) %
 				100U : 0U));
+#if CONFIG_USB_IRQ_CH4_NAK_COALESCE
+		rt_printf("[IRQPROF][%lu][USB_CH4_COALESCE] "
+			  "defer/merge/timeout/halt_cleared_nak=%lu/%lu/%lu/%lu "
+			  "pending=%lu saved_handoff_rate=%lu/s\r\n",
+			  (unsigned long)sequence,
+			  (unsigned long)irqprof_usb_ch4_coalesce_snapshot[
+				IRQPROF_USB_CH4_COALESCE_DEFER],
+			  (unsigned long)irqprof_usb_ch4_coalesce_snapshot[
+				IRQPROF_USB_CH4_COALESCE_MERGE],
+			  (unsigned long)irqprof_usb_ch4_coalesce_snapshot[
+				IRQPROF_USB_CH4_COALESCE_TIMEOUT],
+			  (unsigned long)irqprof_usb_ch4_coalesce_snapshot[
+				IRQPROF_USB_CH4_COALESCE_HALT_CLEARED_NAK],
+			  (unsigned long)irqprof_usb_ch4_coalesce_pending,
+			  (unsigned long)(((uint64_t)
+				irqprof_usb_ch4_coalesce_snapshot[
+					IRQPROF_USB_CH4_COALESCE_MERGE] * 1000U) /
+				window_ms));
+#endif
 		{
 			uint8_t channel_selected[IRQPROF_USB_CHANNEL_COUNT] = { 0U };
 			uint32_t rank;
@@ -1142,7 +1586,104 @@ void carbox_irq_profiler_report(uint32_t sequence, uint32_t window_ms)
 				IRQPROF_USB_CH4_GAP_GT_100US],
 			  (unsigned long)max_us);
 	}
+#if CONFIG_IRQ_PROFILE_USB_CH4_FLOW
+	{
+		uint32_t nak = irqprof_usb_ch4_flow_snapshot[
+			IRQPROF_USB_CH4_NAK_SERVICE];
+		uint32_t halt = irqprof_usb_ch4_flow_snapshot[
+			IRQPROF_USB_CH4_HALT_SERVICE];
+		uint32_t cycles_per_us = SystemCoreClock / 1000000U;
+		uint32_t nak_avg_us = nak != 0U && cycles_per_us != 0U ?
+			irqprof_usb_ch4_flow_snapshot[
+				IRQPROF_USB_CH4_NAK_SERVICE_CYCLES] /
+				nak / cycles_per_us : 0U;
+		uint32_t halt_avg_us = halt != 0U && cycles_per_us != 0U ?
+			irqprof_usb_ch4_flow_snapshot[
+				IRQPROF_USB_CH4_HALT_SERVICE_CYCLES] /
+				halt / cycles_per_us : 0U;
+
+		rt_printf("[IRQPROF][%lu][USB_CH4_FLOW] "
+			  "service nak/halt/other=%lu/%lu/%lu "
+			  "us_avg/max nak=%lu/%lu halt=%lu/%lu "
+			  "halt_call nak/other=%lu/%lu\r\n",
+			  (unsigned long)sequence,
+			  (unsigned long)nak, (unsigned long)halt,
+			  (unsigned long)irqprof_usb_ch4_flow_snapshot[
+				IRQPROF_USB_CH4_OTHER_SERVICE],
+			  (unsigned long)nak_avg_us,
+			  (unsigned long)(cycles_per_us != 0U ?
+				irqprof_usb_ch4_flow_snapshot[
+					IRQPROF_USB_CH4_NAK_SERVICE_MAX_CYCLES] /
+				cycles_per_us : 0U),
+			  (unsigned long)halt_avg_us,
+			  (unsigned long)(cycles_per_us != 0U ?
+				irqprof_usb_ch4_flow_snapshot[
+					IRQPROF_USB_CH4_HALT_SERVICE_MAX_CYCLES] /
+				cycles_per_us : 0U),
+			  (unsigned long)irqprof_usb_ch4_flow_snapshot[
+				IRQPROF_USB_CH4_NAK_HALT_CALL],
+			  (unsigned long)irqprof_usb_ch4_flow_snapshot[
+				IRQPROF_USB_CH4_OTHER_HALT_CALL]);
+	}
 #endif
+#endif
+#endif
+
+#if CONFIG_IRQ_PROFILE_USB_CAUSE && CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE
+	{
+		uint32_t submit = irqprof_usb_ch4_sequence_snapshot[
+			IRQPROF_USB_CH4_SEQ_SUBMIT_FIRST];
+		uint32_t halt = irqprof_usb_ch4_sequence_snapshot[
+			IRQPROF_USB_CH4_SEQ_HALT_FIRST];
+		uint32_t submit_avg_us = submit != 0U ?
+			irqprof_usb_ch4_sequence_snapshot[
+				IRQPROF_USB_CH4_SEQ_SUBMIT_US] /
+				submit : 0U;
+		uint32_t halt_avg_us = halt != 0U ?
+			irqprof_usb_ch4_sequence_snapshot[
+				IRQPROF_USB_CH4_SEQ_HALT_US] /
+				halt : 0U;
+
+		rt_printf("[IRQPROF][%lu][USB_CH4_SEQUENCE] "
+			  "nak=%lu first submit/halt/same=%lu/%lu/%lu "
+			  "overlap=%lu unresolved=%lu "
+			  "gap_us submit avg/max=%lu/%lu halt avg/max=%lu/%lu\r\n",
+			  (unsigned long)sequence,
+			  (unsigned long)irqprof_usb_ch4_sequence_snapshot[
+				IRQPROF_USB_CH4_SEQ_NAK],
+			  (unsigned long)submit, (unsigned long)halt,
+			  (unsigned long)irqprof_usb_ch4_sequence_snapshot[
+				IRQPROF_USB_CH4_SEQ_SAME_IRQ],
+			  (unsigned long)irqprof_usb_ch4_sequence_snapshot[
+				IRQPROF_USB_CH4_SEQ_NAK_OVERLAP],
+			  (unsigned long)irqprof_usb_ch4_sequence_pending,
+			  (unsigned long)submit_avg_us,
+			  (unsigned long)irqprof_usb_ch4_sequence_snapshot[
+				IRQPROF_USB_CH4_SEQ_SUBMIT_MAX_US],
+			  (unsigned long)halt_avg_us,
+			  (unsigned long)irqprof_usb_ch4_sequence_snapshot[
+				IRQPROF_USB_CH4_SEQ_HALT_MAX_US]);
+	}
+#endif
+
+#if CONFIG_IRQ_PROFILE_USB_CH4_NCM
+	rt_printf("[IRQPROF][%lu][USB_CH4_NCM] "
+		  "get calls/ok/fail=%lu/%lu/%lu "
+		  "device in/out_max=%lu/%luB "
+		  "set calls/ok/fail=%lu/%lu/%lu requested=%luB "
+		  "receive_size=%luB calls=%lu\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)irqprof_usb_ch4_ncm.get_calls,
+		  (unsigned long)irqprof_usb_ch4_ncm.get_ok,
+		  (unsigned long)irqprof_usb_ch4_ncm.get_fail,
+		  (unsigned long)irqprof_usb_ch4_ncm.device_in_max,
+		  (unsigned long)irqprof_usb_ch4_ncm.device_out_max,
+		  (unsigned long)irqprof_usb_ch4_ncm.set_calls,
+		  (unsigned long)irqprof_usb_ch4_ncm.set_ok,
+		  (unsigned long)irqprof_usb_ch4_ncm.set_fail,
+		  (unsigned long)irqprof_usb_ch4_ncm.set_requested,
+		  (unsigned long)irqprof_usb_ch4_ncm.receive_size,
+		  (unsigned long)irqprof_usb_ch4_ncm.receive_size_calls);
 #endif
 
 #if CONFIG_USB_IRQ_SAFE_DEDUP

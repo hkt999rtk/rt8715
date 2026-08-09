@@ -5,6 +5,7 @@
 
 #include "cmsis.h"
 #include "diag.h"
+#include "irq_profiler.h"
 #include "FreeRTOS.h"
 #include "task.h"
 
@@ -14,6 +15,10 @@
 
 #ifndef CONFIG_USB_HCD_CHANNEL_PROFILE
 #define CONFIG_USB_HCD_CHANNEL_PROFILE 0
+#endif
+
+#ifndef CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE
+#define CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE 0
 #endif
 
 #if CONFIG_USB_HCD_PROFILE
@@ -63,6 +68,12 @@ uint8_t __wrap_usbh_hcd_hc_submit_request(
 	uint8_t token, uint8_t *buffer, uint16_t length)
 {
 	uint32_t start = DWT->CYCCNT;
+
+#if CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE
+	if (channel == 4U) {
+		carbox_irq_profiler_usb_ch4_submit();
+	}
+#endif
 	uint8_t result = __real_usbh_hcd_hc_submit_request(
 		hcd, channel, direction, ep_type, token, buffer, length);
 	uint32_t elapsed = DWT->CYCCNT - start;
@@ -260,6 +271,12 @@ uint8_t __wrap_usbh_hcd_hc_submit_request(
 	void *hcd, uint8_t channel, uint8_t direction, uint8_t ep_type,
 	uint8_t token, uint8_t *buffer, uint16_t length)
 {
+
+#if CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE
+	if (channel == 4U) {
+		carbox_irq_profiler_usb_ch4_submit();
+	}
+#endif
 	uint8_t result = __real_usbh_hcd_hc_submit_request(
 		hcd, channel, direction, ep_type, token, buffer, length);
 
