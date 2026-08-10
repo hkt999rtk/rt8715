@@ -1,0 +1,44 @@
+# Reproducible RTL8195B/M33 build for the vendored FDK AAC v0.1.6 source.
+#
+# LTO and -Ofast are deliberately not used: LTO would hide the per-function
+# sections selected by rtl8195bhp_ram_is.ld, while -Ofast can change codec
+# arithmetic semantics.  -O3 plus the ARM DSP implementation is the fastest
+# configuration that preserves those integration and correctness properties.
+
+REPO_ROOT := $(abspath ../../../../..)
+TOOLCHAIN_BIN ?= $(REPO_ROOT)/../toolchains/arm-none-eabi-gcc-6.4.1-realtek/asdk/linux/newlib/bin
+CC := $(TOOLCHAIN_BIN)/arm-none-eabi-gcc
+CXX := $(TOOLCHAIN_BIN)/arm-none-eabi-g++
+BUILD_DIR ?= build-rtl8195b-o3
+OUTPUT ?= $(abspath ../../carplay_app/lib_fdkaac_o3.a)
+JOBS ?= 8
+
+COMMON_FLAGS := -O3 -march=armv8-m.main+dsp -mthumb \
+	-mfloat-abi=softfp -mfpu=fpv5-sp-d16 \
+	-ffunction-sections -fdata-sections -fomit-frame-pointer \
+	-fstrict-aliasing -fno-unwind-tables -fno-asynchronous-unwind-tables \
+	-D__TARGET_ARCH_7E_M=1
+CFLAGS := $(COMMON_FLAGS)
+CXXFLAGS := $(COMMON_FLAGS) -fno-exceptions -fno-rtti -fno-threadsafe-statics
+LDFLAGS := -specs=nosys.specs
+
+.PHONY: all clean
+
+all: $(BUILD_DIR)/Makefile
+	$(MAKE) -C $(BUILD_DIR) -j$(JOBS)
+	cp $(BUILD_DIR)/.libs/libfdk-aac.a $(OUTPUT)
+	@echo "FDK AAC O3 archive: $(OUTPUT)"
+
+configure: configure.ac Makefile.am
+	./autogen.sh
+
+$(BUILD_DIR)/Makefile: configure
+	mkdir -p $(BUILD_DIR)
+	cd $(BUILD_DIR) && \
+		CC="$(CC)" CXX="$(CXX)" \
+		CFLAGS="$(CFLAGS)" CXXFLAGS="$(CXXFLAGS)" LDFLAGS="$(LDFLAGS)" \
+		../configure --host=arm-none-eabi --build=x86_64-pc-linux-gnu \
+			--disable-shared --enable-static
+
+clean:
+	@if [ -f $(BUILD_DIR)/Makefile ]; then $(MAKE) -C $(BUILD_DIR) clean; fi

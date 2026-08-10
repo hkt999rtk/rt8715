@@ -211,23 +211,22 @@ SECTIONS
 		 * transform, FFT and QMF loops.  Lookup tables intentionally remain
 		 * in LPDDR; only executable hot paths consume ITCM.
 		 */
-		*lib_fdkaac.a:*(
-			.text.FDKaacEnc_EncodeFrame
-			.text.FDKaacEnc_psyMain
-			.text.FDKaacEnc_QCMain
-			.text.FDKaacEnc_Transform_Real
-			.text.FDKaacEnc_MsStereoProcessing
-			.text.CAacDecoder_DecodeFrame
-			.text.CBlock_FrequencyToTime
-			.text.CBlock_FrequencyToTimeLowDelay
-			.text.CTns_Filter
-			.text.sbr_dec
-			.text.lppTransposer
-			.text.imdct_block
-			.text.InvMdctTransformLowDelay_fdk
+		*lib_fdkaac*.a:*(
+			.text.*FDKaacEnc_EncodeFrame*
+			.text.*FDKaacEnc_psyMain*
+			.text.*FDKaacEnc_QCMain*
+			.text.*FDKaacEnc_Transform_Real*
+			.text.*FDKaacEnc_MsStereoProcessing*
+			.text.*CAacDecoder_DecodeFrame*
+			.text.*CBlock_FrequencyToTime*
+			.text.*CTns_Filter*
+			.text.*sbr_dec*
+			.text.*lppTransposer*
+			.text.*imdct_block*
+			.text.*InvMdctTransformLowDelay_fdk*
 		)
-		*lib_fdkaac.a:fft.o(.text*)
-		*lib_fdkaac.a:qmf.o(.text*)
+		*lib_fdkaac*.a:fft.o(.text*)
+		*lib_fdkaac*.a:qmf.o(.text*)
 
 		/*
 		 * Opus: CELT/SILK decode plus the two dominant top-level encoder
@@ -325,7 +324,7 @@ SECTIONS
 		 */
 		*lib_CarPlay.a:*(.text*)
 		*lib_CarPlay_chacha_m33.a:*(.text*)
-		*lib_fdkaac.a:*(.text*)
+		*lib_fdkaac*.a:*(.text*)
 		*lib_Accessory2.a:AirPlayScreen.o(.text*)
 
 		__psram_code_text_end__ = .;
@@ -362,7 +361,7 @@ SECTIONS
 		/* Keep hot codec/crypto lookup tables with their LPDDR text. */
 		*lib_CarPlay.a:*(.rodata*)
 		*lib_CarPlay_chacha_m33.a:*(.rodata*)
-		*lib_fdkaac.a:*(.rodata* .haac.rodata* .faac.rodata*)
+		*lib_fdkaac*.a:*(.rodata* .haac.rodata* .faac.rodata*)
 		*lib_Accessory2.a:AirPlayScreen.o(.rodata*)
 
 		. = ALIGN(4);
