@@ -1696,7 +1696,13 @@ lwip_netconn_do_recv(void *m)
       size_t remaining = msg->msg.r.len;
       do {
         u16_t recved = (u16_t)((remaining > 0xffff) ? 0xffff : remaining);
+#if defined(CONFIG_SCREEN_RX_RATE_LIMIT) && CONFIG_SCREEN_RX_RATE_LIMIT
+        if (!tcp_screen_rx_rate_limit_defer(msg->conn->pcb.tcp, recved)) {
+          tcp_recved(msg->conn->pcb.tcp, recved);
+        }
+#else
         tcp_recved(msg->conn->pcb.tcp, recved);
+#endif
         remaining -= recved;
       } while (remaining != 0);
     }

@@ -28,6 +28,7 @@ void carbox_screen_block_profile_write(int socket, size_t requested,
 				       int result);
 void carbox_screen_tx_direct_crypto_report(uint32_t sequence);
 void carbox_screen_block_profile_report(uint32_t sequence);
+void carbox_screen_tx_pacer_report(uint32_t sequence);
 
 #define CARBOX_SCREEN_TX_CRYPTO_AES     1U
 #define CARBOX_SCREEN_TX_CRYPTO_CHACHA  2U

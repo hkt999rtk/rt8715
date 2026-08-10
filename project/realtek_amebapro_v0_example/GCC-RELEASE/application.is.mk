@@ -719,6 +719,7 @@ SRC_C += ../src/carbox/pc_profiler.c
 SRC_C += ../src/carbox/irq_profiler.c
 SRC_C += ../src/carbox/gcd_sync_profiler.c
 SRC_C += ../src/carbox/screen_queue_profiler.c
+SRC_C += ../src/carbox/screen_rx_rate_limit.c
 SRC_C += ../src/carbox/memcheck.c
 SRC_C += ../src/carbox/carbox_stubs.c
 SRC_C += ../src/carbox/libusb_ref_compat/libusb_ref_compat_hal.c
@@ -836,7 +837,7 @@ NCM_TX_PROFILE ?= 0
 # Move the closed synchronous NCM send/wait out of TCP_IP.
 NCM_TX_ASYNC ?= 1
 # Compact 10-second batch health report used to validate aggregation limits.
-NCM_TX_ASYNC_PROFILE ?= 1
+NCM_TX_ASYNC_PROFILE ?= 0
 # Seal a multi-datagram NTB when it reaches either limit, or 5 ms after the
 # oldest retained Ethernet packet was queued.  The timeout is not sliding.
 NCM_TX_BATCH ?= 1
@@ -919,6 +920,38 @@ GCD_WORK_PRIORITY ?= -1
 # top-half ISR masks USB_IRQn.  Keep it above all normal networking tasks.
 USBH_ISR_TASK_PRIORITY ?= 11
 SCREEN_QUEUE_PROFILE ?= 0
+# Production switch for the temporary RX/TX investigation reports. Keep the
+# limiter, pacer, handover gate, and pressure feedback active when this is off.
+SCREEN_DATAPATH_PROFILE ?= 0
+# Pace receive-window credit only for the iPhone screen TCP connection.  The
+# closed receiver is identified once by task plus its validated 128-byte frame
+# header; all other sockets retain the stock lwIP receive path.
+SCREEN_RX_RATE_LIMIT ?= 1
+SCREEN_RX_RATE_LIMIT_BPS ?= 14000000
+SCREEN_RX_RATE_LIMIT_INTERVAL_MS ?= 10
+SCREEN_RX_RATE_LIMIT_BUCKET_BYTES ?= 32768
+SCREEN_RX_RATE_LIMIT_CONTROL_MS ?= 100
+SCREEN_RX_RATE_LIMIT_DEADBAND_PERCENT ?= 10
+SCREEN_RX_RATE_LIMIT_FILTER_SHIFT ?= 2
+SCREEN_RX_RATE_LIMIT_VALVE_MIN_BPS ?= 1000000
+SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS ?= 14000000
+SCREEN_RX_RATE_LIMIT_OPEN_STEP_BPS ?= 125000
+SCREEN_RX_RATE_LIMIT_CLOSE_STEP_BPS ?= 500000
+SCREEN_RX_RATE_LIMIT_OPEN_HOLD_MS ?= 100
+SCREEN_RX_RATE_LIMIT_CLOSE_HOLD_MS ?= 150
+SCREEN_RX_RATE_LIMIT_TASK_PRIORITY ?= 5
+SCREEN_RX_RATE_LIMIT_TASK_STACK ?= 512
+# Smooth each ScreenThread TCP write without creating a second long-term
+# controller. RX owns the long-term rate; TX has a slightly higher catch-up
+# ceiling but can burst by no more than the peer's observed 23,040-byte window.
+SCREEN_TX_PACER ?= 1
+SCREEN_TX_PACER_BPS ?= 15000000
+SCREEN_TX_PACER_BUCKET_BYTES ?= 23040
+SCREEN_TX_PACER_CHUNK_BYTES ?= 4096
+SCREEN_TX_PACER_WAIT_MS ?= 1
+SCREEN_TX_PRESSURE_FEEDBACK ?= 1
+SCREEN_TX_PRESSURE_TRIGGER_MS ?= 75
+SCREEN_TX_PRESSURE_CLEAN_MS ?= 500
 # Narrow backpressure diagnostic for the closed AirPlay sender's "screen block"
 # retry.  It samples only failed ScreenThread writes and stays independent of
 # the older, verbose frame/queue profiler.
@@ -926,7 +959,7 @@ SCREEN_BLOCK_PROFILE ?= 1
 # Once a screen write identifies the video TCP PCB, summarize the returning
 # ACK cadence and advertised-window behavior.  This distinguishes a slow peer
 # reader from local USB/NCM queueing without restoring the verbose TCP profile.
-SCREEN_TCP_ACK_PROFILE ?= 1
+SCREEN_TCP_ACK_PROFILE ?= 0
 # Remove the closed AirPlay library's redundant full-frame handover memcpy.
 # Phase B retains the temporary allocation until queue publication is proven,
 # then frees it immediately.  The build creates derived archives whose hooks
@@ -951,7 +984,7 @@ SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES ?= 4096
 TCP_OWNED_WRITE ?= 1
 # Report the ACK lifetime of video buffers independently of the retired full
 # screen queue profiler.  This is the direct measure of queued video latency.
-TCP_OWNED_AGE_PROFILE ?= 1
+TCP_OWNED_AGE_PROFILE ?= 0
 # Keep the expensive, already-concluded diagnostic probes independently
 # switchable.  The normal screen timing/backlog profiler does not need them.
 SCREEN_FRAME_FORMAT_PROFILE ?= 0
@@ -1032,6 +1065,30 @@ GCCFLAGS += -DCONFIG_GCD_SYNC_PROFILE=$(GCD_SYNC_PROFILE)
 GCCFLAGS += -DCONFIG_GCD_WORK_PRIORITY=$(GCD_WORK_PRIORITY)
 GCCFLAGS += -DCONFIG_USBH_ISR_TASK_PRIORITY=$(USBH_ISR_TASK_PRIORITY)
 GCCFLAGS += -DCONFIG_SCREEN_QUEUE_PROFILE=$(SCREEN_QUEUE_PROFILE)
+GCCFLAGS += -DCONFIG_SCREEN_DATAPATH_PROFILE=$(SCREEN_DATAPATH_PROFILE)
+GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT=$(SCREEN_RX_RATE_LIMIT)
+GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_BPS=$(SCREEN_RX_RATE_LIMIT_BPS)
+GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_INTERVAL_MS=$(SCREEN_RX_RATE_LIMIT_INTERVAL_MS)
+GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_BUCKET_BYTES=$(SCREEN_RX_RATE_LIMIT_BUCKET_BYTES)
+GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_CONTROL_MS=$(SCREEN_RX_RATE_LIMIT_CONTROL_MS)
+GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_DEADBAND_PERCENT=$(SCREEN_RX_RATE_LIMIT_DEADBAND_PERCENT)
+GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_FILTER_SHIFT=$(SCREEN_RX_RATE_LIMIT_FILTER_SHIFT)
+GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_VALVE_MIN_BPS=$(SCREEN_RX_RATE_LIMIT_VALVE_MIN_BPS)
+GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS=$(SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS)
+GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_OPEN_STEP_BPS=$(SCREEN_RX_RATE_LIMIT_OPEN_STEP_BPS)
+GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_CLOSE_STEP_BPS=$(SCREEN_RX_RATE_LIMIT_CLOSE_STEP_BPS)
+GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_OPEN_HOLD_MS=$(SCREEN_RX_RATE_LIMIT_OPEN_HOLD_MS)
+GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_CLOSE_HOLD_MS=$(SCREEN_RX_RATE_LIMIT_CLOSE_HOLD_MS)
+GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_TASK_PRIORITY=$(SCREEN_RX_RATE_LIMIT_TASK_PRIORITY)
+GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_TASK_STACK=$(SCREEN_RX_RATE_LIMIT_TASK_STACK)
+GCCFLAGS += -DCONFIG_SCREEN_TX_PACER=$(SCREEN_TX_PACER)
+GCCFLAGS += -DCONFIG_SCREEN_TX_PACER_BPS=$(SCREEN_TX_PACER_BPS)
+GCCFLAGS += -DCONFIG_SCREEN_TX_PACER_BUCKET_BYTES=$(SCREEN_TX_PACER_BUCKET_BYTES)
+GCCFLAGS += -DCONFIG_SCREEN_TX_PACER_CHUNK_BYTES=$(SCREEN_TX_PACER_CHUNK_BYTES)
+GCCFLAGS += -DCONFIG_SCREEN_TX_PACER_WAIT_MS=$(SCREEN_TX_PACER_WAIT_MS)
+GCCFLAGS += -DCONFIG_SCREEN_TX_PRESSURE_FEEDBACK=$(SCREEN_TX_PRESSURE_FEEDBACK)
+GCCFLAGS += -DCONFIG_SCREEN_TX_PRESSURE_TRIGGER_MS=$(SCREEN_TX_PRESSURE_TRIGGER_MS)
+GCCFLAGS += -DCONFIG_SCREEN_TX_PRESSURE_CLEAN_MS=$(SCREEN_TX_PRESSURE_CLEAN_MS)
 GCCFLAGS += -DCONFIG_SCREEN_BLOCK_PROFILE=$(SCREEN_BLOCK_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TCP_ACK_PROFILE=$(SCREEN_TCP_ACK_PROFILE)
 GCCFLAGS += -DCONFIG_VIDEO_HANDOVER_ZERO_COPY=$(VIDEO_HANDOVER_ZERO_COPY)
@@ -1140,6 +1197,12 @@ LFLAGS += -Wl,--wrap=lwip_select
 ifeq ($(SCREEN_TIMESTAMP_PROFILE),1)
 LFLAGS += -Wl,--wrap=UpTicksToNTP
 endif
+endif
+ifeq ($(SCREEN_RX_RATE_LIMIT),1)
+ifeq ($(SCREEN_QUEUE_PROFILE),0)
+LFLAGS += -Wl,--wrap=lwip_recv
+endif
+LFLAGS += -Wl,--wrap=lwip_close
 endif
 ifeq ($(VIDEO_HANDOVER_ZERO_COPY),1)
 # In a non-profile build, retain only the two functional wrappers required for

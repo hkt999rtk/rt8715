@@ -456,6 +456,28 @@ void             tcp_backlog_accepted(struct tcp_pcb* pcb);
 #define          tcp_accepted(pcb) do { LWIP_UNUSED_ARG(pcb); } while(0) /* compatibility define, not needed any more */
 
 void             tcp_recved  (struct tcp_pcb *pcb, u16_t len);
+#if defined(CONFIG_SCREEN_RX_RATE_LIMIT) && CONFIG_SCREEN_RX_RATE_LIMIT
+int              tcp_screen_rx_rate_limit_enable(struct tcp_pcb *pcb);
+void             tcp_screen_rx_rate_limit_disable(struct tcp_pcb *pcb);
+int              tcp_screen_rx_rate_limit_defer(struct tcp_pcb *pcb, u16_t len);
+int              tcp_screen_rx_rate_limit_tick(void);
+void             tcp_screen_rx_rate_limit_pressure(void);
+void             tcp_screen_rx_rate_limit_snapshot(u32_t *active,
+                                                    u32_t *requested_bytes,
+                                                    u32_t *granted_bytes,
+                                                    u32_t *pending_bytes,
+                                                    u32_t *pending_max_bytes,
+                                                    u32_t *grant_ticks,
+                                                    u32_t *elapsed_ms,
+                                                    u32_t *tokens_bytes,
+                                                    u32_t *bucket_bytes,
+                                                    u32_t *valve_kbps,
+                                                    u32_t *filtered_kbps,
+                                                    u32_t *open_adjusts,
+                                                    u32_t *close_adjusts,
+                                                    u32_t *pressure_events,
+                                                    int reset);
+#endif
 err_t            tcp_bind    (struct tcp_pcb *pcb, const ip_addr_t *ipaddr,
                               u16_t port);
 void             tcp_bind_netif(struct tcp_pcb *pcb, const struct netif *netif);

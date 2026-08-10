@@ -944,6 +944,76 @@ lwip_close(int s)
   return 0;
 }
 
+#if defined(CONFIG_SCREEN_RX_RATE_LIMIT) && CONFIG_SCREEN_RX_RATE_LIMIT
+int
+lwip_screen_rx_rate_limit_enable(int s)
+{
+  struct lwip_sock *sock;
+  struct tcp_pcb *pcb;
+  int result;
+
+  sock = get_socket(s);
+  if ((sock == NULL) || (sock->conn == NULL) ||
+      (NETCONNTYPE_GROUP(netconn_type(sock->conn)) != NETCONN_TCP)) {
+    if (sock != NULL) {
+      done_socket(sock);
+    }
+    return -1;
+  }
+  LOCK_TCPIP_CORE();
+  pcb = sock->conn->pcb.tcp;
+  result = pcb != NULL ? tcp_screen_rx_rate_limit_enable(pcb) : -1;
+  UNLOCK_TCPIP_CORE();
+  done_socket(sock);
+  return result;
+}
+
+int
+lwip_screen_rx_rate_limit_tick(void)
+{
+  int active;
+
+  LOCK_TCPIP_CORE();
+  active = tcp_screen_rx_rate_limit_tick();
+  UNLOCK_TCPIP_CORE();
+  return active;
+}
+
+void
+lwip_screen_rx_rate_limit_pressure(void)
+{
+  LOCK_TCPIP_CORE();
+  tcp_screen_rx_rate_limit_pressure();
+  UNLOCK_TCPIP_CORE();
+}
+
+int
+lwip_diag_screen_rx_rate_limit(struct lwip_screen_rx_rate_limit_diag *diag,
+                               int reset)
+{
+  if (diag == NULL) {
+    return -1;
+  }
+  LOCK_TCPIP_CORE();
+  tcp_screen_rx_rate_limit_snapshot(&diag->active,
+                                     &diag->requested_bytes,
+                                     &diag->granted_bytes,
+                                     &diag->pending_bytes,
+                                     &diag->pending_max_bytes,
+                                     &diag->grant_ticks,
+                                     &diag->elapsed_ms,
+                                     &diag->tokens_bytes,
+                                     &diag->bucket_bytes,
+                                     &diag->valve_kbps,
+                                     &diag->filtered_kbps,
+                                     &diag->open_adjusts,
+                                     &diag->close_adjusts,
+                                     &diag->pressure_events, reset);
+  UNLOCK_TCPIP_CORE();
+  return 0;
+}
+#endif
+
 int
 lwip_connect(int s, const struct sockaddr *name, socklen_t namelen)
 {

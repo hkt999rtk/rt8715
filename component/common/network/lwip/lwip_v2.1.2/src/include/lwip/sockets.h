@@ -663,6 +663,31 @@ int lwip_poll(struct pollfd *fds, nfds_t nfds, int timeout);
 #endif
 int lwip_ioctl(int s, long cmd, void *argp);
 int lwip_fcntl(int s, int cmd, int val);
+
+#if defined(CONFIG_SCREEN_RX_RATE_LIMIT) && CONFIG_SCREEN_RX_RATE_LIMIT
+struct lwip_screen_rx_rate_limit_diag {
+  u32_t active;
+  u32_t requested_bytes;
+  u32_t granted_bytes;
+  u32_t pending_bytes;
+  u32_t pending_max_bytes;
+  u32_t grant_ticks;
+  u32_t elapsed_ms;
+  u32_t tokens_bytes;
+  u32_t bucket_bytes;
+  u32_t valve_kbps;
+  u32_t filtered_kbps;
+  u32_t open_adjusts;
+  u32_t close_adjusts;
+  u32_t pressure_events;
+};
+int lwip_screen_rx_rate_limit_enable(int s);
+int lwip_screen_rx_rate_limit_tick(void);
+void lwip_screen_rx_rate_limit_pressure(void);
+int lwip_diag_screen_rx_rate_limit(
+    struct lwip_screen_rx_rate_limit_diag *diag, int reset);
+#endif
+
 const char *lwip_inet_ntop(int af, const void *src, char *dst, socklen_t size);
 int lwip_inet_pton(int af, const char *src, void *dst);
 

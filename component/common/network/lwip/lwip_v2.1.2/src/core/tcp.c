@@ -114,6 +114,328 @@
 
 #include <string.h>
 
+#ifndef CONFIG_SCREEN_RX_RATE_LIMIT_INTERVAL_MS
+#define CONFIG_SCREEN_RX_RATE_LIMIT_INTERVAL_MS 10U
+#endif
+#ifndef CONFIG_SCREEN_RX_RATE_LIMIT_BPS
+#define CONFIG_SCREEN_RX_RATE_LIMIT_BPS 5000000U
+#endif
+#ifndef CONFIG_SCREEN_RX_RATE_LIMIT_BUCKET_BYTES
+#define CONFIG_SCREEN_RX_RATE_LIMIT_BUCKET_BYTES 32768U
+#endif
+#ifndef CONFIG_SCREEN_RX_RATE_LIMIT_CONTROL_MS
+#define CONFIG_SCREEN_RX_RATE_LIMIT_CONTROL_MS 100U
+#endif
+#ifndef CONFIG_SCREEN_RX_RATE_LIMIT_DEADBAND_PERCENT
+#define CONFIG_SCREEN_RX_RATE_LIMIT_DEADBAND_PERCENT 10U
+#endif
+#ifndef CONFIG_SCREEN_RX_RATE_LIMIT_FILTER_SHIFT
+#define CONFIG_SCREEN_RX_RATE_LIMIT_FILTER_SHIFT 2U
+#endif
+#ifndef CONFIG_SCREEN_RX_RATE_LIMIT_VALVE_MIN_BPS
+#define CONFIG_SCREEN_RX_RATE_LIMIT_VALVE_MIN_BPS 1000000U
+#endif
+#ifndef CONFIG_SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS
+#define CONFIG_SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS 8000000U
+#endif
+#ifndef CONFIG_SCREEN_RX_RATE_LIMIT_OPEN_STEP_BPS
+#define CONFIG_SCREEN_RX_RATE_LIMIT_OPEN_STEP_BPS 125000U
+#endif
+#ifndef CONFIG_SCREEN_RX_RATE_LIMIT_CLOSE_STEP_BPS
+#define CONFIG_SCREEN_RX_RATE_LIMIT_CLOSE_STEP_BPS 500000U
+#endif
+#ifndef CONFIG_SCREEN_RX_RATE_LIMIT_OPEN_HOLD_MS
+#define CONFIG_SCREEN_RX_RATE_LIMIT_OPEN_HOLD_MS 100U
+#endif
+#ifndef CONFIG_SCREEN_RX_RATE_LIMIT_CLOSE_HOLD_MS
+#define CONFIG_SCREEN_RX_RATE_LIMIT_CLOSE_HOLD_MS 150U
+#endif
+#ifndef CONFIG_SCREEN_TX_PRESSURE_CLEAN_MS
+#define CONFIG_SCREEN_TX_PRESSURE_CLEAN_MS 500U
+#endif
+
+#if defined(CONFIG_SCREEN_RX_RATE_LIMIT) && CONFIG_SCREEN_RX_RATE_LIMIT
+#if (CONFIG_SCREEN_RX_RATE_LIMIT_BPS == 0) || \
+    (CONFIG_SCREEN_RX_RATE_LIMIT_BUCKET_BYTES == 0) || \
+    (CONFIG_SCREEN_RX_RATE_LIMIT_BUCKET_BYTES > 65535) || \
+    (CONFIG_SCREEN_RX_RATE_LIMIT_CONTROL_MS == 0) || \
+    (CONFIG_SCREEN_RX_RATE_LIMIT_DEADBAND_PERCENT >= 100) || \
+    (CONFIG_SCREEN_RX_RATE_LIMIT_VALVE_MIN_BPS == 0) || \
+    (CONFIG_SCREEN_RX_RATE_LIMIT_VALVE_MIN_BPS > CONFIG_SCREEN_RX_RATE_LIMIT_BPS) || \
+    (CONFIG_SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS < CONFIG_SCREEN_RX_RATE_LIMIT_BPS)
+#error "invalid screen RX rate-limit configuration"
+#endif
+
+static struct tcp_pcb *tcp_screen_rx_limited_pcb;
+static u32_t tcp_screen_rx_pending;
+static u32_t tcp_screen_rx_pending_max;
+static u32_t tcp_screen_rx_requested;
+static u32_t tcp_screen_rx_granted;
+static u32_t tcp_screen_rx_grant_ticks;
+static u32_t tcp_screen_rx_stats_start_ms;
+static u32_t tcp_screen_rx_tokens;
+static u32_t tcp_screen_rx_token_remainder;
+static u32_t tcp_screen_rx_valve_remainder;
+static u32_t tcp_screen_rx_last_tick_ms;
+static u32_t tcp_screen_rx_control_start_ms;
+static u32_t tcp_screen_rx_control_requested;
+static u32_t tcp_screen_rx_filtered_kbps;
+static u32_t tcp_screen_rx_valve_bps;
+static u32_t tcp_screen_rx_last_adjust_ms;
+static u32_t tcp_screen_rx_adjust_hold_ms;
+static u32_t tcp_screen_rx_open_adjusts;
+static u32_t tcp_screen_rx_close_adjusts;
+static u32_t tcp_screen_rx_pressure_events;
+static u32_t tcp_screen_rx_last_pressure_ms;
+static u8_t tcp_screen_rx_pressure_seen;
+static u8_t tcp_screen_rx_pressure_pending;
+
+static int tcp_screen_rx_valve_close(u32_t now)
+{
+  u32_t step = LWIP_MIN(tcp_screen_rx_valve_bps -
+                        CONFIG_SCREEN_RX_RATE_LIMIT_VALVE_MIN_BPS,
+                        CONFIG_SCREEN_RX_RATE_LIMIT_CLOSE_STEP_BPS);
+
+  if (step == 0U) {
+    return 0;
+  }
+  tcp_screen_rx_valve_bps -= step;
+  tcp_screen_rx_close_adjusts++;
+  tcp_screen_rx_last_adjust_ms = now;
+  tcp_screen_rx_adjust_hold_ms = CONFIG_SCREEN_RX_RATE_LIMIT_CLOSE_HOLD_MS;
+  return 1;
+}
+
+static void tcp_screen_rx_rate_limit_control(u32_t now)
+{
+  u32_t elapsed = now - tcp_screen_rx_control_start_ms;
+  u32_t sample_kbps;
+  u32_t low_kbps;
+  u32_t high_kbps;
+
+  if (elapsed < CONFIG_SCREEN_RX_RATE_LIMIT_CONTROL_MS) {
+    return;
+  }
+  sample_kbps = elapsed != 0U ?
+      (u32_t)(((unsigned long long)tcp_screen_rx_control_requested * 8U) /
+              elapsed) : 0U;
+  if (tcp_screen_rx_filtered_kbps == 0U) {
+    tcp_screen_rx_filtered_kbps = sample_kbps;
+  } else if (sample_kbps >= tcp_screen_rx_filtered_kbps) {
+    tcp_screen_rx_filtered_kbps +=
+        (sample_kbps - tcp_screen_rx_filtered_kbps) >>
+        CONFIG_SCREEN_RX_RATE_LIMIT_FILTER_SHIFT;
+  } else {
+    tcp_screen_rx_filtered_kbps -=
+        (tcp_screen_rx_filtered_kbps - sample_kbps) >>
+        CONFIG_SCREEN_RX_RATE_LIMIT_FILTER_SHIFT;
+  }
+  tcp_screen_rx_control_requested = 0;
+  tcp_screen_rx_control_start_ms = now;
+
+  if ((now - tcp_screen_rx_last_adjust_ms) < tcp_screen_rx_adjust_hold_ms) {
+    return;
+  }
+  if (tcp_screen_rx_pressure_pending) {
+    tcp_screen_rx_pressure_pending = 0U;
+    if (tcp_screen_rx_valve_close(now)) {
+      return;
+    }
+  }
+  low_kbps = (CONFIG_SCREEN_RX_RATE_LIMIT_BPS / 1000U) *
+      (100U - CONFIG_SCREEN_RX_RATE_LIMIT_DEADBAND_PERCENT) / 100U;
+  high_kbps = (CONFIG_SCREEN_RX_RATE_LIMIT_BPS / 1000U) *
+      (100U + CONFIG_SCREEN_RX_RATE_LIMIT_DEADBAND_PERCENT) / 100U;
+
+  if (tcp_screen_rx_filtered_kbps > high_kbps) {
+    (void)tcp_screen_rx_valve_close(now);
+  } else if ((tcp_screen_rx_filtered_kbps < low_kbps) &&
+             (tcp_screen_rx_pending != 0U) &&
+             (!tcp_screen_rx_pressure_seen ||
+              ((now - tcp_screen_rx_last_pressure_ms) >=
+               CONFIG_SCREEN_TX_PRESSURE_CLEAN_MS))) {
+    u32_t step = LWIP_MIN(CONFIG_SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS -
+                          tcp_screen_rx_valve_bps,
+                          CONFIG_SCREEN_RX_RATE_LIMIT_OPEN_STEP_BPS);
+
+    if (step != 0U) {
+      tcp_screen_rx_valve_bps += step;
+      tcp_screen_rx_open_adjusts++;
+      tcp_screen_rx_last_adjust_ms = now;
+      tcp_screen_rx_adjust_hold_ms = CONFIG_SCREEN_RX_RATE_LIMIT_OPEN_HOLD_MS;
+    }
+  }
+}
+
+int tcp_screen_rx_rate_limit_enable(struct tcp_pcb *pcb)
+{
+  LWIP_ASSERT_CORE_LOCKED();
+  if ((pcb == NULL) || (pcb->state == LISTEN)) {
+    return -1;
+  }
+  if (tcp_screen_rx_limited_pcb != pcb) {
+    u32_t now = sys_now();
+
+    tcp_screen_rx_limited_pcb = pcb;
+    tcp_screen_rx_pending = 0;
+    tcp_screen_rx_pending_max = 0;
+    tcp_screen_rx_requested = 0;
+    tcp_screen_rx_granted = 0;
+    tcp_screen_rx_grant_ticks = 0;
+    tcp_screen_rx_stats_start_ms = now;
+    tcp_screen_rx_tokens = CONFIG_SCREEN_RX_RATE_LIMIT_BUCKET_BYTES;
+    tcp_screen_rx_token_remainder = 0;
+    tcp_screen_rx_valve_remainder = 0;
+    tcp_screen_rx_last_tick_ms = now;
+    tcp_screen_rx_control_start_ms = now;
+    tcp_screen_rx_control_requested = 0;
+    tcp_screen_rx_filtered_kbps = CONFIG_SCREEN_RX_RATE_LIMIT_BPS / 1000U;
+    tcp_screen_rx_valve_bps = CONFIG_SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS;
+    tcp_screen_rx_last_adjust_ms = now;
+    tcp_screen_rx_adjust_hold_ms = CONFIG_SCREEN_RX_RATE_LIMIT_OPEN_HOLD_MS;
+    tcp_screen_rx_open_adjusts = 0;
+    tcp_screen_rx_close_adjusts = 0;
+    tcp_screen_rx_pressure_events = 0;
+    tcp_screen_rx_last_pressure_ms = now;
+    tcp_screen_rx_pressure_seen = 0U;
+    tcp_screen_rx_pressure_pending = 0U;
+  }
+  return 0;
+}
+
+void tcp_screen_rx_rate_limit_disable(struct tcp_pcb *pcb)
+{
+  LWIP_ASSERT_CORE_LOCKED();
+  if (tcp_screen_rx_limited_pcb == pcb) {
+    tcp_screen_rx_limited_pcb = NULL;
+    tcp_screen_rx_pending = 0;
+    tcp_screen_rx_pressure_pending = 0U;
+    tcp_screen_rx_pressure_seen = 0U;
+  }
+}
+
+int tcp_screen_rx_rate_limit_defer(struct tcp_pcb *pcb, u16_t len)
+{
+  LWIP_ASSERT_CORE_LOCKED();
+  if (tcp_screen_rx_limited_pcb != pcb) {
+    return 0;
+  }
+  tcp_screen_rx_requested += len;
+  tcp_screen_rx_control_requested += len;
+  tcp_screen_rx_pending += len;
+  if (tcp_screen_rx_pending > tcp_screen_rx_pending_max) {
+    tcp_screen_rx_pending_max = tcp_screen_rx_pending;
+  }
+  return 1;
+}
+
+int tcp_screen_rx_rate_limit_tick(void)
+{
+  struct tcp_pcb *pcb = tcp_screen_rx_limited_pcb;
+  u32_t now;
+  u32_t elapsed;
+  unsigned long long refill_numerator;
+  unsigned long long valve_numerator;
+  u32_t valve_allowance;
+
+  LWIP_ASSERT_CORE_LOCKED();
+  if (pcb == NULL) {
+    return 0;
+  }
+  now = sys_now();
+  elapsed = now - tcp_screen_rx_last_tick_ms;
+  tcp_screen_rx_last_tick_ms = now;
+
+  refill_numerator =
+                     (unsigned long long)CONFIG_SCREEN_RX_RATE_LIMIT_BPS *
+                     elapsed +
+                     tcp_screen_rx_token_remainder;
+  tcp_screen_rx_tokens = LWIP_MIN(
+      CONFIG_SCREEN_RX_RATE_LIMIT_BUCKET_BYTES,
+      tcp_screen_rx_tokens + (u32_t)(refill_numerator / 8000U));
+  tcp_screen_rx_token_remainder = (u32_t)(refill_numerator % 8000U);
+
+  tcp_screen_rx_rate_limit_control(now);
+  valve_numerator = (unsigned long long)tcp_screen_rx_valve_bps * elapsed +
+                    tcp_screen_rx_valve_remainder;
+  valve_allowance = (u32_t)(valve_numerator / 8000U);
+  tcp_screen_rx_valve_remainder = (u32_t)(valve_numerator % 8000U);
+
+  if ((tcp_screen_rx_pending != 0U) && (tcp_screen_rx_tokens != 0U) &&
+      (valve_allowance != 0U)) {
+    u32_t grant32 = LWIP_MIN(tcp_screen_rx_pending,
+                             tcp_screen_rx_tokens);
+    u16_t grant;
+
+    grant32 = LWIP_MIN(grant32, valve_allowance);
+    grant32 = LWIP_MIN(grant32, 65535U);
+    grant = (u16_t)grant32;
+
+    tcp_screen_rx_pending -= grant;
+    tcp_screen_rx_tokens -= grant;
+    tcp_screen_rx_granted += grant;
+    tcp_screen_rx_grant_ticks++;
+    tcp_recved(pcb, grant);
+  }
+  return 1;
+}
+
+void tcp_screen_rx_rate_limit_pressure(void)
+{
+  LWIP_ASSERT_CORE_LOCKED();
+  if (tcp_screen_rx_limited_pcb != NULL) {
+    tcp_screen_rx_last_pressure_ms = sys_now();
+    tcp_screen_rx_pressure_seen = 1U;
+    tcp_screen_rx_pressure_pending = 1U;
+    tcp_screen_rx_pressure_events++;
+  }
+}
+
+void tcp_screen_rx_rate_limit_snapshot(u32_t *active,
+                                       u32_t *requested_bytes,
+                                       u32_t *granted_bytes,
+                                       u32_t *pending_bytes,
+                                       u32_t *pending_max_bytes,
+                                       u32_t *grant_ticks,
+                                       u32_t *elapsed_ms,
+                                       u32_t *tokens_bytes,
+                                       u32_t *bucket_bytes,
+                                       u32_t *valve_kbps,
+                                       u32_t *filtered_kbps,
+                                       u32_t *open_adjusts,
+                                       u32_t *close_adjusts,
+                                       u32_t *pressure_events, int reset)
+{
+  u32_t now = sys_now();
+
+  LWIP_ASSERT_CORE_LOCKED();
+  *active = tcp_screen_rx_limited_pcb != NULL;
+  *requested_bytes = tcp_screen_rx_requested;
+  *granted_bytes = tcp_screen_rx_granted;
+  *pending_bytes = tcp_screen_rx_pending;
+  *pending_max_bytes = tcp_screen_rx_pending_max;
+  *grant_ticks = tcp_screen_rx_grant_ticks;
+  *elapsed_ms = now - tcp_screen_rx_stats_start_ms;
+  *tokens_bytes = tcp_screen_rx_tokens;
+  *bucket_bytes = CONFIG_SCREEN_RX_RATE_LIMIT_BUCKET_BYTES;
+  *valve_kbps = tcp_screen_rx_valve_bps / 1000U;
+  *filtered_kbps = tcp_screen_rx_filtered_kbps;
+  *open_adjusts = tcp_screen_rx_open_adjusts;
+  *close_adjusts = tcp_screen_rx_close_adjusts;
+  *pressure_events = tcp_screen_rx_pressure_events;
+  if (reset) {
+    tcp_screen_rx_requested = 0;
+    tcp_screen_rx_granted = 0;
+    tcp_screen_rx_pending_max = tcp_screen_rx_pending;
+    tcp_screen_rx_grant_ticks = 0;
+    tcp_screen_rx_open_adjusts = 0;
+    tcp_screen_rx_close_adjusts = 0;
+    tcp_screen_rx_pressure_events = 0;
+    tcp_screen_rx_stats_start_ms = now;
+  }
+}
+#endif
+
 #ifdef LWIP_HOOK_FILENAME
 #include LWIP_HOOK_FILENAME
 #endif
@@ -216,6 +538,9 @@ void
 tcp_free(struct tcp_pcb *pcb)
 {
   LWIP_ASSERT("tcp_free: LISTEN", pcb->state != LISTEN);
+#if defined(CONFIG_SCREEN_RX_RATE_LIMIT) && CONFIG_SCREEN_RX_RATE_LIMIT
+  tcp_screen_rx_rate_limit_disable(pcb);
+#endif
 #if LWIP_TCP_PCB_NUM_EXT_ARGS
   tcp_ext_arg_invoke_callbacks_destroyed(pcb->ext_args);
 #endif

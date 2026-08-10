@@ -24,6 +24,40 @@
 #ifndef CONFIG_SCREEN_BLOCK_PROFILE
 #define CONFIG_SCREEN_BLOCK_PROFILE 0
 #endif
+#ifndef CONFIG_SCREEN_TX_PACER
+#define CONFIG_SCREEN_TX_PACER 0
+#endif
+#ifndef CONFIG_SCREEN_TX_PACER_BPS
+#define CONFIG_SCREEN_TX_PACER_BPS 8000000U
+#endif
+#ifndef CONFIG_SCREEN_TX_PACER_BUCKET_BYTES
+#define CONFIG_SCREEN_TX_PACER_BUCKET_BYTES 23040U
+#endif
+#ifndef CONFIG_SCREEN_TX_PACER_CHUNK_BYTES
+#define CONFIG_SCREEN_TX_PACER_CHUNK_BYTES 4096U
+#endif
+#ifndef CONFIG_SCREEN_TX_PACER_WAIT_MS
+#define CONFIG_SCREEN_TX_PACER_WAIT_MS 1U
+#endif
+#ifndef CONFIG_SCREEN_TX_PRESSURE_FEEDBACK
+#define CONFIG_SCREEN_TX_PRESSURE_FEEDBACK 0
+#endif
+#ifndef CONFIG_SCREEN_RX_RATE_LIMIT
+#define CONFIG_SCREEN_RX_RATE_LIMIT 0
+#endif
+#ifndef CONFIG_SCREEN_TX_PRESSURE_TRIGGER_MS
+#define CONFIG_SCREEN_TX_PRESSURE_TRIGGER_MS 75U
+#endif
+
+#if CONFIG_SCREEN_TX_PACER && \
+	((CONFIG_SCREEN_TX_PACER_BPS == 0) || \
+	 (CONFIG_SCREEN_TX_PACER_BUCKET_BYTES == 0) || \
+	 (CONFIG_SCREEN_TX_PACER_CHUNK_BYTES == 0) || \
+	 (CONFIG_SCREEN_TX_PACER_CHUNK_BYTES > \
+	  CONFIG_SCREEN_TX_PACER_BUCKET_BYTES) || \
+	 (CONFIG_SCREEN_TX_PACER_WAIT_MS == 0))
+#error "invalid screen TX pacer configuration"
+#endif
 
 #if CONFIG_SCREEN_TX_DIRECT_CRYPTO
 
@@ -54,6 +88,7 @@ typedef struct screen_tx_direct_slot_s {
 	uint8_t tcp_owned;
 	uint8_t consumer_released;
 	uint8_t network_released;
+	uint16_t network_refs;
 } screen_tx_direct_slot_t;
 
 typedef struct screen_tx_direct_stats_s {
@@ -80,6 +115,124 @@ typedef struct screen_tx_direct_stats_s {
 static screen_tx_direct_slot_t screen_tx_slots[SCREEN_TX_DIRECT_SLOTS];
 static screen_tx_direct_stats_t screen_tx_stats;
 static uint8_t screen_tx_enabled = 1U;
+
+#if CONFIG_SCREEN_TX_PACER
+typedef struct screen_tx_pacer_stats_s {
+	uint32_t calls;
+	uint32_t partials;
+	uint32_t waits;
+	uint32_t wait_max_us;
+	uint64_t wait_sum_us;
+	uint64_t requested_bytes;
+	uint64_t allowed_bytes;
+	uint64_t written_bytes;
+} screen_tx_pacer_stats_t;
+
+static TaskHandle_t screen_tx_pacer_task;
+static uint32_t screen_tx_pacer_tokens = CONFIG_SCREEN_TX_PACER_BUCKET_BYTES;
+static uint32_t screen_tx_pacer_last_us;
+static uint32_t screen_tx_pacer_remainder;
+static screen_tx_pacer_stats_t screen_tx_pacer_stats;
+
+static int screen_tx_pacer_is_sender(void)
+{
+	TaskHandle_t current = xTaskGetCurrentTaskHandle();
+
+	if (current == screen_tx_pacer_task) {
+		return 1;
+	}
+	if (strcmp(pcTaskGetTaskName(current), "ScreenThread") == 0) {
+		screen_tx_pacer_task = current;
+		screen_tx_pacer_last_us = hal_read_curtime_us();
+		screen_tx_pacer_tokens = CONFIG_SCREEN_TX_PACER_BUCKET_BYTES;
+		screen_tx_pacer_remainder = 0U;
+		return 1;
+	}
+	return 0;
+}
+
+static void screen_tx_pacer_refill_locked(uint32_t now_us)
+{
+	uint32_t elapsed_us = now_us - screen_tx_pacer_last_us;
+	uint64_t numerator;
+	uint32_t refill;
+
+	screen_tx_pacer_last_us = now_us;
+	numerator = (uint64_t)CONFIG_SCREEN_TX_PACER_BPS * elapsed_us +
+		screen_tx_pacer_remainder;
+	refill = (uint32_t)(numerator / 8000000U);
+	screen_tx_pacer_remainder = (uint32_t)(numerator % 8000000U);
+	if (refill >= CONFIG_SCREEN_TX_PACER_BUCKET_BYTES -
+			screen_tx_pacer_tokens) {
+		screen_tx_pacer_tokens = CONFIG_SCREEN_TX_PACER_BUCKET_BYTES;
+	} else {
+		screen_tx_pacer_tokens += refill;
+	}
+}
+
+static size_t screen_tx_pacer_allowance(size_t requested)
+{
+	size_t chunk;
+	uint32_t wait_start_us;
+	uint32_t waited_us;
+	uint32_t wait_loops = 0U;
+
+	if ((requested == 0U) || !screen_tx_pacer_is_sender()) {
+		return requested;
+	}
+	chunk = requested < CONFIG_SCREEN_TX_PACER_CHUNK_BYTES ? requested :
+		CONFIG_SCREEN_TX_PACER_CHUNK_BYTES;
+	wait_start_us = hal_read_curtime_us();
+	for (;;) {
+		uint32_t now_us = hal_read_curtime_us();
+
+		taskENTER_CRITICAL();
+		screen_tx_pacer_refill_locked(now_us);
+		if (screen_tx_pacer_tokens >= chunk) {
+			screen_tx_pacer_tokens -= (uint32_t)chunk;
+			screen_tx_pacer_stats.calls++;
+			screen_tx_pacer_stats.requested_bytes += requested;
+			screen_tx_pacer_stats.allowed_bytes += chunk;
+			screen_tx_pacer_stats.partials += chunk < requested;
+			waited_us = now_us - wait_start_us;
+			if (wait_loops != 0U) {
+				screen_tx_pacer_stats.waits++;
+				screen_tx_pacer_stats.wait_sum_us += waited_us;
+				if (waited_us > screen_tx_pacer_stats.wait_max_us) {
+					screen_tx_pacer_stats.wait_max_us = waited_us;
+				}
+			}
+			taskEXIT_CRITICAL();
+			return chunk;
+		}
+		taskEXIT_CRITICAL();
+		wait_loops++;
+		vTaskDelay(pdMS_TO_TICKS(CONFIG_SCREEN_TX_PACER_WAIT_MS));
+	}
+}
+
+static void screen_tx_pacer_complete(size_t allowed, int result)
+{
+	uint32_t unused = result > 0 && (size_t)result < allowed ?
+		(uint32_t)(allowed - (size_t)result) :
+		(result < 0 ? (uint32_t)allowed : 0U);
+
+	if (!screen_tx_pacer_is_sender()) {
+		return;
+	}
+	taskENTER_CRITICAL();
+	if (unused >= CONFIG_SCREEN_TX_PACER_BUCKET_BYTES -
+			screen_tx_pacer_tokens) {
+		screen_tx_pacer_tokens = CONFIG_SCREEN_TX_PACER_BUCKET_BYTES;
+	} else {
+		screen_tx_pacer_tokens += unused;
+	}
+	if (result > 0) {
+		screen_tx_pacer_stats.written_bytes += (uint32_t)result;
+	}
+	taskEXIT_CRITICAL();
+}
+#endif
 
 #if CONFIG_SCREEN_BLOCK_PROFILE
 typedef struct screen_block_stats_s {
@@ -123,6 +276,7 @@ static screen_block_stats_t screen_block_stats = {
 };
 static TaskHandle_t screen_block_task;
 static uint8_t screen_block_active;
+static uint8_t screen_block_pressure_signaled;
 static uint32_t screen_block_start_us;
 static uint32_t screen_block_active_retries;
 
@@ -295,17 +449,32 @@ void carbox_screen_tx_release(void *pointer)
 int carbox_screen_tx_owned_begin(const void *pointer, size_t length)
 {
 	TaskHandle_t task = xTaskGetCurrentTaskHandle();
-	screen_tx_direct_slot_t *slot;
+	screen_tx_direct_slot_t *slot = NULL;
+	uintptr_t address = (uintptr_t)pointer;
+	uint32_t i;
 	int owned = 0;
 
 	taskENTER_CRITICAL();
-	slot = screen_tx_find_task_locked(task);
-	if ((slot != NULL) && (slot->wire_base == pointer) &&
-	    (slot->wire_length == length) &&
-	    (slot->state == SCREEN_TX_DIRECT_READY) && !slot->tcp_owned) {
-		slot->tcp_owned = 1U;
-		slot->consumer_released = 0U;
+	for (i = 0U; i < SCREEN_TX_DIRECT_SLOTS; i++) {
+		uintptr_t base = (uintptr_t)screen_tx_slots[i].wire_base;
+
+		if ((screen_tx_slots[i].owner == task) &&
+		    (screen_tx_slots[i].state == SCREEN_TX_DIRECT_READY) &&
+		    (address >= base) &&
+		    (address - base <= screen_tx_slots[i].wire_length) &&
+		    (length <= screen_tx_slots[i].wire_length -
+			(address - base))) {
+			slot = &screen_tx_slots[i];
+			break;
+		}
+	}
+	if ((slot != NULL) && (slot->network_refs != UINT16_MAX)) {
+		if (!slot->tcp_owned) {
+			slot->tcp_owned = 1U;
+			slot->consumer_released = 0U;
+		}
 		slot->network_released = 0U;
+		slot->network_refs++;
 		screen_tx_stats.owned_begin++;
 		owned = 1;
 	}
@@ -323,7 +492,7 @@ int carbox_screen_tx_owned_consumer_release(void *pointer)
 		screen_tx_direct_slot_t *slot = &screen_tx_slots[i];
 
 		if ((slot->wire_base == pointer) && slot->tcp_owned) {
-			if (slot->network_released) {
+			if (slot->network_refs == 0U) {
 				screen_tx_clear_slot_locked(slot);
 			} else {
 				slot->consumer_released = 1U;
@@ -341,15 +510,24 @@ void carbox_screen_tx_owned_complete(void *pointer)
 {
 	uint32_t i;
 	int final_free = 0;
+	void *final_pointer = NULL;
+	uintptr_t address = (uintptr_t)pointer;
 
 	taskENTER_CRITICAL();
 	for (i = 0U; i < SCREEN_TX_DIRECT_SLOTS; i++) {
 		screen_tx_direct_slot_t *slot = &screen_tx_slots[i];
+		uintptr_t base = (uintptr_t)slot->wire_base;
 
-		if ((slot->wire_base == pointer) && slot->tcp_owned) {
-			slot->network_released = 1U;
+		if (slot->tcp_owned && (address >= base) &&
+		    (address - base < slot->wire_length)) {
+			if (slot->network_refs != 0U) {
+				slot->network_refs--;
+			}
+			slot->network_released = slot->network_refs == 0U;
 			screen_tx_stats.owned_completions++;
-			if (slot->consumer_released) {
+			if (slot->consumer_released &&
+			    (slot->network_refs == 0U)) {
+				final_pointer = slot->wire_base;
 				screen_tx_clear_slot_locked(slot);
 				screen_tx_stats.owned_final_frees++;
 				final_free = 1;
@@ -359,7 +537,7 @@ void carbox_screen_tx_owned_complete(void *pointer)
 	}
 	taskEXIT_CRITICAL();
 	if (final_free) {
-		free(pointer);
+		free(final_pointer);
 	}
 }
 
@@ -565,6 +743,7 @@ void carbox_screen_block_profile_write(int socket, size_t requested, int result)
 	int socket_error = result < 0 ? lwip_err : 0;
 	int tcp_ok = -1;
 	int ncm_ok = -1;
+	int signal_pressure = 0;
 	uint32_t now_us = hal_read_curtime_us();
 
 	if (!screen_block_is_sender()) {
@@ -598,6 +777,7 @@ void carbox_screen_block_profile_write(int socket, size_t requested, int result)
 					 recovery_us);
 			screen_block_active = 0U;
 			screen_block_active_retries = 0U;
+			screen_block_pressure_signaled = 0U;
 		}
 	} else {
 		screen_block_stats.last_errno = socket_error;
@@ -607,10 +787,19 @@ void carbox_screen_block_profile_write(int socket, size_t requested, int result)
 				screen_block_active = 1U;
 				screen_block_start_us = now_us;
 				screen_block_active_retries = 1U;
+				screen_block_pressure_signaled = 0U;
 				screen_block_stats.block_episodes++;
 			} else {
 				screen_block_active_retries++;
 			}
+#if CONFIG_SCREEN_TX_PRESSURE_FEEDBACK && CONFIG_SCREEN_RX_RATE_LIMIT
+			if (!screen_block_pressure_signaled &&
+			    ((now_us - screen_block_start_us) >=
+			     CONFIG_SCREEN_TX_PRESSURE_TRIGGER_MS * 1000U)) {
+				screen_block_pressure_signaled = 1U;
+				signal_pressure = 1;
+			}
+#endif
 		} else {
 			screen_block_stats.other_error++;
 		}
@@ -660,6 +849,11 @@ void carbox_screen_block_profile_write(int socket, size_t requested, int result)
 		}
 	}
 	taskEXIT_CRITICAL();
+#if CONFIG_SCREEN_TX_PRESSURE_FEEDBACK && CONFIG_SCREEN_RX_RATE_LIMIT
+	if (signal_pressure) {
+		lwip_screen_rx_rate_limit_pressure();
+	}
+#endif
 	/* Preserve the exact error observed by the closed sender. */
 	if (result < 0) {
 		lwip_err = socket_error;
@@ -794,6 +988,44 @@ void carbox_screen_tx_direct_crypto_report(uint32_t sequence)
 		  (unsigned long)stats.owned_final_frees);
 }
 
+void carbox_screen_tx_pacer_report(uint32_t sequence)
+{
+#if CONFIG_SCREEN_TX_PACER
+	screen_tx_pacer_stats_t stats;
+	uint32_t tokens;
+
+	taskENTER_CRITICAL();
+	stats = screen_tx_pacer_stats;
+	screen_tx_pacer_stats = (screen_tx_pacer_stats_t){ 0 };
+	tokens = screen_tx_pacer_tokens;
+	taskEXIT_CRITICAL();
+	if (stats.calls == 0U) {
+		return;
+	}
+	rt_printf("[SCREENTXPACER][%lu] target=%lu kbps "
+		  "requested/allowed/written=%llu/%llu/%lluB "
+		  "calls/partial/wait=%lu/%lu/%lu wait_us avg/max=%llu/%lu "
+		  "tokens/cap=%lu/%luB limits chunk=%luB wait_ms=%lu\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)(CONFIG_SCREEN_TX_PACER_BPS / 1000U),
+		  (unsigned long long)stats.requested_bytes,
+		  (unsigned long long)stats.allowed_bytes,
+		  (unsigned long long)stats.written_bytes,
+		  (unsigned long)stats.calls,
+		  (unsigned long)stats.partials,
+		  (unsigned long)stats.waits,
+		  (unsigned long long)(stats.waits != 0U ?
+			stats.wait_sum_us / stats.waits : 0U),
+		  (unsigned long)stats.wait_max_us,
+		  (unsigned long)tokens,
+		  (unsigned long)CONFIG_SCREEN_TX_PACER_BUCKET_BYTES,
+		  (unsigned long)CONFIG_SCREEN_TX_PACER_CHUNK_BYTES,
+		  (unsigned long)CONFIG_SCREEN_TX_PACER_WAIT_MS);
+#else
+	(void)sequence;
+#endif
+}
+
 /* AESUtils.o is preserved from the vendor archive. Linker wrapping changes
  * only the API arguments for the exact deferred ScreenThread transaction. */
 extern int __real_AES_CTR_Update(void *context, const void *source,
@@ -825,17 +1057,24 @@ extern int __real_lwip_write(int socket, const void *buffer, size_t bytes);
 int __wrap_lwip_write(int socket, const void *buffer, size_t bytes)
 {
 	int result;
+	size_t paced_bytes = bytes;
 
 	carbox_screen_tx_before_write(buffer, bytes);
+#if CONFIG_SCREEN_TX_PACER
+	paced_bytes = screen_tx_pacer_allowance(bytes);
+#endif
 #if CONFIG_TCP_OWNED_WRITE
-	if (carbox_screen_tx_owned_begin(buffer, bytes)) {
-		result = lwip_write_owned(socket, buffer, bytes,
+	if (carbox_screen_tx_owned_begin(buffer, paced_bytes)) {
+		result = lwip_write_owned(socket, buffer, paced_bytes,
 			carbox_screen_tx_owned_complete, (void *)(uintptr_t)buffer);
 	} else {
-		result = __real_lwip_write(socket, buffer, bytes);
+		result = __real_lwip_write(socket, buffer, paced_bytes);
 	}
 #else
-	result = __real_lwip_write(socket, buffer, bytes);
+	result = __real_lwip_write(socket, buffer, paced_bytes);
+#endif
+#if CONFIG_SCREEN_TX_PACER
+	screen_tx_pacer_complete(paced_bytes, result);
 #endif
 	carbox_screen_block_profile_write(socket, bytes, result);
 	return result;
@@ -909,6 +1148,10 @@ void carbox_screen_block_profile_write(int socket, size_t requested, int result)
 	(void)result;
 }
 void carbox_screen_tx_direct_crypto_report(uint32_t sequence)
+{
+	(void)sequence;
+}
+void carbox_screen_tx_pacer_report(uint32_t sequence)
 {
 	(void)sequence;
 }

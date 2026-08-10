@@ -1,6 +1,7 @@
 #include "pc_profiler.h"
 #include "gcd_sync_profiler.h"
 #include "screen_queue_profiler.h"
+#include "screen_rx_rate_limit.h"
 #include "usb_hcd_profiler.h"
 #include "net_queue_profiler.h"
 #include "crypto_engine_profiler.h"
@@ -948,15 +949,29 @@ static void pcprof_task(void *arg)
 #if defined(CONFIG_IRQ_PROFILE_REPORT) && CONFIG_IRQ_PROFILE_REPORT
 		carbox_irq_profiler_report(sequence, PCPROF_REPORT_PERIOD_MS);
 #endif
-#if defined(CONFIG_VIDEO_HANDOVER_BACKPRESSURE) && \
+#if defined(CONFIG_SCREEN_DATAPATH_PROFILE) && \
+	CONFIG_SCREEN_DATAPATH_PROFILE && \
+	defined(CONFIG_VIDEO_HANDOVER_BACKPRESSURE) && \
 	CONFIG_VIDEO_HANDOVER_BACKPRESSURE
 		carbox_video_handover_gate_report(sequence);
 #endif
-#if defined(CONFIG_SCREEN_BLOCK_PROFILE) && CONFIG_SCREEN_BLOCK_PROFILE
+#if defined(CONFIG_SCREEN_DATAPATH_PROFILE) && \
+	CONFIG_SCREEN_DATAPATH_PROFILE && \
+	defined(CONFIG_SCREEN_BLOCK_PROFILE) && CONFIG_SCREEN_BLOCK_PROFILE
 		carbox_screen_block_profile_report(sequence);
+#endif
+#if defined(CONFIG_SCREEN_DATAPATH_PROFILE) && \
+	CONFIG_SCREEN_DATAPATH_PROFILE && \
+	defined(CONFIG_SCREEN_TX_PACER) && CONFIG_SCREEN_TX_PACER
+		carbox_screen_tx_pacer_report(sequence);
 #endif
 #if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
 		lwip_diag_screen_tcp_ack_report(sequence);
+#endif
+#if defined(CONFIG_SCREEN_DATAPATH_PROFILE) && \
+	CONFIG_SCREEN_DATAPATH_PROFILE && \
+	defined(CONFIG_SCREEN_RX_RATE_LIMIT) && CONFIG_SCREEN_RX_RATE_LIMIT
+		carbox_screen_rx_rate_limit_report(sequence);
 #endif
 #if defined(CONFIG_TCP_OWNED_AGE_PROFILE) && CONFIG_TCP_OWNED_AGE_PROFILE && \
 	defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE && \

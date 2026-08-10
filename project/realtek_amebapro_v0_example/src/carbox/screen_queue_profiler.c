@@ -1,4 +1,5 @@
 #include "screen_queue_profiler.h"
+#include "screen_rx_rate_limit.h"
 #include "screen_tx_direct_crypto.h"
 #include "video_handover_zero_copy.h"
 
@@ -1478,6 +1479,7 @@ ssize_t __wrap_lwip_recv(int socket, void *buffer, size_t bytes, int flags)
 #endif
 	start_us = measured ? hal_read_curtime_us() : 0U;
 	ssize_t result = __real_lwip_recv(socket, buffer, bytes, flags);
+	carbox_screen_rx_rate_limit_observe(socket, buffer, bytes, (int)result);
 
 #if CONFIG_SCREEN_TIMESTAMP_PROFILE
 	if (measured && (bytes == 128U) && (result == 128) &&
