@@ -5,11 +5,16 @@
   * @param  none
   * @retval  none
   */
+#if CONFIG_ISP_EN
 extern void isp_mcu_lock(void);
 extern void isp_mcu_release(void);
+#endif
 void flash_resource_lock( void )
 {
+    /* ISP shares this resource only when the VOE/ISP subsystem is compiled. */
+#if CONFIG_ISP_EN
     isp_mcu_lock();
+#endif
     rtw_cpu_lock();
 }
 
@@ -20,7 +25,9 @@ void flash_resource_lock( void )
   */
 void flash_resource_unlock( void )
 {
+#if CONFIG_ISP_EN
     isp_mcu_release();
+#endif
     rtw_cpu_unlock();
 }
 

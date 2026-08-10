@@ -422,7 +422,7 @@
 #endif
 #endif
 /* For ISP AT COMMAND config*/
-#define CONFIG_ISP 1
+#define CONFIG_ISP 0
 
 /* For Mjpeg capture example*/
 #define CONFIG_EXAMPLE_MJPEG_CAPTURE		0

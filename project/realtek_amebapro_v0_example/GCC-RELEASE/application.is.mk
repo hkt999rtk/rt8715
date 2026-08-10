@@ -262,9 +262,7 @@ SRC_C += ../../../component/soc/realtek/8195b/cmsis/rtl8195b-hp/source/ram_s/app
 SRC_C += ../../../component/soc/realtek/8195b/cmsis/rtl8195b-hp/source/ram/mpu_config.c
 
 #console
-SRC_C += ../../../component/common/api/at_cmd/atcmd_isp.c
 SRC_C += ../../../component/common/api/at_cmd/atcmd_lwip.c
-SRC_C += ../../../component/common/api/at_cmd/atcmd_media.c
 SRC_C += ../../../component/common/api/at_cmd/atcmd_sys.c
 SRC_C += ../../../component/common/api/at_cmd/atcmd_wifi.c
 SRC_C += ../../../component/common/api/at_cmd/atcmd_qr_code.c
@@ -280,9 +278,14 @@ SRC_C += ../../../component/common/media/mmfv2/module_aad.c
 SRC_C += ../../../component/common/media/mmfv2/module_array.c
 SRC_C += ../../../component/common/media/mmfv2/module_audio.c
 SRC_C += ../../../component/common/media/mmfv2/module_g711.c
-SRC_C += ../../../component/common/media/mmfv2/module_h264.c
+# H.264 encoding is intentionally disabled in this CarPlay-only image.
+# Do not restore module_h264.c, -l_h264, or lib_rtk264 independently.
+# The RTL8195B hardware encoder currently pulls the VOE/ISP video-subsystem
+# initialization and HAL.  A future standalone encoder build must restore and
+# validate its complete dependency set, even if the camera ISP path stays off.
+# The separate software lib_x264 must remain for hard references in the closed
+# Accessory library; it does not require the RTL8195B VOE/ISP hardware path.
 SRC_C += ../../../component/common/media/mmfv2/module_i2s.c
-SRC_C += ../../../component/common/media/mmfv2/module_isp.c
 # module_jpeg.c conflicts with Smart lib_jpeg.a; excluded unconditionally
 # ifneq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK),1)
 # SRC_C += ../../../component/common/media/mmfv2/module_jpeg.c
@@ -333,13 +336,6 @@ SRC_C += ../../../component/common/example/media_uvcd/usbd_uvc_event.c
 endif
 
 #sensor
-SRC_C += ../../../component/common/media/framework/sensor_service.c
-SRC_C += ../../../component/common/drivers/video/realtek/common/encoder_buffer_handler.c
-SRC_C += ../../../component/common/media/framework/jpeg_snapshot.c
-SRC_C += ../../../component/common/media/media_amebacam_broadcast.c
-SRC_C += ../../../component/common/media/framework/mmf_command.c
-SRC_C += ../../../component/common/media/framework/snapshot_sd_handler.c
-SRC_C += ../../../component/common/media/framework/snapshot_tftp_handler.c
 
 #network
 #api
@@ -643,8 +639,6 @@ SRC_C += ../../../component/common/example/http_client/example_http_client.c
 SRC_C += ../../../component/common/example/http_download/example_http_download.c
 SRC_C += ../../../component/common/example/httpc/example_httpc.c
 SRC_C += ../../../component/common/example/httpd/example_httpd.c
-SRC_C += ../../../component/common/example/isp/example_isp_osd_multi.c
-SRC_C += ../../../component/common/example/isp/example_md.c
 SRC_C += ../../../component/common/example/mcast/example_mcast.c
 SRC_C += ../../../component/common/example/mdns/example_mdns.c
 SRC_C += ../../../component/common/example/media_framework/example_media_framework.c
@@ -708,9 +702,6 @@ SRC_C += ../../../component/common/utilities/xml.c
 #sensor_board_v1
 #SRC_C += ../src/eval/sensor_board_v1/AL3042.c             /* disabled */
 #SRC_C += ../src/eval/sensor_board_v1/ambient_light_sensor.c  /* disabled */
-SRC_C += ../src/eval/sensor_board_v1/ir_ctrl.c
-SRC_C += ../src/eval/sensor_board_v1/ir_cut.c
-SRC_C += ../src/eval/sensor_board_v1/sensor_external_ctrl.c
 SRC_C += ../../../component/common/drivers/wlan/realtek/src/core/option/rtw_opt_skbuf.c
 
 SRC_C += ../src/main.c
@@ -744,7 +735,6 @@ CINIT_C += ../../../component/soc/realtek/8195b/fwlib/hal-rtl8195b-hp/source/ram
 CINIT_C += ../src/carbox/atss_runtime_counter.c
 CINIT_C += ../../../component/os/freertos/freertos_v10.0.0/portable/MemMang/heap_4_2.c
 CINIT_C += ../../../component/soc/realtek/8195b/misc/utilities/source/ram/libc_wrap.c
-CINIT_C += ../src/isp_boot_config.c
 
 #SRAM
 # -------------------------------------------------------------------
@@ -1302,7 +1292,10 @@ LIBFLAGS += -L../../../component/soc/realtek/8195b/misc/bsp/lib/common/GCC/
 WLAN_RX_HOOK_DIR := ../../../component/common/drivers/wlan/realtek/wlan_rx_gdma
 WLAN_RX_HOOK_ARCHIVE := $(WLAN_RX_HOOK_DIR)/build/lib_wlan_rx_gdma.a
 WLAN_RX_HOOK_ORIGINAL := ../../../component/soc/realtek/8195b/misc/bsp/lib/common/GCC/lib_wlan.a
-CARBOX_BUILD_RTK264 ?= 1
+# lib_rtk264 is the standalone RTL8195B H.264 encoder wrapper.  It requires
+# lib_h264 plus the VOE/ISP video-subsystem HAL; keep all of them disabled as a
+# unit until the encoder has a real consumer and is validated on hardware.
+CARBOX_BUILD_RTK264 ?= 0
 CARBOX_RTK264_OPT_FLAGS ?= -O3
 CARBOX_RTK264_DIR := ../src/carbox/rtk264
 CARBOX_RTK264_BUILD_DIR := $(CARBOX_RTK264_DIR)/build
@@ -1315,15 +1308,15 @@ WLAN_RX_HOOK_LIBRARY := $(WLAN_RX_HOOK_ARCHIVE)
 else
 WLAN_RX_HOOK_LIBRARY := -l_wlan
 endif
-all: LIBFLAGS += -l_codec -l_dct -l_h264 -l_haac -l_hmp3 -l_http -l_mmf -l_muxer -l_p2p -l_rtsp -l_sdcard -l_soc_is -l_speex  -l_websocket $(WLAN_RX_HOOK_LIBRARY) -l_wps -l_qr_code -l_tftp -l_opusenc -l_opusfile -l_opus
-mp: LIBFLAGS += -l_codec -l_dct -l_h264 -l_haac -l_hmp3 -l_http -l_mmf -l_muxer -l_p2p -l_rtsp -l_sdcard -l_soc_is -l_speex  -l_websocket -l_wlan_mp -l_wps -l_qr_code -l_tftp -l_opusenc -l_opusfile -l_opus
+all: LIBFLAGS += -l_codec -l_dct -l_haac -l_hmp3 -l_http -l_mmf -l_muxer -l_p2p -l_rtsp -l_sdcard -l_soc_is -l_speex  -l_websocket $(WLAN_RX_HOOK_LIBRARY) -l_wps -l_qr_code -l_tftp -l_opusenc -l_opusfile -l_opus
+mp: LIBFLAGS += -l_codec -l_dct -l_haac -l_hmp3 -l_http -l_mmf -l_muxer -l_p2p -l_rtsp -l_sdcard -l_soc_is -l_speex  -l_websocket -l_wlan_mp -l_wps -l_qr_code -l_tftp -l_opusenc -l_opusfile -l_opus
 ifneq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK),1)
 all mp: LIBFLAGS += -l_mdns
 endif
 ifneq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK),1)
 all mp: LIBFLAGS += -l_faac
 endif
-all: LIBFLAGS += -lrtstream -lrtscamkit -lrtsv4l2 -lrtsisp -lrtsosd 
+all: LIBFLAGS += -lrtstream -lrtscamkit -lrtsv4l2
 LIBFLAGS += -Wl,-u,ram_start -Wl,-u,cinit_start
 ifeq ($(CARBOX_USB_LIB),1)
 LIBFLAGS += -Wl,--whole-archive $(CARBOX_USB_ARCHIVE) -Wl,--no-whole-archive
@@ -1413,10 +1406,10 @@ prebuild:
 	@echo ===========================================================
 	@echo "  ELF2BIN  prebuild GCC"
 	@$(ELF2BIN) prebuild GCC xip_fw.ld FW >/dev/null 2>&1
-	@# Patch: FW1 6MB, FW2 offset accordingly (AB-zone, FW1 only)
-	@sed -i 's/__ICFEDIT_region_XIP_FW1_FLASH_end__.*=.*;/__ICFEDIT_region_XIP_FW1_FLASH_end__\t\t= 0x98640220 ;/' xip_fw.ld
-	@sed -i 's/__ICFEDIT_region_XIP_FW2_FLASH_start__.*=.*;/__ICFEDIT_region_XIP_FW2_FLASH_start__\t\t= 0x98640220 ;/' xip_fw.ld
-	@sed -i 's/__ICFEDIT_region_XIP_FW2_FLASH_end__.*=.*;/__ICFEDIT_region_XIP_FW2_FLASH_end__\t\t= 0x98840220 ;/' xip_fw.ld
+	@# Two 0x370000 A/B slots: FW1 0x040000, FW2 0x3B0000.
+	@sed -i 's/__ICFEDIT_region_XIP_FW1_FLASH_end__.*=.*;/__ICFEDIT_region_XIP_FW1_FLASH_end__\t\t= 0x983B0220 ;/' xip_fw.ld
+	@sed -i 's/__ICFEDIT_region_XIP_FW2_FLASH_start__.*=.*;/__ICFEDIT_region_XIP_FW2_FLASH_start__\t\t= 0x983B0220 ;/' xip_fw.ld
+	@sed -i 's/__ICFEDIT_region_XIP_FW2_FLASH_end__.*=.*;/__ICFEDIT_region_XIP_FW2_FLASH_end__\t\t= 0x98720220 ;/' xip_fw.ld
 	@# Ensure FW1 link target + release video RAM
 	@sed -i 's/linkFW = .*/linkFW = 1;/' amebapro_config_is.ld
 	@sed -i 's/reserveVOE = .*/reserveVOE = 0;/' amebapro_config_is.ld
@@ -1533,6 +1526,7 @@ manipulate_images:	partition.json | application
 	@echo "  ELF2BIN  convert amebapro_bootloader.json"
 	@$(ELF2BIN) convert amebapro_bootloader.json PARTITIONTABLE secure_bit=0 >/dev/null 2>&1
 	@$(FLASH_TOOLDIR)/set_fw_json_serial.sh amebapro_firmware_is.json amebapro_firmware_is.serial.json >/dev/null 2>&1
+	@python3 filter_firmware_images.py amebapro_firmware_is.serial.json ISP WOWLANB WOWLANC
 	@echo "  ELF2BIN  convert amebapro_firmware_is.serial.json"
 	@$(ELF2BIN) convert amebapro_firmware_is.serial.json FIRMWARE secure_bit=0 >/dev/null 2>&1
 	@if [ ! -f "$(CARBOX_FW_BIN)" ]; then \
@@ -1552,9 +1546,9 @@ manipulate_images:	partition.json | application
 	@echo "  ELF2BIN  convert amebapro_bootloader.json"
 	@$(ELF2BIN) convert amebapro_bootloader.json BOOTLOADER secure_bit=0 >/dev/null 2>&1
 	@cp bootloader/boot.bin application_is/boot.bin
-	@echo "  ELF2BIN  combine application_is/flash_is.bin"
-	@$(ELF2BIN) combine application_is/flash_is.bin PTAB=partition.bin,BOOT=application_is/boot.bin,FW1=application_is/firmware_is.bin >/dev/null 2>&1
-	@if [ -f "$(CARBOX_FATFS_BIN)" ]; then \
+	@echo "  ELF2BIN  combine application_is/flash_is.bin (FW1=FW2)"
+	@$(ELF2BIN) combine application_is/flash_is.bin PTAB=partition.bin,BOOT=application_is/boot.bin,FW1=application_is/firmware_is.bin,FW2=application_is/firmware_is.bin >/dev/null 2>&1
+	@if grep -q '"fatfs"' partition.json && [ -f "$(CARBOX_FATFS_BIN)" ]; then \
 		size=$$(stat -c %s "$(CARBOX_FATFS_BIN)"); \
 		max=$$(( $(CARBOX_FATFS_SIZE) )); \
 		if [ $$size -gt $$max ]; then \
@@ -1578,6 +1572,9 @@ manipulate_images:	partition.json | application
 	@echo "  CHKSUM"
 	@$(CHKSUM) application_is/firmware_is.bin >/dev/null 2>&1
 	@$(FLASH_TOOLDIR)/postbuild.sh $(ELF2BIN) >/dev/null 2>&1
+	@if [ ! -f application_is/flash_is.bin ] && [ -f application_is/flash_is_ota1.bin ]; then \
+		cp application_is/flash_is_ota1.bin application_is/flash_is.bin; \
+	fi
 	@FW_SRC=application_is/firmware_is.bin; \
 	 if [ ! -f "$$FW_SRC" ]; then \
 	   cat application_is/firmware_is_ota1.bin application_is/firmware_is_ota2.bin > /tmp/carbox_fw_merged.bin 2>/dev/null; \
@@ -1586,7 +1583,7 @@ manipulate_images:	partition.json | application
 	 if [ -f "$$FW_SRC" ]; then \
 	   python3 gen_ota_app.py "$$FW_SRC" $(CARBOX_OTA_FW_VER) application_is/ota_app.bin; \
 	 fi
-	@if [ -f "application_is/ota_app.bin" ] && [ -f "$(CARBOX_FATFS_BIN)" ]; then \
+	@if grep -q '"fatfs"' partition.json && [ -f "application_is/ota_app.bin" ] && [ -f "$(CARBOX_FATFS_BIN)" ]; then \
 		python3 gen_ota_all.py application_is/ota_app.bin "$(CARBOX_FATFS_BIN)" $(CARBOX_OTA_FW_VER) "$(CARBOX_OTA_ALL_BIN)"; \
 	fi
 	

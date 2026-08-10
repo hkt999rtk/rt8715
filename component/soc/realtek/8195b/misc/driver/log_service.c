@@ -99,9 +99,6 @@ log_init_t log_init_table[] = {
         at_isp_init,
 #endif
 #endif
-#ifdef CONFIG_PLATFORM_8195BHP
-	at_media_init,
-#endif
 #if CONFIG_EXAMPLE_QR_CODE_SCANNER
 	at_qr_code_init,
 #endif

@@ -80,7 +80,7 @@
 #define CONFIG_MII_EN                       1
 #define CONFIG_WLAN_EN                      1
 #define CONFIG_CRYPTO_EN                    1
-#define CONFIG_ISP_EN                       1
+#define CONFIG_ISP_EN                       0
 #define CONFIG_H264_ENC_EN                  1
 #define CONFIG_TFT_EN                       1
 #define CONFIG_ICC_EN                       1
