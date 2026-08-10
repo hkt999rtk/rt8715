@@ -713,6 +713,7 @@ SRC_C += ../src/carbox/irq_profiler.c
 SRC_C += ../src/carbox/gcd_sync_profiler.c
 SRC_C += ../src/carbox/screen_queue_profiler.c
 SRC_C += ../src/carbox/screen_rx_rate_limit.c
+SRC_C += ../src/carbox/audio_decode_profiler.c
 SRC_C += ../src/carbox/memcheck.c
 SRC_C += ../src/carbox/carbox_stubs.c
 SRC_C += ../src/carbox/libusb_ref_compat/libusb_ref_compat_hal.c
@@ -919,14 +920,14 @@ SCREEN_DATAPATH_PROFILE ?= 0
 # closed receiver is identified once by task plus its validated 128-byte frame
 # header; all other sockets retain the stock lwIP receive path.
 SCREEN_RX_RATE_LIMIT ?= 1
-SCREEN_RX_RATE_LIMIT_BPS ?= 14000000
+SCREEN_RX_RATE_LIMIT_BPS ?= 13000000
 SCREEN_RX_RATE_LIMIT_INTERVAL_MS ?= 10
 SCREEN_RX_RATE_LIMIT_BUCKET_BYTES ?= 32768
 SCREEN_RX_RATE_LIMIT_CONTROL_MS ?= 100
 SCREEN_RX_RATE_LIMIT_DEADBAND_PERCENT ?= 10
 SCREEN_RX_RATE_LIMIT_FILTER_SHIFT ?= 2
 SCREEN_RX_RATE_LIMIT_VALVE_MIN_BPS ?= 1000000
-SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS ?= 14000000
+SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS ?= 13000000
 SCREEN_RX_RATE_LIMIT_OPEN_STEP_BPS ?= 125000
 SCREEN_RX_RATE_LIMIT_CLOSE_STEP_BPS ?= 500000
 SCREEN_RX_RATE_LIMIT_OPEN_HOLD_MS ?= 100
@@ -937,7 +938,7 @@ SCREEN_RX_RATE_LIMIT_TASK_STACK ?= 512
 # controller. RX owns the long-term rate; TX has a slightly higher catch-up
 # ceiling but can burst by no more than the peer's observed 23,040-byte window.
 SCREEN_TX_PACER ?= 1
-SCREEN_TX_PACER_BPS ?= 15000000
+SCREEN_TX_PACER_BPS ?= 14000000
 SCREEN_TX_PACER_BUCKET_BYTES ?= 23040
 SCREEN_TX_PACER_CHUNK_BYTES ?= 4096
 SCREEN_TX_PACER_WAIT_MS ?= 1
@@ -952,6 +953,11 @@ SCREEN_BLOCK_PROFILE ?= 1
 # ACK cadence and advertised-window behavior.  This distinguishes a slow peer
 # reader from local USB/NCM queueing without restoring the verbose TCP profile.
 SCREEN_TCP_ACK_PROFILE ?= 0
+# Measure both the closed AirPlay converter call and the nested FDK AAC decode.
+# Reporting is windowed so the probe adds no per-frame UART traffic.
+AUDIO_DECODE_PROFILE ?= 1
+AUDIO_DECODE_PROFILE_WINDOW_MS ?= 10000
+AUDIO_DECODE_PROFILE_SLOW_US ?= 10000
 # Remove the closed AirPlay library's redundant full-frame handover memcpy.
 # Phase B retains the temporary allocation until queue publication is proven,
 # then frees it immediately.  The build creates derived archives whose hooks
@@ -1010,8 +1016,8 @@ TCPIP_RX_BATCH_TIMEOUT_US ?= 1000
 TCPIP_RX_BATCH_PROFILE ?= 0
 CRYPTO_ENGINE_PROFILE ?= 0
 CARBOX_CRYPTO_OWNER_BOOST_PRIORITY ?= 11
-SYS_PLL_OVERCLOCK ?= 1
-SYS_PLL_TARGET_HZ ?= 340000000
+SYS_PLL_OVERCLOCK ?= 0
+SYS_PLL_TARGET_HZ ?= 300000000
 GCCFLAGS += -DCONFIG_NET_GDMA_COPY=$(NET_GDMA_COPY)
 GCCFLAGS += -DCONFIG_NET_GDMA_BENCH=$(NET_GDMA_BENCH)
 GCCFLAGS += -DCONFIG_NET_GDMA_STATS=$(NET_GDMA_STATS)
@@ -1086,6 +1092,9 @@ GCCFLAGS += -DCONFIG_SCREEN_TX_PRESSURE_TRIGGER_MS=$(SCREEN_TX_PRESSURE_TRIGGER_
 GCCFLAGS += -DCONFIG_SCREEN_TX_PRESSURE_CLEAN_MS=$(SCREEN_TX_PRESSURE_CLEAN_MS)
 GCCFLAGS += -DCONFIG_SCREEN_BLOCK_PROFILE=$(SCREEN_BLOCK_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TCP_ACK_PROFILE=$(SCREEN_TCP_ACK_PROFILE)
+GCCFLAGS += -DCONFIG_AUDIO_DECODE_PROFILE=$(AUDIO_DECODE_PROFILE)
+GCCFLAGS += -DAUDIO_DECODE_PROFILE_WINDOW_MS=$(AUDIO_DECODE_PROFILE_WINDOW_MS)
+GCCFLAGS += -DAUDIO_DECODE_PROFILE_SLOW_US=$(AUDIO_DECODE_PROFILE_SLOW_US)
 GCCFLAGS += -DCONFIG_VIDEO_HANDOVER_ZERO_COPY=$(VIDEO_HANDOVER_ZERO_COPY)
 GCCFLAGS += -DVIDEO_HANDOVER_ZERO_COPY_MIN_BYTES=$(VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES)
 GCCFLAGS += -DCONFIG_VIDEO_HANDOVER_BACKPRESSURE=$(VIDEO_HANDOVER_BACKPRESSURE)
@@ -1240,6 +1249,10 @@ LFLAGS += -Wl,--wrap=rtl_crypto_chacha_poly1305_decrypt
 endif
 ifeq ($(FDK_AAC_PROFILE),1)
 LFLAGS += -Wl,--wrap=aacEncEncode -Wl,--wrap=aacDecoder_DecodeFrame
+endif
+ifeq ($(AUDIO_DECODE_PROFILE),1)
+LFLAGS += -Wl,--wrap=AudioConverterFillComplexBuffer
+LFLAGS += -Wl,--wrap=aacDecoder_DecodeFrame
 endif
 ##noisy warning option
 ##LFLAGS += -Wl,--warn-section-align
