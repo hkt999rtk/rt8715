@@ -8,6 +8,7 @@
 #include "carbox_vfs_compat.h"
 
 #include "carbox/carbox_diag.h"
+#include "carbox/aes_backend_select.h"
 #include "carbox/aes_ctr_periodic_selftest.h"
 #include "carbox/large_memcpy_gdma.h"
 #include "carbox/pc_profiler.h"
@@ -533,6 +534,7 @@ void main(void)
 	/* init diagnostic tracing before any task creation */
 	carbox_diag_init();
 	carbox_large_memcpy_gdma_init();
+	carbox_aes_backend_select();
 	carbox_aes_ctr_periodic_selftest_start();
 	carbox_diag_trace_enter("main");
 	carbox_pc_profiler_start();

@@ -1026,28 +1026,6 @@ void carbox_screen_tx_pacer_report(uint32_t sequence)
 #endif
 }
 
-/* AESUtils.o is preserved from the vendor archive. Linker wrapping changes
- * only the API arguments for the exact deferred ScreenThread transaction. */
-extern int __real_AES_CTR_Update(void *context, const void *source,
-				 size_t length, void *destination);
-
-int __wrap_AES_CTR_Update(void *context, const void *source, size_t length,
-			 void *destination)
-{
-	const void *direct_source = source;
-	int direct = carbox_screen_tx_crypto_begin((void *)(uintptr_t)source,
-		length, destination, CARBOX_SCREEN_TX_CRYPTO_AES,
-		&direct_source);
-	int status = __real_AES_CTR_Update(context, direct_source, length,
-		destination);
-
-	if (direct) {
-		carbox_screen_tx_crypto_complete(destination, length,
-			CARBOX_SCREEN_TX_CRYPTO_AES, status);
-	}
-	return status;
-}
-
 #if !CONFIG_SCREEN_QUEUE_PROFILE
 /* The full queue profiler normally owns this linker wrapper. Keep the
  * pre-write transaction validation present in production builds where that

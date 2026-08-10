@@ -97,7 +97,8 @@ $(AES_PATCHED_OBJ): $(VENDOR_CARPLAY_LIB) Makefile | $(OBJ_DIR)
 	$(OBJCOPY) \
 		--redefine-sym device_mutex_lock=carbox_crypto_aes_device_lock \
 		--redefine-sym device_mutex_unlock=carbox_crypto_aes_device_unlock \
-		--globalize-symbol=gAESRTLHWState $@
+		--globalize-symbol=gAESRTLHWState \
+		--globalize-symbol=_AES_RTL_SW_ECB $@
 
 $(STANDALONE_LIB): $(OBJS)
 	$(AR) rcs $@ $^

@@ -714,6 +714,7 @@ SRC_C += ../src/eval/sensor_board_v1/sensor_external_ctrl.c
 SRC_C += ../../../component/common/drivers/wlan/realtek/src/core/option/rtw_opt_skbuf.c
 
 SRC_C += ../src/main.c
+SRC_C += ../src/carbox/aes_backend_select.c
 SRC_C += ../src/carbox/aes_ctr_periodic_selftest.c
 SRC_C += ../src/carbox/carbox_diag.c
 SRC_C += ../src/carbox/pc_profiler.c
@@ -980,6 +981,9 @@ VIDEO_HANDOVER_GATE_POLL_TICKS ?= 1
 # The direct path has passed frame correctness, ownership and long-run tests.
 SCREEN_TX_DIRECT_CRYPTO ?= 1
 SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES ?= 4096
+# Match the ChaCha rollout convention: 0=software only,
+# 1=software-authoritative with hardware shadow comparison, 2=hardware.
+AES_MODE ?= 2
 # Video-only TCP no-copy bring-up.  The legacy socket API remains COPY; only a
 # wire buffer proven by the direct-crypto transaction uses ACK-owned pbuf refs.
 TCP_OWNED_WRITE ?= 1
@@ -1098,6 +1102,7 @@ GCCFLAGS += -DCONFIG_VIDEO_HANDOVER_BACKPRESSURE=$(VIDEO_HANDOVER_BACKPRESSURE)
 GCCFLAGS += -DVIDEO_HANDOVER_MAX_INFLIGHT=$(VIDEO_HANDOVER_MAX_INFLIGHT)
 GCCFLAGS += -DVIDEO_HANDOVER_GATE_POLL_TICKS=$(VIDEO_HANDOVER_GATE_POLL_TICKS)
 GCCFLAGS += -DCONFIG_SCREEN_TX_DIRECT_CRYPTO=$(SCREEN_TX_DIRECT_CRYPTO)
+GCCFLAGS += -DCONFIG_AES_MODE=$(AES_MODE)
 GCCFLAGS += -DSCREEN_TX_DIRECT_CRYPTO_MIN_BYTES=$(SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES)
 GCCFLAGS += -DCONFIG_TCP_OWNED_WRITE=$(TCP_OWNED_WRITE)
 GCCFLAGS += -DCONFIG_TCP_OWNED_AGE_PROFILE=$(TCP_OWNED_AGE_PROFILE)
@@ -1213,8 +1218,9 @@ LFLAGS += -Wl,--wrap=AirPlayScreen_SendVideo
 LFLAGS += -Wl,--wrap=CVector_push_back
 endif
 endif
+LFLAGS += -Wl,--wrap=AES_CTR_Init -Wl,--wrap=AES_CTR_Update
+LFLAGS += -Wl,--wrap=AES_CTR_Final
 ifeq ($(SCREEN_TX_DIRECT_CRYPTO),1)
-LFLAGS += -Wl,--wrap=AES_CTR_Update
 ifeq ($(SCREEN_QUEUE_PROFILE),0)
 LFLAGS += -Wl,--wrap=lwip_write
 endif
