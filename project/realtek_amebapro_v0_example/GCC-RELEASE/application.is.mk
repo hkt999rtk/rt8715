@@ -714,6 +714,7 @@ SRC_C += ../src/eval/sensor_board_v1/sensor_external_ctrl.c
 SRC_C += ../../../component/common/drivers/wlan/realtek/src/core/option/rtw_opt_skbuf.c
 
 SRC_C += ../src/main.c
+SRC_C += ../src/carbox/aes_ctr_periodic_selftest.c
 SRC_C += ../src/carbox/carbox_diag.c
 SRC_C += ../src/carbox/pc_profiler.c
 SRC_C += ../src/carbox/irq_profiler.c
