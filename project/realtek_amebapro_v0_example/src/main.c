@@ -8,6 +8,7 @@
 #include "carbox_vfs_compat.h"
 
 #include "carbox/carbox_diag.h"
+#include "carbox/aac_decoder_benchmark.h"
 #include "carbox/aes_backend_select.h"
 #include "carbox/aes_ctr_periodic_selftest.h"
 #include "carbox/large_memcpy_gdma.h"
@@ -501,6 +502,7 @@ void main(void)
 		rt_printf("[vfs] LittleFS register failed: %d\r\n", ret);
 	}
 	rt_printf("[vfs] fat:/ read-only, vfs:/ read-write, 0:/ aliases fat:/\r\n");
+	carbox_aac_decoder_benchmark_start();
 
 #endif
 

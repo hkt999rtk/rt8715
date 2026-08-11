@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "aac_decoder_router.h"
 #include "hal_timer.h"
 
 #ifndef CONFIG_AUDIO_DECODE_PROFILE
@@ -34,6 +35,8 @@ typedef struct audio_decode_profile_stats_s {
 
 static audio_decode_profile_stats_t audio_converter_stats;
 static audio_decode_profile_stats_t audio_fdk_stats;
+static audio_decode_profile_stats_t audio_helix_stats;
+static audio_decode_profile_stats_t audio_fallback_stats;
 
 static uint32_t audio_decode_profile_bin(uint32_t elapsed_us)
 {
@@ -140,22 +143,27 @@ carbox_osstatus_t __wrap_AudioConverterFillComplexBuffer(
 	return result;
 }
 
-extern carbox_aac_error_t __real_aacDecoder_DecodeFrame(
-		void *decoder, int16_t *output, int output_samples,
-		uint32_t flags);
-
-carbox_aac_error_t __wrap_aacDecoder_DecodeFrame(
-		void *decoder, int16_t *output, int output_samples,
-		uint32_t flags)
+void carbox_audio_decode_profile_record_backend(const char *backend,
+		uint32_t elapsed_us, int failed)
 {
-	uint32_t start_us = hal_read_curtime_us();
-	carbox_aac_error_t result = __real_aacDecoder_DecodeFrame(
-		decoder, output, output_samples, flags);
-	uint32_t elapsed_us = hal_read_curtime_us() - start_us;
+	audio_decode_profile_stats_t *stats = &audio_fdk_stats;
 
-	audio_decode_profile_record(&audio_fdk_stats, "FDK",
-		elapsed_us, result != 0, 0U);
-	return result;
+	if (strcmp(backend, "HELIX") == 0) {
+		stats = &audio_helix_stats;
+	} else if (strcmp(backend, "FDK-FALLBACK") == 0) {
+		stats = &audio_fallback_stats;
+	}
+	audio_decode_profile_record(stats, backend, elapsed_us, failed, 0U);
+}
+
+#else
+
+void carbox_audio_decode_profile_record_backend(const char *backend,
+		uint32_t elapsed_us, int failed)
+{
+	(void)backend;
+	(void)elapsed_us;
+	(void)failed;
 }
 
 #endif /* CONFIG_AUDIO_DECODE_PROFILE */

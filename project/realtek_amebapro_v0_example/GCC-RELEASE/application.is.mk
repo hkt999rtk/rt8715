@@ -106,6 +106,8 @@ INCLUDES += -I../../../component/common/api/platform
 INCLUDES += -I../../../component/common/api/wifi
 INCLUDES += -I../../../component/common/api/network/include
 INCLUDES += -I../../../component/common/audio/haac
+INCLUDES += -Ithird_party/fdk-aac/libAACdec/include
+INCLUDES += -Ithird_party/fdk-aac/libSYS/include
 INCLUDES += -I../../../component/common/audio/hmp3
 INCLUDES += -I../../../component/common/audio/speex
 INCLUDES += -I../../../component/common/network/lwip/lwip_v2.1.2/src/include
@@ -765,6 +767,10 @@ ERAM_C += ../src/carbox/usb_hcd_profiler.c
 # The RX hooks execute per packet; keep profiling out of XIP so the
 # instrumentation does not add flash stalls to the path being measured.
 ERAM_C += ../src/carbox/net_queue_profiler.c
+ERAM_C += ../src/carbox/aac_decoder_router.c
+# The repeated decoder benchmark and its task live in external DRAM. The AAC
+# input and PCM scratch buffers are also allocated once from the DRAM heap.
+ERAM_C += ../src/carbox/aac_decoder_benchmark.c
 
 
 
@@ -962,6 +968,33 @@ SCREEN_TCP_ACK_PROFILE ?= 0
 AUDIO_DECODE_PROFILE ?= 1
 AUDIO_DECODE_PROFILE_WINDOW_MS ?= 10000
 AUDIO_DECODE_PROFILE_SLOW_US ?= 10000
+# Only decoder calls are routed; all AAC encoder symbols remain on FDK.
+# 0: FDK only. 1: Helix for supported raw AAC-LC, automatic FDK fallback.
+AAC_DECODER_MODE ?= 1
+AAC_DECODER_ROUTE_PROFILE_WINDOW_MS ?= 10000
+AAC_DECODER_MODE_STAMP := $(OBJ_DIR)/.aac_decoder_mode_$(AAC_DECODER_MODE)
+$(AAC_DECODER_MODE_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.aac_decoder_mode_*
+	@touch $@
+../src/carbox/aac_decoder_router.o: $(AAC_DECODER_MODE_STAMP)
+# One-shot FDK-vs-Helix AAC-LC benchmark. The sample is loaded from FAT into
+# RAM, decoder calls alone are timed, and cached results are reported every
+# 10 seconds without continuously consuming CPU.
+AAC_DECODER_BENCHMARK ?= 0
+AAC_DECODER_BENCHMARK_LOOPS ?= 1
+AAC_DECODER_BENCHMARK_START_DELAY_MS ?= 3000
+AAC_DECODER_BENCHMARK_REPORT_MS ?= 10000
+AAC_DECODER_BENCHMARK_TASK_PRIORITY ?= 1
+AAC_DECODER_BENCHMARK_RUN_PRIORITY ?= 11
+AAC_DECODER_BENCHMARK_TASK_STACK ?= 2048
+AAC_DECODER_BENCHMARK_SAMPLE := ../src/carbox/testdata/bear-audio-lc-aac.aac
+AAC_DECODER_BENCHMARK_STAMP := $(OBJ_DIR)/.aac_benchmark_$(AAC_DECODER_BENCHMARK)
+$(AAC_DECODER_BENCHMARK_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.aac_benchmark_*
+	@touch $@
+../src/carbox/aac_decoder_benchmark.o: $(AAC_DECODER_BENCHMARK_STAMP)
 # Remove the closed AirPlay library's redundant full-frame handover memcpy.
 # Phase B retains the temporary allocation until queue publication is proven,
 # then frees it immediately.  The build creates derived archives whose hooks
@@ -1109,6 +1142,15 @@ GCCFLAGS += -DCONFIG_SCREEN_TCP_ACK_PROFILE=$(SCREEN_TCP_ACK_PROFILE)
 GCCFLAGS += -DCONFIG_AUDIO_DECODE_PROFILE=$(AUDIO_DECODE_PROFILE)
 GCCFLAGS += -DAUDIO_DECODE_PROFILE_WINDOW_MS=$(AUDIO_DECODE_PROFILE_WINDOW_MS)
 GCCFLAGS += -DAUDIO_DECODE_PROFILE_SLOW_US=$(AUDIO_DECODE_PROFILE_SLOW_US)
+GCCFLAGS += -DCARBOX_AAC_DECODER_MODE=$(AAC_DECODER_MODE)
+GCCFLAGS += -DAAC_DECODER_ROUTE_PROFILE_WINDOW_MS=$(AAC_DECODER_ROUTE_PROFILE_WINDOW_MS)
+GCCFLAGS += -DCONFIG_AAC_DECODER_BENCHMARK=$(AAC_DECODER_BENCHMARK)
+GCCFLAGS += -DAAC_DECODER_BENCHMARK_LOOPS=$(AAC_DECODER_BENCHMARK_LOOPS)
+GCCFLAGS += -DAAC_DECODER_BENCHMARK_START_DELAY_MS=$(AAC_DECODER_BENCHMARK_START_DELAY_MS)
+GCCFLAGS += -DAAC_DECODER_BENCHMARK_REPORT_MS=$(AAC_DECODER_BENCHMARK_REPORT_MS)
+GCCFLAGS += -DAAC_DECODER_BENCHMARK_TASK_PRIORITY=$(AAC_DECODER_BENCHMARK_TASK_PRIORITY)
+GCCFLAGS += -DAAC_DECODER_BENCHMARK_RUN_PRIORITY=$(AAC_DECODER_BENCHMARK_RUN_PRIORITY)
+GCCFLAGS += -DAAC_DECODER_BENCHMARK_TASK_STACK=$(AAC_DECODER_BENCHMARK_TASK_STACK)
 GCCFLAGS += -DCONFIG_VIDEO_HANDOVER_ZERO_COPY=$(VIDEO_HANDOVER_ZERO_COPY)
 GCCFLAGS += -DVIDEO_HANDOVER_ZERO_COPY_MIN_BYTES=$(VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES)
 GCCFLAGS += -DCONFIG_VIDEO_HANDOVER_BACKPRESSURE=$(VIDEO_HANDOVER_BACKPRESSURE)
@@ -1266,8 +1308,11 @@ LFLAGS += -Wl,--wrap=aacEncEncode -Wl,--wrap=aacDecoder_DecodeFrame
 endif
 ifeq ($(AUDIO_DECODE_PROFILE),1)
 LFLAGS += -Wl,--wrap=AudioConverterFillComplexBuffer
-LFLAGS += -Wl,--wrap=aacDecoder_DecodeFrame
 endif
+# FDK-compatible decoder router. Encoder APIs are intentionally absent here.
+LFLAGS += -Wl,--wrap=aacDecoder_Open -Wl,--wrap=aacDecoder_ConfigRaw
+LFLAGS += -Wl,--wrap=aacDecoder_Fill -Wl,--wrap=aacDecoder_DecodeFrame
+LFLAGS += -Wl,--wrap=aacDecoder_SetParam -Wl,--wrap=aacDecoder_Close
 ##noisy warning option
 ##LFLAGS += -Wl,--warn-section-align
 # libc api wrapper
@@ -1563,6 +1608,12 @@ manipulate_images:	partition.json | application
 		exit 1; \
 	fi
 	@if [ -d $(VFSDIR) ]; then \
+		if [ "$(AAC_DECODER_BENCHMARK)" = "1" ]; then \
+			test -f "$(AAC_DECODER_BENCHMARK_SAMPLE)" || { echo "ERROR: missing $(AAC_DECODER_BENCHMARK_SAMPLE)"; exit 1; }; \
+			cp "$(AAC_DECODER_BENCHMARK_SAMPLE)" "$(VFSDIR)/bear-audio-lc-aac.aac"; \
+		else \
+			rm -f "$(VFSDIR)/bear-audio-lc-aac.aac"; \
+		fi; \
 		$(VFSTOOL) -t FATFS -s 512 -c $(FATFS_SECTORS) -dir $(VFSDIR) -out application_is/fatfs.bin >/dev/null 2>&1; \
 	fi	
 	@cp  ../../../component/soc/realtek/8195b/misc/bsp/image/boot.bin application_is/boot.bin
