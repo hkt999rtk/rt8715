@@ -919,7 +919,7 @@ USBH_MAIN_TASK_PRIORITY ?= 6
 SCREEN_QUEUE_PROFILE ?= 0
 # Production switch for the temporary RX/TX investigation reports. Keep the
 # limiter, pacer, handover gate, and pressure feedback active when this is off.
-SCREEN_DATAPATH_PROFILE ?= 0
+SCREEN_DATAPATH_PROFILE ?= 1
 # Pace receive-window credit only for the iPhone screen TCP connection.  The
 # closed receiver is identified once by task plus its validated 128-byte frame
 # header; all other sockets retain the stock lwIP receive path.
