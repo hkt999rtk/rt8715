@@ -22,7 +22,10 @@ COMMON_FLAGS := -O3 -march=armv8-m.main+dsp -mthumb \
 	-D__TARGET_ARCH_7E_M=1
 CFLAGS := $(COMMON_FLAGS)
 CXXFLAGS := $(COMMON_FLAGS) -fno-exceptions -fno-rtti -fno-threadsafe-statics
-LDFLAGS := -specs=nosys.specs
+# Configure only needs to prove that the cross compiler can emit an ELF.  FDK
+# itself is archived into libfdk-aac.a and does not link a standalone program,
+# so do not make configuration depend on newlib startup files or nosys.specs.
+LDFLAGS := -nostdlib -Wl,-e,0
 
 .PHONY: all clean
 
@@ -34,7 +37,7 @@ all: $(BUILD_DIR)/Makefile
 configure: configure.ac Makefile.am
 	./autogen.sh
 
-$(BUILD_DIR)/Makefile: configure
+$(BUILD_DIR)/Makefile: configure Makefile.rtl8195b
 	mkdir -p $(BUILD_DIR)
 	cd $(BUILD_DIR) && \
 		CC="$(CC)" CXX="$(CXX)" \

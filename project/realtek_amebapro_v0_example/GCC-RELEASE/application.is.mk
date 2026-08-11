@@ -980,6 +980,15 @@ SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES ?= 4096
 # Match the ChaCha rollout convention: 0=software only,
 # 1=software-authoritative with hardware shadow comparison, 2=hardware.
 AES_MODE ?= 2
+# Compiler command-line changes are not part of GNU Make's normal timestamp
+# dependency model.  Keep exactly one mode stamp so switching AES_MODE forces
+# the selector object (and only that object) to be rebuilt.
+AES_MODE_STAMP := $(OBJ_DIR)/.aes_mode_$(AES_MODE)
+$(AES_MODE_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.aes_mode_*
+	@touch $@
+../src/carbox/aes_backend_select.o: $(AES_MODE_STAMP)
 # Video-only TCP no-copy bring-up.  The legacy socket API remains COPY; only a
 # wire buffer proven by the direct-crypto transaction uses ACK-owned pbuf refs.
 TCP_OWNED_WRITE ?= 1
