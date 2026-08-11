@@ -6,7 +6,9 @@
 # configuration that preserves those integration and correctness properties.
 
 REPO_ROOT := $(abspath ../../../../..)
-TOOLCHAIN_BIN ?= $(REPO_ROOT)/../toolchains/arm-none-eabi-gcc-6.4.1-realtek/asdk/linux/newlib/bin
+# Use the same SDK-bundled compiler as the parent firmware build.  Callers may
+# still override TOOLCHAIN_BIN for standalone builds or a different host OS.
+TOOLCHAIN_BIN ?= $(REPO_ROOT)/tools/arm-none-eabi-gcc/asdk/linux/newlib/bin
 CC := $(TOOLCHAIN_BIN)/arm-none-eabi-gcc
 CXX := $(TOOLCHAIN_BIN)/arm-none-eabi-g++
 BUILD_DIR ?= build-rtl8195b-o3
