@@ -1021,8 +1021,8 @@ VIDEO_HANDOVER_GATE_POLL_TICKS ?= 1
 # The direct path has passed frame correctness, ownership and long-run tests.
 SCREEN_TX_DIRECT_CRYPTO ?= 1
 SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES ?= 4096
-# Match the ChaCha rollout convention: 0=software only,
-# 1=software-authoritative with hardware shadow comparison, 2=hardware.
+# AES and ChaCha use the same mode numbering: 0=software only,
+# 1=software-authoritative with hardware shadow comparison, 2=hardware only.
 AES_MODE ?= 2
 # Compiler command-line changes are not part of GNU Make's normal timestamp
 # dependency model.  Keep exactly one mode stamp so switching AES_MODE forces
@@ -1406,6 +1406,15 @@ CARBOX_SMART_CARPLAY_LIB_DIR := carplay_app
 CARBOX_CARPLAY_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_CarPlay.a
 CARBOX_CARPLAY_CHACHA_DIR := $(CARBOX_SMART_CARPLAY_LIB_DIR)/chacha_m33
 CARBOX_CARPLAY_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_chacha_m33.a
+# Same mode numbering as AES_MODE above.
+CHACHA_MODE ?= 2
+CHACHA_HW_MIN_LEN ?= 4096
+CHACHA_STATS_INTERVAL_MS ?= 0
+CHACHA_HW_SELFTEST ?= 0
+# GNU Make does not normally treat command-line option changes as target
+# dependencies. Include every exposed archive-affecting ChaCha option in a
+# stamp so switching mode/config automatically rebuilds the derived archive.
+CARBOX_CHACHA_CONFIG_STAMP := $(CARBOX_CARPLAY_CHACHA_DIR)/build/.carbox_chacha_config_mode$(CHACHA_MODE)-min$(CHACHA_HW_MIN_LEN)-direct$(SCREEN_TX_DIRECT_CRYPTO)-stats$(CHACHA_STATS_INTERVAL_MS)-selftest$(CHACHA_HW_SELFTEST)-prio$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
 CARBOX_VIDEO_HANDOVER_PATCH := $(CARBOX_SMART_CARPLAY_LIB_DIR)/patch_video_handover_archive.sh
 CARBOX_ACCESSORY2_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2.a
 CARBOX_ACCESSORY2_HANDOVER_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2_handover.a
@@ -1428,16 +1437,25 @@ carbox_fdkaac:
 		TOOLCHAIN_BIN=$(abspath $(ARM_GCC_TOOLCHAIN))
 application: carbox_fdkaac
 endif
+$(CARBOX_CHACHA_CONFIG_STAMP):
+	@mkdir -p $(dir $@)
+	@rm -f $(CARBOX_CARPLAY_CHACHA_DIR)/build/.carbox_chacha_config_*
+	@touch $@
 $(CARBOX_CARPLAY_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/ChaCha20Poly1305.c \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/ChaCha20Poly1305.h \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/ChaCha20Poly1305_rtl8195b.c \
 		../src/carbox/crypto_priority_lock.h \
-		$(CARBOX_CARPLAY_CHACHA_DIR)/Makefile
+		$(CARBOX_CARPLAY_CHACHA_DIR)/Makefile \
+		$(CARBOX_CHACHA_CONFIG_STAMP)
+	# The output archive has a fixed name while its objects are mode-specific.
+	# Reassemble it so an older cached mode cannot survive a mode switch.
+	@rm -f $@
 	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) replacement \
-		CHACHA_MODE=2 CHACHA_HW_MIN_LEN=4096 \
+		CHACHA_MODE=$(CHACHA_MODE) CHACHA_HW_MIN_LEN=$(CHACHA_HW_MIN_LEN) \
 		SCREEN_TX_DIRECT_CRYPTO=$(SCREEN_TX_DIRECT_CRYPTO) \
-		CHACHA_STATS_INTERVAL_MS=0 CHACHA_HW_SELFTEST=0 \
+		CHACHA_STATS_INTERVAL_MS=$(CHACHA_STATS_INTERVAL_MS) \
+		CHACHA_HW_SELFTEST=$(CHACHA_HW_SELFTEST) \
 		CRYPTO_OWNER_BOOST_PRIORITY=$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
 application: $(CARBOX_CARPLAY_ARCHIVE)
 ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO)),)
