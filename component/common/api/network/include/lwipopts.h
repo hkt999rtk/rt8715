@@ -57,7 +57,7 @@
 #define IP_FRAG                 1
 #define ARP_QUEUEING            0
 #define IP_FORWARD              1
-#define IP_NAT                  0
+#define IP_NAT                  1
 #define LWIP_NETIF_API          1
 
 #if 1   //by lzh
