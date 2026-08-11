@@ -17,6 +17,7 @@
 #include "task.h"
 #include "cmsis.h"
 #include "diag.h"
+#include "hal_flash_boot.h"
 #include "hal_timer.h"
 #include "lwip_intf.h"
 #include "lwip/sockets.h"
@@ -55,6 +56,28 @@
 #define PCPROF_RTW_DUMP_EXIT_COUNT         6U
 #define PCPROF_TASK_STACK_BYTES       8192U
 #define PCPROF_LATE_REJECT_US            10U
+
+static void pcprof_fw_slot_report(uint32_t sequence)
+{
+	fw_img_export_info_type_t *info = get_fw_img_info_tbl();
+
+	if (info == NULL) {
+		rt_printf("[FWSLOT][%lu] unavailable\r\n", (unsigned long)sequence);
+		return;
+	}
+
+	rt_printf("[FWSLOT][%lu] loaded=%u "
+		  "fw1(0x%08lx sn=%lu valid=%u) "
+		  "fw2(0x%08lx sn=%lu valid=%u)\r\n",
+		  (unsigned long)sequence,
+		  (unsigned int)info->loaded_fw_idx,
+		  (unsigned long)info->fw1_start_offset,
+		  (unsigned long)info->fw1_sn,
+		  (unsigned int)info->fw1_valid,
+		  (unsigned long)info->fw2_start_offset,
+		  (unsigned long)info->fw2_sn,
+		  (unsigned int)info->fw2_valid);
+}
 
 typedef struct pcprof_record_s {
 	uint32_t pc;
@@ -946,6 +969,7 @@ static void pcprof_task(void *arg)
 			      interval_cycles_sum, interval_cycles_max,
 			      interval_count, late_10us, late_100us,
 			      caller_attributed);
+		pcprof_fw_slot_report(sequence);
 #if defined(CONFIG_IRQ_PROFILE_REPORT) && CONFIG_IRQ_PROFILE_REPORT
 		carbox_irq_profiler_report(sequence, PCPROF_REPORT_PERIOD_MS);
 #endif

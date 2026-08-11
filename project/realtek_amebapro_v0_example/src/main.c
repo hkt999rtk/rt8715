@@ -12,6 +12,7 @@
 #include "carbox/aes_backend_select.h"
 #include "carbox/aes_ctr_periodic_selftest.h"
 #include "carbox/large_memcpy_gdma.h"
+#include "carbox/ota_local_upload_page.h"
 #include "carbox/pc_profiler.h"
 #include "carbox/system_overclock.h"
 #if defined(CONFIG_MEMCHECK)
@@ -512,28 +513,22 @@ void main(void)
 #endif
 	/* dump FW slot info for OTA diagnostics */
 	{
-		uint8_t *info = (uint8_t *)get_fw_img_info_tbl();
+		fw_img_export_info_type_t *info = get_fw_img_info_tbl();
 		if (info != NULL) {
-			/* fw_img_export_info_type_t layout:
-			 * +0x04 fw1_start_offset, +0x08 fw2_start_offset,
-			 * +0x0C fw1_sn, +0x10 fw2_sn,
-			 * +0x14 fw1_valid, +0x15 fw2_valid, +0x16 loaded_fw_idx */
-			uint32_t fw1_start = *(uint32_t *)(info + 0x04);
-			uint32_t fw2_start = *(uint32_t *)(info + 0x08);
-			uint32_t fw1_sn    = *(uint32_t *)(info + 0x0C);
-			uint32_t fw2_sn    = *(uint32_t *)(info + 0x10);
-			uint8_t  fw1_valid = info[0x14];
-			uint8_t  fw2_valid = info[0x15];
-			uint8_t  loaded    = info[0x16];
 			rt_printf("fw_slot: loaded=%d "
 				  "fw1(0x%08x sn=%u valid=%d) "
 				  "fw2(0x%08x sn=%u valid=%d)\r\n",
-				  loaded,
-				  (unsigned int)fw1_start, (unsigned int)fw1_sn, fw1_valid,
-				  (unsigned int)fw2_start, (unsigned int)fw2_sn, fw2_valid);
+				  info->loaded_fw_idx,
+				  (unsigned int)info->fw1_start_offset,
+				  (unsigned int)info->fw1_sn,
+				  info->fw1_valid,
+				  (unsigned int)info->fw2_start_offset,
+				  (unsigned int)info->fw2_sn,
+				  info->fw2_valid);
 		}
 	}
 	/* init diagnostic tracing before any task creation */
+	carbox_ota_local_upload_page_install();
 	carbox_diag_init();
 	carbox_large_memcpy_gdma_init();
 	carbox_aes_backend_select();

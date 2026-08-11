@@ -209,7 +209,11 @@ CARBOX_USB_LIB := 1
 endif
 
 ifeq ($(CARBOX_USB_LIB),1)
-CARBOX_USB_ARCHIVE := usb_lib/lib_usbsmart.a
+# Use the OTA-compatible archive.  The vendor archive still contains the old
+# carplay_ota_compat.o compiled for 0x200000 firmware slots; linking it makes a
+# 0x370000 A/B image fail at exactly 2 MiB with "erase range overflow".  The
+# replacement object's source is kept in src/carbox/ota/carplay_ota_compat.c.
+CARBOX_USB_ARCHIVE := usb_lib/build/lib_usbsmart_ota.a
 endif
 
 CARBOX_USB_BUILD ?= 1
@@ -711,6 +715,7 @@ SRC_C += ../src/carbox/aes_backend_select.c
 SRC_C += ../src/carbox/aes_ctr_periodic_selftest.c
 SRC_C += ../src/carbox/carbox_diag.c
 SRC_C += ../src/carbox/pc_profiler.c
+SRC_C += ../src/carbox/ota_local_upload_page.c
 SRC_C += ../src/carbox/irq_profiler.c
 SRC_C += ../src/carbox/gcd_sync_profiler.c
 SRC_C += ../src/carbox/screen_queue_profiler.c
@@ -978,6 +983,8 @@ $(AAC_DECODER_MODE_STAMP):
 	@rm -f $(OBJ_DIR)/.aac_decoder_mode_*
 	@touch $@
 ../src/carbox/aac_decoder_router.o: $(AAC_DECODER_MODE_STAMP)
+
+../src/carbox/ota_local_upload_page.o: ../src/carbox/web/update.js
 # One-shot FDK-vs-Helix AAC-LC benchmark. The sample is loaded from FAT into
 # RAM, decoder calls alone are timed, and cached results are reported every
 # 10 seconds without continuously consuming CPU.
@@ -1490,18 +1497,23 @@ include sensor.mk
 # -------------------------------------------------------------------
 	
 .PHONY: prebuild
+CARBOX_LINK_FW ?= 3
+
 prebuild:	
 	@echo ===========================================================
 	@echo Prebuild
 	@echo ===========================================================
 	@echo "  ELF2BIN  prebuild GCC"
 	@$(ELF2BIN) prebuild GCC xip_fw.ld FW >/dev/null 2>&1
-	@# Two 0x370000 A/B slots: FW1 0x040000, FW2 0x3B0000.
+	@# Two 0x370000 A/B slots: FW1 0x040000, FW2 0x3C0000.  The 64 KiB
+	@# gap keeps FW2 on the 256 KiB boundary required by C-cut SCE page 2.
 	@sed -i 's/__ICFEDIT_region_XIP_FW1_FLASH_end__.*=.*;/__ICFEDIT_region_XIP_FW1_FLASH_end__\t\t= 0x983B0220 ;/' xip_fw.ld
-	@sed -i 's/__ICFEDIT_region_XIP_FW2_FLASH_start__.*=.*;/__ICFEDIT_region_XIP_FW2_FLASH_start__\t\t= 0x983B0220 ;/' xip_fw.ld
-	@sed -i 's/__ICFEDIT_region_XIP_FW2_FLASH_end__.*=.*;/__ICFEDIT_region_XIP_FW2_FLASH_end__\t\t= 0x98720220 ;/' xip_fw.ld
-	@# Ensure FW1 link target + release video RAM
-	@sed -i 's/linkFW = .*/linkFW = 1;/' amebapro_config_is.ld
+	@sed -i 's/__ICFEDIT_region_XIP_FW2_FLASH_start__.*=.*;/__ICFEDIT_region_XIP_FW2_FLASH_start__\t\t= 0x983C0220 ;/' xip_fw.ld
+	@sed -i 's/__ICFEDIT_region_XIP_FW2_FLASH_end__.*=.*;/__ICFEDIT_region_XIP_FW2_FLASH_end__\t\t= 0x98730220 ;/' xip_fw.ld
+	@# Select fixed-slot or slot-independent remap XIP linkage.  Keep this a
+	@# build variable so a known-good fixed-slot recovery image remains easy
+	@# to produce while remap-mode boot compatibility is being validated.
+	@sed -i 's/linkFW = .*/linkFW = $(CARBOX_LINK_FW);/' amebapro_config_is.ld
 	@sed -i 's/reserveVOE = .*/reserveVOE = 0;/' amebapro_config_is.ld
 	@# Extend RAM region into RAM_SHARED (video off) — need ~352KB
 	@sed -i 's/RAM_END = reserveVOE==1 ? 0x20124000 : 0x2013CC00;/RAM_END = 0x20160000;/' rtl8195bhp_ram_is.ld
@@ -1582,6 +1594,7 @@ CARBOX_FATFS_BIN ?= application_is/fatfs.bin
 CARBOX_OTA_FATFS_BIN ?= application_is/ota_fatfs.bin
 CARBOX_OTA_ALL_BIN ?= application_is/ota_all.bin
 CARBOX_OTA_FW_VER ?= $(shell date +%y%m%d%H%M)
+CARBOX_FW_SERIAL ?= $(shell date +%s)
 CARBOX_RAW_SECTION_BIN ?= application_is/raw_section.bin
 CARBOX_LP_AXF ?= application_lp/Debug/bin/application_lp.axf
 CARBOX_FW_BIN ?= application_is/firmware_is.bin
@@ -1621,7 +1634,7 @@ manipulate_images:	partition.json | application
 	@$(ELF2BIN) keygen keycfg.json >/dev/null 2>&1
 	@echo "  ELF2BIN  convert amebapro_bootloader.json"
 	@$(ELF2BIN) convert amebapro_bootloader.json PARTITIONTABLE secure_bit=0 >/dev/null 2>&1
-	@$(FLASH_TOOLDIR)/set_fw_json_serial.sh amebapro_firmware_is.json amebapro_firmware_is.serial.json >/dev/null 2>&1
+	@$(FLASH_TOOLDIR)/set_fw_json_serial.sh amebapro_firmware_is.json amebapro_firmware_is.serial.json $(CARBOX_FW_SERIAL) >/dev/null 2>&1
 	@python3 filter_firmware_images.py amebapro_firmware_is.serial.json ISP WOWLANB WOWLANC
 	@echo "  ELF2BIN  convert amebapro_firmware_is.serial.json"
 	@$(ELF2BIN) convert amebapro_firmware_is.serial.json FIRMWARE secure_bit=0 >/dev/null 2>&1
@@ -1638,12 +1651,22 @@ manipulate_images:	partition.json | application
 		fi; \
 		echo "  VERIFY $(CARBOX_FW_BIN): $$size bytes (minimum $$min)"; \
 	fi
+	@# Checksum the firmware before packing it into FW1.  OTA is generated
+	@# from this exact same file, so the image validated in FW1 and the image
+	@# later written into FW2 are byte-for-byte identical.
+	@echo "  CHKSUM"
+	@$(CHKSUM) application_is/firmware_is.bin >/dev/null 2>&1
 	@cp ../../../component/soc/realtek/8195b/misc/bsp/image/bootloader.axf $(BOOT_BIN_DIR)/bootloader.axf
 	@echo "  ELF2BIN  convert amebapro_bootloader.json"
 	@$(ELF2BIN) convert amebapro_bootloader.json BOOTLOADER secure_bit=0 >/dev/null 2>&1
 	@cp bootloader/boot.bin application_is/boot.bin
-	@echo "  ELF2BIN  combine application_is/flash_is.bin (FW1=FW2)"
-	@$(ELF2BIN) combine application_is/flash_is.bin PTAB=partition.bin,BOOT=application_is/boot.bin,FW1=application_is/firmware_is.bin,FW2=application_is/firmware_is.bin >/dev/null 2>&1
+	@if [ "$(CARBOX_LINK_FW)" = "3" ]; then \
+		echo "  ELF2BIN  combine application_is/flash_is.bin (remap bootstrap: FW1 only)"; \
+		$(ELF2BIN) combine application_is/flash_is.bin PTAB=partition.bin,BOOT=application_is/boot.bin,FW1=application_is/firmware_is.bin >/dev/null 2>&1; \
+	else \
+		echo "  ELF2BIN  combine application_is/flash_is.bin (fixed XIP: FW1=FW2)"; \
+		$(ELF2BIN) combine application_is/flash_is.bin PTAB=partition.bin,BOOT=application_is/boot.bin,FW1=application_is/firmware_is.bin,FW2=application_is/firmware_is.bin >/dev/null 2>&1; \
+	fi
 	@if grep -q '"fatfs"' partition.json && [ -f "$(CARBOX_FATFS_BIN)" ]; then \
 		size=$$(stat -c %s "$(CARBOX_FATFS_BIN)"); \
 		max=$$(( $(CARBOX_FATFS_SIZE) )); \
@@ -1665,8 +1688,6 @@ manipulate_images:	partition.json | application
 		echo "Pack $(CARBOX_RAW_SECTION_BIN) -> application_is/flash_is.bin @$(CARBOX_RAW_SECTION_BASE) ($$size bytes)"; \
 		dd if="$(CARBOX_RAW_SECTION_BIN)" of=application_is/flash_is.bin bs=4096 seek=$$(( $(CARBOX_RAW_SECTION_BASE) / 0x1000 )) conv=notrunc status=none; \
 	fi
-	@echo "  CHKSUM"
-	@$(CHKSUM) application_is/firmware_is.bin >/dev/null 2>&1
 	@$(FLASH_TOOLDIR)/postbuild.sh $(ELF2BIN) >/dev/null 2>&1
 	@if [ ! -f application_is/flash_is.bin ] && [ -f application_is/flash_is_ota1.bin ]; then \
 		cp application_is/flash_is_ota1.bin application_is/flash_is.bin; \

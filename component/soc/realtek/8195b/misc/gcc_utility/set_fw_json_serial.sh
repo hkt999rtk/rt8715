@@ -30,29 +30,34 @@ fi
 
 awk -v serial="$serial" '
 BEGIN {
-	in_isp = 0;
 	in_header = 0;
-	done = 0;
+	update_header = 0;
+	updated = 0;
 }
-/^[[:space:]]*"ISP"[[:space:]]*:[[:space:]]*\{/ {
-	in_isp = 1;
-}
-in_isp && /^[[:space:]]*"header"[[:space:]]*:[[:space:]]*\{/ {
+/^[[:space:]]*"header"[[:space:]]*:[[:space:]]*\{/ {
 	in_header = 1;
+	update_header = 0;
 }
-in_isp && in_header && !done && /^[[:space:]]*"serial"[[:space:]]*:/ {
+in_header && /^[[:space:]]*"type"[[:space:]]*:/ {
+	# The SDK keeps the HP firmware headers on one generation while FWLS
+	# remains at serial 0.  ISP is removed from the CarBox image, so changing
+	# either FWLS or ISP only creates header combinations the vendor build
+	# never emits.
+	if ($0 ~ /"(CINIT|XIP|FWHS_S)"/) {
+		update_header = 1;
+	}
+}
+in_header && update_header && /^[[:space:]]*"serial"[[:space:]]*:/ {
 	sub(/"serial"[[:space:]]*:[[:space:]]*[0-9]+/, "\"serial\": " serial);
-	done = 1;
+	updated++;
 }
-in_isp && in_header && /^[[:space:]]*\}/ {
+in_header && /^[[:space:]]*\}/ {
 	in_header = 0;
-}
-in_isp && !in_header && /^[[:space:]]*\}/ {
-	in_isp = 0;
+	update_header = 0;
 }
 { print }
 END {
-	if (!done) {
+	if (updated != 3) {
 		exit 2;
 	}
 }
@@ -60,11 +65,11 @@ END {
 	rc=$?
 	rm -f "$dst"
 	if [ "$rc" -eq 2 ]; then
-		echo "set_fw_json_serial: failed to locate ISP.header.serial in $src" >&2
+		echo "set_fw_json_serial: failed to locate firmware header serials in $src" >&2
 	else
 		echo "set_fw_json_serial: failed to update $src" >&2
 	fi
 	exit 1
 }
 
-echo "set_fw_json_serial: $dst ISP.header.serial=$serial"
+echo "set_fw_json_serial: $dst firmware header serials=$serial"
