@@ -912,6 +912,10 @@ GCD_WORK_PRIORITY ?= -1
 # The closed USB HCD bottom half is short and must run immediately after the
 # top-half ISR masks USB_IRQn.  Keep it above all normal networking tasks.
 USBH_ISR_TASK_PRIORITY ?= 11
+# Keep the closed HCD main worker above the priority-4 audio and screen tasks so
+# CPU-heavy decode cannot delay USB completion handling and the next transfer.
+# It remains below TCP/IP and NCM (priority 10) and the USB ISR worker (11).
+USBH_MAIN_TASK_PRIORITY ?= 6
 SCREEN_QUEUE_PROFILE ?= 0
 # Production switch for the temporary RX/TX investigation reports. Keep the
 # limiter, pacer, handover gate, and pressure feedback active when this is off.
@@ -1074,6 +1078,7 @@ GCCFLAGS += -DCONFIG_GDMA_RESERVE_MULTIBLOCK_CHANNELS=$(GDMA_RESERVE_MULTIBLOCK_
 GCCFLAGS += -DCONFIG_GCD_SYNC_PROFILE=$(GCD_SYNC_PROFILE)
 GCCFLAGS += -DCONFIG_GCD_WORK_PRIORITY=$(GCD_WORK_PRIORITY)
 GCCFLAGS += -DCONFIG_USBH_ISR_TASK_PRIORITY=$(USBH_ISR_TASK_PRIORITY)
+GCCFLAGS += -DCONFIG_USBH_MAIN_TASK_PRIORITY=$(USBH_MAIN_TASK_PRIORITY)
 GCCFLAGS += -DCONFIG_SCREEN_QUEUE_PROFILE=$(SCREEN_QUEUE_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_DATAPATH_PROFILE=$(SCREEN_DATAPATH_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT=$(SCREEN_RX_RATE_LIMIT)
@@ -1196,7 +1201,7 @@ endif
 ifeq ($(GCD_SYNC_PROFILE),1)
 LFLAGS += -Wl,--wrap=dispatch_sync_f
 endif
-ifneq ($(strip $(filter-out -1,$(GCD_WORK_PRIORITY) $(USBH_ISR_TASK_PRIORITY))),)
+ifneq ($(strip $(filter-out -1,$(GCD_WORK_PRIORITY) $(USBH_ISR_TASK_PRIORITY) $(USBH_MAIN_TASK_PRIORITY))),)
 LFLAGS += -Wl,--wrap=xTaskCreate
 endif
 ifeq ($(NCM_TX_BATCH),1)

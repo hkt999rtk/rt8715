@@ -20,7 +20,12 @@
 #define CONFIG_USBH_ISR_TASK_PRIORITY (-1)
 #endif
 
-#if CONFIG_GCD_WORK_PRIORITY >= 0 || CONFIG_USBH_ISR_TASK_PRIORITY >= 0
+#ifndef CONFIG_USBH_MAIN_TASK_PRIORITY
+#define CONFIG_USBH_MAIN_TASK_PRIORITY (-1)
+#endif
+
+#if CONFIG_GCD_WORK_PRIORITY >= 0 || CONFIG_USBH_ISR_TASK_PRIORITY >= 0 || \
+	CONFIG_USBH_MAIN_TASK_PRIORITY >= 0
 
 extern BaseType_t __real_xTaskCreate(TaskFunction_t task_code,
 				     const char *task_name,
@@ -61,6 +66,22 @@ static int gcdprof_is_usbh_isr_name(const char *name)
 	return 1;
 }
 
+static int gcdprof_is_usbh_main_name(const char *name)
+{
+	static const char expected[] = "usbh_main_task";
+	uint32_t i;
+
+	if (name == NULL) {
+		return 0;
+	}
+	for (i = 0U; i < sizeof(expected); i++) {
+		if (name[i] != expected[i]) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
 /*
  * DispatchLite creates its workers through FreeRTOS-Plus-POSIX and requests
  * priority 2.  Its binary has no source, so alter only tasks named gcd-work at
@@ -85,6 +106,14 @@ BaseType_t __wrap_xTaskCreate(TaskFunction_t task_code,
 #if CONFIG_USBH_ISR_TASK_PRIORITY >= 0
 	if (gcdprof_is_usbh_isr_name(task_name)) {
 		priority = (UBaseType_t)CONFIG_USBH_ISR_TASK_PRIORITY;
+		if (priority >= (UBaseType_t)configMAX_PRIORITIES) {
+			priority = (UBaseType_t)configMAX_PRIORITIES - 1U;
+		}
+	}
+#endif
+#if CONFIG_USBH_MAIN_TASK_PRIORITY >= 0
+	if (gcdprof_is_usbh_main_name(task_name)) {
+		priority = (UBaseType_t)CONFIG_USBH_MAIN_TASK_PRIORITY;
 		if (priority >= (UBaseType_t)configMAX_PRIORITIES) {
 			priority = (UBaseType_t)configMAX_PRIORITIES - 1U;
 		}
