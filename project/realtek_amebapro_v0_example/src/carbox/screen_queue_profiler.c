@@ -31,6 +31,7 @@
 #if CONFIG_SCREEN_QUEUE_PROFILE
 
 #define SCREENPROF_ACTIVE_TASKS       4U
+#define SCREENPROF_TASK_SNAPSHOT     64U
 #define SCREENPROF_FRAME_TIMES      256U
 #define SCREENPROF_METRIC_SAMPLES  1024U
 #define SCREENPROF_ANOMALIES          8U
@@ -324,6 +325,25 @@ typedef struct screenprof_frame_item_s {
 	int bytes;
 } screenprof_frame_item_t;
 
+typedef enum screenprof_progress_bit_e {
+	SCREENPROF_PROGRESS_RECV = 1U << 0,
+	SCREENPROF_PROGRESS_PAYLOAD = 1U << 1,
+	SCREENPROF_PROGRESS_VIDEO = 1U << 2,
+	SCREENPROF_PROGRESS_ENQUEUE = 1U << 3,
+	SCREENPROF_PROGRESS_DEQUEUE = 1U << 4,
+	SCREENPROF_PROGRESS_WRITE = 1U << 5
+} screenprof_progress_bit_t;
+
+typedef struct screenprof_progress_s {
+	TickType_t recv_tick;
+	TickType_t payload_tick;
+	TickType_t video_tick;
+	TickType_t enqueue_tick;
+	TickType_t dequeue_tick;
+	TickType_t write_tick;
+	uint32_t seen;
+} screenprof_progress_t;
+
 static screenprof_stats_t screenprof_live;
 static screenprof_stats_t screenprof_copy;
 static screenprof_frame_t screenprof_frames[SCREENPROF_FRAME_TIMES]
@@ -350,6 +370,9 @@ static TaskHandle_t screenprof_active_tasks[SCREENPROF_ACTIVE_TASKS];
 static screenprof_active_input_t
 	screenprof_active_inputs[SCREENPROF_ACTIVE_TASKS];
 static screenprof_active_frame_t screenprof_active_frame;
+static screenprof_progress_t screenprof_progress;
+static TaskStatus_t screenprof_task_snapshot[SCREENPROF_TASK_SNAPSHOT]
+	__attribute__((section(".lpddr.bss.screenprof")));
 static uint32_t screenprof_next_sequence;
 static uint32_t screenprof_last_arrival_us;
 static uint32_t screenprof_have_last_arrival;
@@ -612,6 +635,60 @@ static int screenprof_name_equal(const char *left, const char *right)
 		right++;
 	}
 	return 0;
+}
+
+static int32_t screenprof_progress_age_ms(TickType_t now, TickType_t then,
+					 uint32_t seen, uint32_t bit)
+{
+	uint64_t age_ms;
+
+	if ((seen & bit) == 0U) {
+		return -1;
+	}
+	age_ms = (uint64_t)(TickType_t)(now - then) * portTICK_PERIOD_MS;
+	return (age_ms > (uint64_t)INT32_MAX) ? INT32_MAX : (int32_t)age_ms;
+}
+
+static const char *screenprof_task_state_name(eTaskState state)
+{
+	switch (state) {
+	case eRunning: return "RUN";
+	case eReady: return "READY";
+	case eBlocked: return "BLOCK";
+	case eSuspended: return "SUSP";
+	case eDeleted: return "DELETE";
+	default: return "INVALID";
+	}
+}
+
+static void screenprof_report_task(uint32_t sequence, const char *name,
+				   UBaseType_t task_count)
+{
+	UBaseType_t i;
+
+	if (task_count == 0U) {
+		rt_printf("[CARBOXFLOW][%lu][TASK] name=%s "
+			  "state=SNAPSHOT_UNAVAILABLE\r\n",
+			  (unsigned long)sequence, name);
+		return;
+	}
+
+	for (i = 0U; i < task_count; i++) {
+		TaskStatus_t *status = &screenprof_task_snapshot[i];
+
+		if (screenprof_name_equal(status->pcTaskName, name)) {
+			rt_printf("[CARBOXFLOW][%lu][TASK] name=%s state=%s "
+				  "prio=%lu stack_hwm_words=%u handle=%p\r\n",
+				  (unsigned long)sequence, name,
+				  screenprof_task_state_name(status->eCurrentState),
+				  (unsigned long)status->uxCurrentPriority,
+				  (unsigned int)status->usStackHighWaterMark,
+				  status->xHandle);
+			return;
+		}
+	}
+	rt_printf("[CARBOXFLOW][%lu][TASK] name=%s state=ABSENT\r\n",
+		  (unsigned long)sequence, name);
 }
 
 static int screenprof_is_task(TaskHandle_t *cached, const char *name)
@@ -1098,6 +1175,8 @@ void __wrap_AirPlayScreen_SendVideo(const void *data, int bytes)
 	}
 	screenprof_last_arrival_us = now_us;
 	screenprof_have_last_arrival = 1U;
+	screenprof_progress.video_tick = xTaskGetTickCount();
+	screenprof_progress.seen |= SCREENPROF_PROGRESS_VIDEO;
 	screenprof_live.video_calls++;
 	if (bytes > 0) {
 		screenprof_live.video_bytes += (uint32_t)bytes;
@@ -1246,6 +1325,8 @@ void __wrap_CVector_push_back(void *vector, const void *element)
 	if (is_screen) {
 		screenprof_vector_view_t *view = (screenprof_vector_view_t *)vector;
 		taskENTER_CRITICAL();
+		screenprof_progress.enqueue_tick = xTaskGetTickCount();
+		screenprof_progress.seen |= SCREENPROF_PROGRESS_ENQUEUE;
 		screenprof_live.enqueue_frames++;
 		if (item.bytes > 0) {
 			screenprof_live.enqueue_bytes += (uint32_t)item.bytes;
@@ -1326,6 +1407,8 @@ void __wrap_CVector_erase(void *vector, int index)
 	__real_CVector_erase(vector, index);
 	if (is_screen && valid_erase) {
 		taskENTER_CRITICAL();
+		screenprof_progress.dequeue_tick = xTaskGetTickCount();
+		screenprof_progress.seen |= SCREENPROF_PROGRESS_DEQUEUE;
 		if (screenprof_active_frame.valid) {
 			screenprof_live.frames_without_write++;
 		}
@@ -1530,6 +1613,15 @@ ssize_t __wrap_lwip_recv(int socket, void *buffer, size_t bytes, int flags)
 			screenprof_live.recv_tail_calls++;
 		}
 		if (result > 0) {
+			TickType_t progress_tick = xTaskGetTickCount();
+
+			screenprof_progress.recv_tick = progress_tick;
+			screenprof_progress.seen |= SCREENPROF_PROGRESS_RECV;
+			if (bytes > 128U) {
+				screenprof_progress.payload_tick = progress_tick;
+				screenprof_progress.seen |=
+					SCREENPROF_PROGRESS_PAYLOAD;
+			}
 			screenprof_live.recv_bytes += (uint32_t)result;
 		} else if (result == 0) {
 			screenprof_live.recv_zero++;
@@ -1638,6 +1730,11 @@ ssize_t __wrap_lwip_write(int socket, const void *buffer, size_t bytes)
 		screenprof_live.write_request_bytes += bytes;
 		if (result >= 0) {
 			screenprof_live.write_return_bytes += (uint32_t)result;
+			if (result > 0) {
+				screenprof_progress.write_tick = xTaskGetTickCount();
+				screenprof_progress.seen |=
+					SCREENPROF_PROGRESS_WRITE;
+			}
 			if ((size_t)result < bytes) {
 				screenprof_live.write_partial++;
 			}
@@ -1893,6 +1990,9 @@ void screen_queue_profiler_report(uint32_t sequence)
 {
 	uint32_t current_depth;
 	uint32_t vector_depth = 0U;
+	UBaseType_t task_count;
+	TickType_t progress_now = xTaskGetTickCount();
+	screenprof_progress_t progress_copy;
 	uint32_t metric_id;
 	uint32_t sample;
 	uint32_t anomaly;
@@ -1936,6 +2036,7 @@ void screen_queue_profiler_report(uint32_t sequence)
 	screenprof_timestamp_have_prev = 0U;
 #endif
 	current_depth = screenprof_frame_count;
+	progress_copy = screenprof_progress;
 	age_valid = !screenprof_frame_tracking_invalid;
 	vector = screenprof_vector;
 	if (vector != NULL) {
@@ -1947,6 +2048,35 @@ void screen_queue_profiler_report(uint32_t sequence)
 	}
 	screenprof_live.queue_max_depth = vector_depth;
 	taskEXIT_CRITICAL();
+
+	task_count = uxTaskGetSystemState(screenprof_task_snapshot,
+		SCREENPROF_TASK_SNAPSHOT, NULL);
+	rt_printf("[CARBOXFLOW][%lu] last_progress_age_ms "
+		  "recv/payload/video/enq/deq/write=%ld/%ld/%ld/%ld/%ld/%ld "
+		  "queue_depth=%lu tracked=%lu seen=0x%02lx\r\n",
+		  (unsigned long)sequence,
+		  (long)screenprof_progress_age_ms(progress_now,
+			progress_copy.recv_tick, progress_copy.seen,
+			SCREENPROF_PROGRESS_RECV),
+		  (long)screenprof_progress_age_ms(progress_now,
+			progress_copy.payload_tick, progress_copy.seen,
+			SCREENPROF_PROGRESS_PAYLOAD),
+		  (long)screenprof_progress_age_ms(progress_now,
+			progress_copy.video_tick, progress_copy.seen,
+			SCREENPROF_PROGRESS_VIDEO),
+		  (long)screenprof_progress_age_ms(progress_now,
+			progress_copy.enqueue_tick, progress_copy.seen,
+			SCREENPROF_PROGRESS_ENQUEUE),
+		  (long)screenprof_progress_age_ms(progress_now,
+			progress_copy.dequeue_tick, progress_copy.seen,
+			SCREENPROF_PROGRESS_DEQUEUE),
+		  (long)screenprof_progress_age_ms(progress_now,
+			progress_copy.write_tick, progress_copy.seen,
+			SCREENPROF_PROGRESS_WRITE),
+		  (unsigned long)vector_depth, (unsigned long)current_depth,
+		  (unsigned long)progress_copy.seen);
+	screenprof_report_task(sequence, "AirPlayScreenReceiver", task_count);
+	screenprof_report_task(sequence, "ScreenThread", task_count);
 
 	fps_x100 = screenprof_copy.video_calls * 10U;
 	rt_printf("[FRAMEPROF][%lu] window_ms=10000 frames=%lu bytes=%llu "

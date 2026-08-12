@@ -927,7 +927,9 @@ USBH_ISR_TASK_PRIORITY ?= 11
 # CPU-heavy decode cannot delay USB completion handling and the next transfer.
 # It remains below TCP/IP and NCM (priority 10) and the USB ISR worker (11).
 USBH_MAIN_TASK_PRIORITY ?= 6
-SCREEN_QUEUE_PROFILE ?= 0
+# Overnight UI-freeze diagnosis: trace the CarPlay screen RX, handover queue,
+# and TX stages in the existing 10-second profiler report.
+SCREEN_QUEUE_PROFILE ?= 1
 # Production switch for the temporary RX/TX investigation reports. Keep the
 # limiter, pacer, handover gate, and pressure feedback active when this is off.
 SCREEN_DATAPATH_PROFILE ?= 1
@@ -967,7 +969,7 @@ SCREEN_BLOCK_PROFILE ?= 1
 # Once a screen write identifies the video TCP PCB, summarize the returning
 # ACK cadence and advertised-window behavior.  This distinguishes a slow peer
 # reader from local USB/NCM queueing without restoring the verbose TCP profile.
-SCREEN_TCP_ACK_PROFILE ?= 0
+SCREEN_TCP_ACK_PROFILE ?= 1
 # Measure both the closed AirPlay converter call and the nested FDK AAC decode.
 # Reporting is windowed so the probe adds no per-frame UART traffic.
 AUDIO_DECODE_PROFILE ?= 1
@@ -1042,7 +1044,7 @@ TCP_OWNED_AGE_PROFILE ?= 0
 # Keep the expensive, already-concluded diagnostic probes independently
 # switchable.  The normal screen timing/backlog profiler does not need them.
 SCREEN_FRAME_FORMAT_PROFILE ?= 0
-SCREEN_TCP_BUFFER_PROFILE ?= 0
+SCREEN_TCP_BUFFER_PROFILE ?= 1
 # When SCREEN_QUEUE_PROFILE is enabled, correlate the local tick used to
 # generate each outgoing screen NTP timestamp with that frame's receive time.
 SCREEN_TIMESTAMP_PROFILE ?= 0
@@ -1051,6 +1053,22 @@ USB_HCD_PROFILE ?= 0
 # is intentionally independent of the older verbose USB_HCD_PROFILE.
 USB_HCD_CHANNEL_PROFILE ?= 0
 NET_QUEUE_PROFILE ?= 0
+# Make the RX/queue/TX diagnostic switches safe for incremental builds. These
+# options affect both the wrappers and lwIP internals, so changing one must
+# recompile every consumer instead of silently retaining yesterday's objects.
+SCREEN_FLOW_PROFILE_STAMP := $(OBJ_DIR)/.screen_flow_profile_q$(SCREEN_QUEUE_PROFILE)-buf$(SCREEN_TCP_BUFFER_PROFILE)-ack$(SCREEN_TCP_ACK_PROFILE)
+$(SCREEN_FLOW_PROFILE_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.screen_flow_profile_*
+	@touch $@
+../src/carbox/pc_profiler.o \
+	../src/carbox/screen_queue_profiler.o \
+	../src/carbox/screen_rx_rate_limit.o \
+	../src/carbox/screen_tx_direct_crypto.o \
+	../src/carbox/video_handover_zero_copy.o \
+	../../../component/common/network/lwip/lwip_v2.1.2/src/api/sockets.o \
+	../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_in.o: \
+	$(SCREEN_FLOW_PROFILE_STAMP)
 # Stage 1 validates the preallocated pbuf-pointer mailbox path without
 # aggregation, delay, or GTimer.  Each WLAN packet is still posted immediately.
 TCPIP_RX_BATCH_STAGE1 ?= 1
