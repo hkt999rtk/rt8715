@@ -1597,6 +1597,10 @@ carbox_rtk264: $(CARBOX_RTK264_ARCHIVE)
 ifeq ($(CARBOX_BUILD_RTK264),1)
 application: carbox_rtk264
 endif
+# build_info is phony and refreshes BOX_APP_VERSION on every build.  Keep the
+# object embedding that value ordered behind it so versions.json and the
+# running firmware cannot get different version names during parallel builds.
+../src/main.o: build_info
 application: prerequirement $(SRC_O) $(ERAM_O) $(SRAM_O) $(CINIT_O) $(ASM_O) $(ITCM_O) $(CPP_O)
 # Fixup: when ram_lp runs first and creates .o in source tree, make skips
 # our compile step but then cp to OBJ_DIR never happens.  Copy any
