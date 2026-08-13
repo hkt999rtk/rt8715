@@ -209,11 +209,12 @@ CARBOX_USB_LIB := 1
 endif
 
 ifeq ($(CARBOX_USB_LIB),1)
-# Use the OTA-compatible archive.  The vendor archive still contains the old
-# carplay_ota_compat.o compiled for 0x200000 firmware slots; linking it makes a
-# 0x370000 A/B image fail at exactly 2 MiB with "erase range overflow".  The
-# replacement object's source is kept in src/carbox/ota/carplay_ota_compat.c.
-CARBOX_USB_ARCHIVE := usb_lib/build/lib_usbsmart_ota.a
+# Keep the customer archive intact.  It is linked with --whole-archive, so make
+# a derived link archive without its old carplay_ota_compat.o and compile our
+# source replacement below.  All other customer objects remain byte-for-byte
+# identical to the latest supplied archive.
+CARBOX_USB_VENDOR_ARCHIVE := usb_lib/build/lib_usbsmart_ota.a
+CARBOX_USB_ARCHIVE := usb_lib/build/lib_usbsmart_link.a
 endif
 
 CARBOX_USB_BUILD ?= 1
@@ -753,6 +754,7 @@ SRC_C += ../src/carbox/aes_ctr_periodic_selftest.c
 SRC_C += ../src/carbox/carbox_diag.c
 SRC_C += ../src/carbox/pc_profiler.c
 SRC_C += ../src/carbox/ota_local_upload_page.c
+SRC_C += ../src/carbox/ota/carplay_ota_compat.c
 SRC_C += ../src/carbox/irq_profiler.c
 SRC_C += ../src/carbox/gcd_sync_profiler.c
 SRC_C += ../src/carbox/screen_queue_profiler.c
@@ -1478,6 +1480,14 @@ endif
 all: LIBFLAGS += -lrtstream -lrtscamkit -lrtsv4l2
 LIBFLAGS += -Wl,-u,ram_start -Wl,-u,cinit_start
 ifeq ($(CARBOX_USB_LIB),1)
+$(CARBOX_USB_ARCHIVE): $(CARBOX_USB_VENDOR_ARCHIVE) application.is.mk
+	@mkdir -p $(dir $@)
+	@cp -f $< $@
+	@chmod u+w $@
+	@$(AR) d $@ carplay_ota_compat.o
+	@echo "  AR   $@ (customer archive minus source-replaced carplay_ota_compat.o)"
+
+application: $(CARBOX_USB_ARCHIVE)
 LIBFLAGS += -Wl,--whole-archive $(CARBOX_USB_ARCHIVE) -Wl,--no-whole-archive
 endif
 
