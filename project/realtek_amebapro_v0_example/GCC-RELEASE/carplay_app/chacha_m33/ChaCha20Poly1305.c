@@ -80,6 +80,29 @@ void *memset(void *s, int c, size_t n);
 #define FORCE_INLINE static inline __attribute__((always_inline))
 #define CHACHA_UNUSED __attribute__((unused))
 
+#ifndef CARBOX_CHACHA_TRANSACTION_TRACE
+#define CARBOX_CHACHA_TRANSACTION_TRACE 0
+#endif
+
+#if CARBOX_CHACHA_TRANSACTION_TRACE
+static uint32_t g_chacha_trace_sequence;
+
+static uint32_t chacha_trace_hash(const uint8_t *data, size_t len) {
+  uint32_t hash = 2166136261u;
+  size_t i;
+
+  for (i = 0; i < len; ++i) {
+    hash ^= data[i];
+    hash *= 16777619u;
+  }
+  return hash;
+}
+
+static int chacha_trace_wanted(uint32_t sequence, size_t data_len) {
+  return (sequence <= 16u) || (data_len >= 512u);
+}
+#endif
+
 #ifndef CHACHA_ENABLE_CLEAR
 #define CHACHA_ENABLE_CLEAR 0
 #endif
@@ -1239,30 +1262,21 @@ static void chacha_stats_maybe_report(void) {
 #endif
 
 static void chacha_copy_bytes(void *dst_arg, const void *src_arg, size_t len) {
-  uintptr_t dst_addr;
-  uintptr_t src_addr;
+  uint8_t *dst = (uint8_t *)dst_arg;
+  const uint8_t *src = (const uint8_t *)src_arg;
+  size_t i;
 
   /*
    * Mode 2 defers the hardware transaction until final/verify and stages the
    * streaming input in the caller's output buffer.  CarPlay commonly uses the
-   * API in-place, so copying an already identical range only burns CPU.
-   * Exact aliasing is safe to skip.  Route ordinary transfers through memcpy
-   * so the final firmware uses the board-measured M33 ITCM implementation
-   * instead of this former byte-at-a-time loop.  A buffered streaming tail can
-   * partially overlap; preserve correctness with memmove only for that rare
-   * case rather than slowing every transfer.
+   * API in-place, so copying an already identical range only burns CPU. Keep
+   * this copy private to the crypto implementation: routing it through the
+   * globally wrapped memcpy/memmove changes the behavior of the special first
+   * CarPlay frame before the normal AirPlay screen loop is established.
    */
-  if ((dst_arg == src_arg) || (len == 0u)) return;
+  if ((dst == src) || (len == 0u)) return;
 
-  dst_addr = (uintptr_t)dst_arg;
-  src_addr = (uintptr_t)src_arg;
-  if (((dst_addr < src_addr) && ((src_addr - dst_addr) < len)) ||
-      ((src_addr < dst_addr) && ((dst_addr - src_addr) < len))) {
-    (void)memmove(dst_arg, src_arg, len);
-    return;
-  }
-
-  (void)memcpy(dst_arg, src_arg, len);
+  for (i = 0; i < len; ++i) dst[i] = src[i];
 }
 
 static CHACHA_UNUSED size_t chacha_first_difference(
@@ -2072,6 +2086,10 @@ void chacha20_poly1305_init_64x64(
   chacha_announce_mode();
   chacha20_poly1305_init_64x64_software(state, key, nonce);
   state->rtl_eligible = 1u;
+#if CARBOX_CHACHA_TRANSACTION_TRACE && \
+    (CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_SOFTWARE_ONLY)
+  state->rtl_reserved = (uint8_t)(++g_chacha_trace_sequence & 0xffu);
+#endif
 }
 
 void chacha20_poly1305_add_aad(
@@ -2152,6 +2170,11 @@ size_t chacha20_poly1305_final(
   int direct_status = 0;
   size_t total_len;
   size_t written;
+#if CARBOX_CHACHA_TRANSACTION_TRACE
+  uint32_t trace_sequence = (uint32_t)state->rtl_reserved;
+  uint64_t trace_aad_len = state->aad_len;
+  int trace_inplace = state->rtl_input_base == state->rtl_output_base;
+#endif
   int eligible = state->rtl_eligible &&
                  (state->rtl_direction == CHACHA_RTL_DIRECTION_ENCRYPT);
 
@@ -2276,6 +2299,21 @@ size_t chacha20_poly1305_final(
 #endif
   chacha_stats_record_software(total_len, 0);
 #endif
+#if CARBOX_CHACHA_TRANSACTION_TRACE
+  {
+    if (chacha_trace_wanted(trace_sequence, total_len)) {
+      printf(
+        "[CHACHA][TRACE] seq=%lu dir=ENC aad=%lu data=%lu final=%lu "
+        "inplace=%u out_hash=%08lx tag=%08lx\n",
+        (unsigned long)trace_sequence, (unsigned long)trace_aad_len,
+        (unsigned long)total_len, (unsigned long)written,
+        trace_inplace ? 1u : 0u,
+        (unsigned long)chacha_trace_hash(output_base, total_len),
+        (unsigned long)chacha_trace_hash(tag, 16u)
+      );
+    }
+  }
+#endif
   chacha_stats_maybe_report();
   chacha_clear_state_key_material(state);
   chacha_secure_clear(key, sizeof(key));
@@ -2303,6 +2341,11 @@ size_t chacha20_poly1305_verify(
   uint8_t *output_base = state->rtl_output_base;
   size_t total_len;
   size_t written;
+#if CARBOX_CHACHA_TRANSACTION_TRACE
+  uint32_t trace_sequence = (uint32_t)state->rtl_reserved;
+  uint64_t trace_aad_len = state->aad_len;
+  int trace_inplace = state->rtl_input_base == state->rtl_output_base;
+#endif
   int eligible = state->rtl_eligible &&
                  (state->rtl_direction == CHACHA_RTL_DIRECTION_DECRYPT);
 
@@ -2405,6 +2448,22 @@ size_t chacha20_poly1305_verify(
   );
 #endif
   chacha_stats_record_software(total_len, 0);
+#endif
+#if CARBOX_CHACHA_TRANSACTION_TRACE
+  {
+    if (chacha_trace_wanted(trace_sequence, total_len)) {
+      printf(
+        "[CHACHA][TRACE] seq=%lu dir=DEC aad=%lu data=%lu final=%lu "
+        "inplace=%u err=%ld out_hash=%08lx tag=%08lx\n",
+        (unsigned long)trace_sequence, (unsigned long)trace_aad_len,
+        (unsigned long)total_len, (unsigned long)written,
+        trace_inplace ? 1u : 0u,
+        (long)*out_error,
+        (unsigned long)chacha_trace_hash(output_base, total_len),
+        (unsigned long)chacha_trace_hash(tag, 16u)
+      );
+    }
+  }
 #endif
   chacha_stats_maybe_report();
   chacha_clear_state_key_material(state);

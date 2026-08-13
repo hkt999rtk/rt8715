@@ -11,7 +11,7 @@ ar_tool=$2
 objcopy_tool=$3
 input_archive=$4
 output_archive=$5
-member=$6
+members=$6
 temporary=$(mktemp -d)
 trap 'rm -rf -- "$temporary"' EXIT HUP INT TERM
 
@@ -32,6 +32,11 @@ case "$mode" in
 		free_hook=carbox_video_handover_producer_free
 		memcpy_option=
 		;;
+	private-memory)
+		malloc_hook=
+		free_hook=
+		memcpy_option=
+		;;
 	*)
 		echo "unknown video handover patch mode: $mode" >&2
 		exit 2
@@ -44,14 +49,23 @@ esac
 cp "$input_archive" "$output_archive"
 (
 	cd "$temporary"
-	"$ar_tool" x "$input_archive" "$member"
-	test -f "$member"
-	"$objcopy_tool" \
-		--redefine-sym "malloc=$malloc_hook" \
-		--redefine-sym "free=$free_hook" \
-		$memcpy_option \
-		"$member" "patched.o"
-	mv "patched.o" "$member"
-	"$ar_tool" r "$output_archive" "$member"
+	for member in $members; do
+		"$ar_tool" x "$input_archive" "$member"
+		test -f "$member"
+		if [ "$mode" = private-memory ]; then
+			"$objcopy_tool" \
+				--redefine-sym memcpy=carbox_vendor_chacha_memcpy \
+				--redefine-sym memset=carbox_vendor_chacha_memset \
+				"$member" "patched.o"
+		else
+			"$objcopy_tool" \
+				--redefine-sym "malloc=$malloc_hook" \
+				--redefine-sym "free=$free_hook" \
+				$memcpy_option \
+				"$member" "patched.o"
+		fi
+		mv "patched.o" "$member"
+		"$ar_tool" r "$output_archive" "$member"
+	done
 )
 "$ar_tool" s "$output_archive"

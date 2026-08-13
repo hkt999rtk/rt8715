@@ -711,6 +711,43 @@ SRC_C += ../../../component/common/utilities/xml.c
 SRC_C += ../../../component/common/drivers/wlan/realtek/src/core/option/rtw_opt_skbuf.c
 
 SRC_C += ../src/main.c
+CHACHA_VENDOR_TRACE ?= 0
+CHACHA_PRE_RX_VENDOR ?= 0
+CHACHA_VENDOR_PRIVATE_MEM ?= 0
+CHACHA_VENDOR_PRIVATE_SW ?= 0
+CHACHA_API_TRACE ?= 0
+CHACHA_KEY_ALIAS_FIX ?= 1
+CHACHA_PRIVATE_SW_VERIFY ?= 0
+ifeq ($(CHACHA_PRIVATE_SW_VERIFY),1)
+ifneq ($(CHACHA_VENDOR_PRIVATE_MEM),1)
+$(error CHACHA_PRIVATE_SW_VERIFY requires CHACHA_VENDOR_PRIVATE_MEM=1)
+endif
+endif
+ifeq ($(CHACHA_VENDOR_TRACE)$(CHACHA_PRE_RX_VENDOR),11)
+$(error CHACHA_VENDOR_TRACE and CHACHA_PRE_RX_VENDOR cannot both be enabled)
+endif
+ifneq ($(words $(filter 1,$(CHACHA_VENDOR_TRACE) $(CHACHA_PRE_RX_VENDOR) $(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW))),0)
+ifneq ($(words $(filter 1,$(CHACHA_VENDOR_TRACE) $(CHACHA_PRE_RX_VENDOR) $(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW))),1)
+$(error Select only one ChaCha diagnostic routing mode)
+endif
+endif
+ifeq ($(CHACHA_VENDOR_TRACE),1)
+SRC_C += ../src/carbox/chacha_vendor_trace.c
+endif
+ifeq ($(CHACHA_API_TRACE),1)
+SRC_C += ../src/carbox/chacha_vendor_trace.c
+endif
+ifeq ($(CHACHA_KEY_ALIAS_FIX),1)
+ifeq ($(CHACHA_API_TRACE)$(CHACHA_VENDOR_TRACE)$(CHACHA_PRE_RX_VENDOR),000)
+SRC_C += ../src/carbox/chacha_key_alias_fix.c
+endif
+endif
+ifeq ($(CHACHA_PRE_RX_VENDOR),1)
+SRC_C += ../src/carbox/chacha_pre_rx_vendor.c
+endif
+ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW)),)
+SRC_C += ../src/carbox/chacha_private_memory.c
+endif
 SRC_C += ../src/carbox/aes_backend_select.c
 SRC_C += ../src/carbox/aes_ctr_periodic_selftest.c
 SRC_C += ../src/carbox/carbox_diag.c
@@ -1056,7 +1093,7 @@ NET_QUEUE_PROFILE ?= 0
 # Make the RX/queue/TX diagnostic switches safe for incremental builds. These
 # options affect both the wrappers and lwIP internals, so changing one must
 # recompile every consumer instead of silently retaining yesterday's objects.
-SCREEN_FLOW_PROFILE_STAMP := $(OBJ_DIR)/.screen_flow_profile_q$(SCREEN_QUEUE_PROFILE)-buf$(SCREEN_TCP_BUFFER_PROFILE)-ack$(SCREEN_TCP_ACK_PROFILE)
+SCREEN_FLOW_PROFILE_STAMP := $(OBJ_DIR)/.screen_flow_profile_q$(SCREEN_QUEUE_PROFILE)-fmt$(SCREEN_FRAME_FORMAT_PROFILE)-buf$(SCREEN_TCP_BUFFER_PROFILE)-ack$(SCREEN_TCP_ACK_PROFILE)
 $(SCREEN_FLOW_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.screen_flow_profile_*
@@ -1300,6 +1337,31 @@ endif
 endif
 LFLAGS += -Wl,--wrap=AES_CTR_Init -Wl,--wrap=AES_CTR_Update
 LFLAGS += -Wl,--wrap=AES_CTR_Final
+ifneq ($(filter 1,$(CHACHA_VENDOR_TRACE) $(CHACHA_API_TRACE)),)
+LFLAGS += -Wl,--wrap=chacha20_poly1305_init_64x64
+LFLAGS += -Wl,--wrap=chacha20_poly1305_add_aad
+LFLAGS += -Wl,--wrap=chacha20_poly1305_encrypt
+LFLAGS += -Wl,--wrap=chacha20_poly1305_decrypt
+LFLAGS += -Wl,--wrap=chacha20_poly1305_final
+LFLAGS += -Wl,--wrap=chacha20_poly1305_verify
+endif
+ifeq ($(CHACHA_KEY_ALIAS_FIX),1)
+ifeq ($(CHACHA_API_TRACE)$(CHACHA_VENDOR_TRACE)$(CHACHA_PRE_RX_VENDOR),000)
+LFLAGS += -Wl,--wrap=chacha20_poly1305_init_64x64
+LFLAGS += -Wl,--wrap=chacha20_poly1305_final
+LFLAGS += -Wl,--wrap=chacha20_poly1305_verify
+endif
+endif
+ifeq ($(CHACHA_PRE_RX_VENDOR),1)
+LFLAGS += -Wl,--wrap=chacha20_poly1305_init_64x64
+LFLAGS += -Wl,--wrap=chacha20_poly1305_add_aad
+LFLAGS += -Wl,--wrap=chacha20_poly1305_encrypt
+LFLAGS += -Wl,--wrap=chacha20_poly1305_decrypt
+LFLAGS += -Wl,--wrap=chacha20_poly1305_final
+LFLAGS += -Wl,--wrap=chacha20_poly1305_verify
+LFLAGS += -Wl,--wrap=chacha20_poly1305_encrypt_all_64x64
+LFLAGS += -Wl,--wrap=chacha20_poly1305_decrypt_all_64x64
+endif
 ifeq ($(SCREEN_TX_DIRECT_CRYPTO),1)
 ifeq ($(SCREEN_QUEUE_PROFILE),0)
 LFLAGS += -Wl,--wrap=lwip_write
@@ -1424,18 +1486,27 @@ CARBOX_SMART_CARPLAY_LIB_DIR := carplay_app
 CARBOX_CARPLAY_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_CarPlay.a
 CARBOX_CARPLAY_CHACHA_DIR := $(CARBOX_SMART_CARPLAY_LIB_DIR)/chacha_m33
 CARBOX_CARPLAY_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_chacha_m33.a
+CARBOX_CHACHA_VENDOR_PRE_RX_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/libchacha_vendor_pre_rx.a
+CARBOX_CHACHA_VENDOR_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_vendor_private_mem.a
+CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_vendor_private_sw.a
 # Same mode numbering as AES_MODE above.
 CHACHA_MODE ?= 2
 CHACHA_HW_MIN_LEN ?= 4096
 CHACHA_STATS_INTERVAL_MS ?= 0
 CHACHA_HW_SELFTEST ?= 0
+CHACHA_TRANSACTION_TRACE ?= 0
 # GNU Make does not normally treat command-line option changes as target
 # dependencies. Include every exposed archive-affecting ChaCha option in a
 # stamp so switching mode/config automatically rebuilds the derived archive.
-CARBOX_CHACHA_CONFIG_STAMP := $(CARBOX_CARPLAY_CHACHA_DIR)/build/.carbox_chacha_config_mode$(CHACHA_MODE)-min$(CHACHA_HW_MIN_LEN)-direct$(SCREEN_TX_DIRECT_CRYPTO)-stats$(CHACHA_STATS_INTERVAL_MS)-selftest$(CHACHA_HW_SELFTEST)-prio$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
+CARBOX_CHACHA_CONFIG_STAMP := $(CARBOX_CARPLAY_CHACHA_DIR)/build/.carbox_chacha_config_mode$(CHACHA_MODE)-min$(CHACHA_HW_MIN_LEN)-direct$(SCREEN_TX_DIRECT_CRYPTO)-stats$(CHACHA_STATS_INTERVAL_MS)-selftest$(CHACHA_HW_SELFTEST)-trace$(CHACHA_TRANSACTION_TRACE)-privverify$(CHACHA_PRIVATE_SW_VERIFY)-prio$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
 CARBOX_VIDEO_HANDOVER_PATCH := $(CARBOX_SMART_CARPLAY_LIB_DIR)/patch_video_handover_archive.sh
 CARBOX_ACCESSORY2_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2.a
 CARBOX_ACCESSORY2_HANDOVER_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2_handover.a
+CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_Accessory2_vendor_private_mem.a
+CARBOX_SYSTEMLIB_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_SystemLib.a
+CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_SystemLib_vendor_private_mem.a
+CARBOX_UILIB_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_UiLib.a
+CARBOX_UILIB_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_UiLib_vendor_private_mem.a
 CARBOX_CARPLAY_HANDOVER_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_chacha_m33_handover.a
 # The vendor archive remains available for an immediate A/B fallback.  The O3
 # archive is rebuilt from upstream FDK AAC v0.1.6 with the RTL8195B/M33 DSP ISA.
@@ -1474,14 +1545,62 @@ $(CARBOX_CARPLAY_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 		SCREEN_TX_DIRECT_CRYPTO=$(SCREEN_TX_DIRECT_CRYPTO) \
 		CHACHA_STATS_INTERVAL_MS=$(CHACHA_STATS_INTERVAL_MS) \
 		CHACHA_HW_SELFTEST=$(CHACHA_HW_SELFTEST) \
+		CHACHA_TRANSACTION_TRACE=$(CHACHA_TRANSACTION_TRACE) \
+		CHACHA_PRIVATE_MEMORY=$(CHACHA_PRIVATE_SW_VERIFY) \
 		CRYPTO_OWNER_BOOST_PRIORITY=$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
+ifeq ($(CHACHA_PRIVATE_SW_VERIFY),1)
 application: $(CARBOX_CARPLAY_ARCHIVE)
+else ifeq ($(CHACHA_VENDOR_PRIVATE_SW),1)
+application: $(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE)
+else ifeq ($(CHACHA_VENDOR_PRIVATE_MEM),1)
+application: $(CARBOX_CHACHA_VENDOR_PRIVATE_MEM_ARCHIVE)
+else ifeq ($(CHACHA_VENDOR_TRACE),1)
+application: $(CARBOX_CARPLAY_VENDOR_ARCHIVE)
+else
+application: $(CARBOX_CARPLAY_ARCHIVE)
+endif
+ifeq ($(CHACHA_PRE_RX_VENDOR),1)
+$(CARBOX_CHACHA_VENDOR_PRE_RX_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
+		$(CARBOX_CARPLAY_CHACHA_DIR)/Makefile
+	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) vendor-pre-rx
+application: $(CARBOX_CHACHA_VENDOR_PRE_RX_ARCHIVE)
+endif
+ifeq ($(CHACHA_VENDOR_PRIVATE_MEM),1)
+$(CARBOX_CHACHA_VENDOR_PRIVATE_MEM_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
+		$(CARBOX_CARPLAY_CHACHA_DIR)/Makefile
+	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) vendor-private-mem
+endif
+ifeq ($(CHACHA_VENDOR_PRIVATE_SW),1)
+$(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
+		$(CARBOX_CARPLAY_CHACHA_DIR)/Makefile
+	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) vendor-private-sw
+application: $(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE)
+endif
 ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO)),)
 $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH)
 	sh $(CARBOX_VIDEO_HANDOVER_PATCH) accessory $(AR) $(OBJCOPY) \
 		$(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) $@ AirPlayScreen.o
 application: $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
+endif
+ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
+$(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
+		$(CARBOX_VIDEO_HANDOVER_PATCH)
+	sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
+		$(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) $@ AirPlayScreen.o
+application: $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE)
+endif
+ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW)),)
+$(CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE): $(CARBOX_SYSTEMLIB_VENDOR_ARCHIVE) \
+		$(CARBOX_VIDEO_HANDOVER_PATCH)
+	sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
+		$(CARBOX_SYSTEMLIB_VENDOR_ARCHIVE) $@ "Accessory.o Image.o"
+application: $(CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE)
+$(CARBOX_UILIB_PRIVATE_MEM_ARCHIVE): $(CARBOX_UILIB_VENDOR_ARCHIVE) \
+		$(CARBOX_VIDEO_HANDOVER_PATCH)
+	sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
+		$(CARBOX_UILIB_VENDOR_ARCHIVE) $@ "Surface.o ImageView.o"
+application: $(CARBOX_UILIB_PRIVATE_MEM_ARCHIVE)
 endif
 ifeq ($(VIDEO_HANDOVER_ZERO_COPY),1)
 $(CARBOX_CARPLAY_HANDOVER_ARCHIVE): $(CARBOX_CARPLAY_ARCHIVE) \
@@ -1496,15 +1615,25 @@ LIBFLAGS += -Wl,--whole-archive
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_link.a
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_x264.a
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_png.a
-LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_SystemLib.a
+ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW)),)
+LIBFLAGS += $(CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE)
+else
+LIBFLAGS += $(CARBOX_SYSTEMLIB_VENDOR_ARCHIVE)
+endif
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_SystemLibEx.a
-LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_UiLib.a
+ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW)),)
+LIBFLAGS += $(CARBOX_UILIB_PRIVATE_MEM_ARCHIVE)
+else
+LIBFLAGS += $(CARBOX_UILIB_VENDOR_ARCHIVE)
+endif
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_accessory.a
 LIBFLAGS += $(CARBOX_FDK_AAC_ARCHIVE)
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_init.a
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_zlib.a
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_AndroidAuto.a
-ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO)),)
+ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
+LIBFLAGS += $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE)
+else ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO)),)
 LIBFLAGS += $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
 else
 LIBFLAGS += $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE)
@@ -1516,10 +1645,21 @@ LIBFLAGS += -Wl,--no-whole-archive
 # Keep the customer's RTL8195B hardware backend, replacing only the protocol
 # object so its internal copies use the measured M33 ITCM memcpy.  Leave this
 # archive outside --whole-archive so unrelated members remain demand-linked.
-ifeq ($(VIDEO_HANDOVER_ZERO_COPY),1)
+ifeq ($(CHACHA_PRIVATE_SW_VERIFY),1)
+LIBFLAGS += $(CARBOX_CARPLAY_ARCHIVE)
+else ifeq ($(CHACHA_VENDOR_PRIVATE_SW),1)
+LIBFLAGS += $(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE)
+else ifeq ($(CHACHA_VENDOR_PRIVATE_MEM),1)
+LIBFLAGS += $(CARBOX_CHACHA_VENDOR_PRIVATE_MEM_ARCHIVE)
+else ifeq ($(VIDEO_HANDOVER_ZERO_COPY),1)
 LIBFLAGS += $(CARBOX_CARPLAY_HANDOVER_ARCHIVE)
+else ifeq ($(CHACHA_VENDOR_TRACE),1)
+LIBFLAGS += $(CARBOX_CARPLAY_VENDOR_ARCHIVE)
 else
 LIBFLAGS += $(CARBOX_CARPLAY_ARCHIVE)
+endif
+ifeq ($(CHACHA_PRE_RX_VENDOR),1)
+LIBFLAGS += $(CARBOX_CHACHA_VENDOR_PRE_RX_ARCHIVE)
 endif
 endif
 
