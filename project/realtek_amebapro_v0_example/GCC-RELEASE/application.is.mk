@@ -1819,6 +1819,7 @@ manipulate_images:	partition.json | application
 		fi; \
 		$(VFSTOOL) -t FATFS -s 512 -c $(FATFS_SECTORS) -dir $(VFSDIR) -out application_is/fatfs.bin >/dev/null 2>&1; \
 	fi	
+	@mkdir -p bootloader
 	@cp  ../../../component/soc/realtek/8195b/misc/bsp/image/boot.bin application_is/boot.bin
 	@echo "  ELF2BIN  keygen keycfg.json"
 	@$(ELF2BIN) keygen keycfg.json >/dev/null 2>&1

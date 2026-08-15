@@ -31,9 +31,17 @@ log/
 *.d
 *.su
 
-# Embedded build output (GCC-RELEASE — entire directory is compiled artifacts)
+# Embedded build output. GCC-RELEASE also contains required build inputs;
+# keep the directory ignored by default and explicitly retain those inputs.
 project/realtek_amebapro_v0_example/GCC-RELEASE/**
 !project/realtek_amebapro_v0_example/GCC-RELEASE/Makefile
+!project/realtek_amebapro_v0_example/GCC-RELEASE/application.lp.mk
+!project/realtek_amebapro_v0_example/GCC-RELEASE/sensor.mk
+!project/realtek_amebapro_v0_example/GCC-RELEASE/amebapro_config_is.ld
+!project/realtek_amebapro_v0_example/GCC-RELEASE/rtl8195blp_ram.ld
+!project/realtek_amebapro_v0_example/GCC-RELEASE/amebapro_bootloader.json
+!project/realtek_amebapro_v0_example/GCC-RELEASE/amebapro_firmware_is.json
+!project/realtek_amebapro_v0_example/GCC-RELEASE/keycfg.json
 !project/realtek_amebapro_v0_example/GCC-RELEASE/gen_partition_json.py
 !project/realtek_amebapro_v0_example/GCC-RELEASE/partition.json
 !project/realtek_amebapro_v0_example/GCC-RELEASE/gen_ota_fatfs.py
@@ -49,10 +57,34 @@ project/realtek_amebapro_v0_example/GCC-RELEASE/**
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/patch_video_handover_archive.sh
 !project/realtek_amebapro_v0_example/GCC-RELEASE/rtl8195bhp_ram_is.ld
 
-# CarPlay crypto source maintained locally. Keep the rest of carplay_app,
-# vendor archives, generated objects and build directories ignored.
+# Image/build utilities required by clean clones.
+!project/realtek_amebapro_v0_example/GCC-RELEASE/gnu_utility/
+!project/realtek_amebapro_v0_example/GCC-RELEASE/gnu_utility/vfs.py
+!project/realtek_amebapro_v0_example/GCC-RELEASE/gnu_utility/backtrace_parser.py
+
+# Static FATFS inputs. Version.txt and OsVer.txt remain generated.
+!project/realtek_amebapro_v0_example/GCC-RELEASE/rootfs/
+!project/realtek_amebapro_v0_example/GCC-RELEASE/rootfs/Config.ini
+!project/realtek_amebapro_v0_example/GCC-RELEASE/rootfs/Font30.vft
+!project/realtek_amebapro_v0_example/GCC-RELEASE/rootfs/Data/
+!project/realtek_amebapro_v0_example/GCC-RELEASE/rootfs/Data/*.data
+
+# CarPlay crypto source and required vendor inputs. Generated replacement
+# archives, objects and build directories remain ignored.
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/lib_CarPlay.a
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/lib_Accessory2.a
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/lib_SystemLib.a
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/lib_SystemLibEx.a
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/lib_UiLib.a
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/lib_accessory.a
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/lib_link.a
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/lib_x264.a
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/lib_png.a
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/lib_init.a
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/lib_zlib.a
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/lib_AndroidAuto.a
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/lib_jpeg.a
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/ChaCha20Poly1305.c
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/ChaCha20Poly1305.h
@@ -70,3 +102,6 @@ project/realtek_amebapro_v0_example/GCC-RELEASE/**
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/aes_rtl8195b/AESUtils.h
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/aes_rtl8195b/README.md
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/aes_rtl8195b/CUSTOMER_DIAGNOSTIC_NOTES.md
+
+# Convenience copies of generated full-flash images are local artifacts.
+/flash_is.bin
