@@ -16,6 +16,10 @@
 #define CONFIG_NCM_WRAP_COPY_ELIDE 0
 #endif
 
+#ifndef CONFIG_NCM_WRAP_STATS
+#define CONFIG_NCM_WRAP_STATS 0
+#endif
+
 #if CONFIG_NCM_WRAP_PROFILE
 
 /* Packed offsets recovered from the customer usbh_cdc_ncm_hal.o ABI. */
@@ -151,7 +155,9 @@ int ncm_wrap_copy_elide_prepare(uint32_t packet_length, void **payload,
 		ncm_wrap_state.armed_length = packet_length;
 		ncm_wrap_state.armed_generation = ncm_wrap_state.generation;
 		ncm_wrap_state.armed_token = local_token;
+#if CONFIG_NCM_WRAP_STATS
 		ncm_wrap_live.elide_prepared++;
+#endif
 	}
 	if (local_token != 0U) {
 		*payload = (void *)ncm_wrap_state.armed_packet;
@@ -181,7 +187,9 @@ void ncm_wrap_copy_elide_cancel(uint32_t token)
 		ncm_wrap_state.armed_token = 0U;
 		ncm_wrap_state.armed_packet = 0U;
 		ncm_wrap_state.armed_length = 0U;
+#if CONFIG_NCM_WRAP_STATS
 		ncm_wrap_live.elide_cancelled++;
+#endif
 	}
 	taskEXIT_CRITICAL();
 #else
@@ -239,15 +247,21 @@ int ncm_wrap_copy_elide_memcpy(void *dst, const void *src, size_t length)
 int __wrap_ncm_wrap_ntb(void *host_user, const void *packet,
 	uint32_t packet_length)
 {
+#if CONFIG_NCM_WRAP_STATS
 	ncm_wrap_profile_stats_t sample;
+#endif
 	uintptr_t output_before = 0U;
 	uintptr_t output_after = 0U;
+#if CONFIG_NCM_WRAP_STATS
 	uint32_t start_cycles;
 	uint32_t elapsed;
+#endif
 	uint32_t elide_active = 0U;
 	int result;
 
+#if CONFIG_NCM_WRAP_STATS
 	memset(&sample, 0, sizeof(sample));
+#endif
 	if (host_user != NULL) {
 		output_before = ncm_load_packed_pointer(
 			host_user, NCM_HOST_USER_TX_NTB_OFFSET);
@@ -269,20 +283,29 @@ int __wrap_ncm_wrap_ntb(void *host_user, const void *packet,
 		ncm_wrap_state.active = 1U;
 		ncm_wrap_state.armed_token = 0U;
 		elide_active = 1U;
+#if CONFIG_NCM_WRAP_STATS
 		sample.elide_activated = 1U;
+#endif
 	} else if (ncm_wrap_state.armed_token != 0U) {
 		ncm_wrap_state.armed_token = 0U;
+#if CONFIG_NCM_WRAP_STATS
 		sample.elide_fallback = 1U;
+#endif
 	}
 	taskEXIT_CRITICAL();
 #endif
 
+#if CONFIG_NCM_WRAP_STATS
 	start_cycles = DWT->CYCCNT;
+#endif
 	result = __real_ncm_wrap_ntb(host_user, packet, packet_length);
+#if CONFIG_NCM_WRAP_STATS
 	elapsed = DWT->CYCCNT - start_cycles;
+#endif
 
 #if CONFIG_NCM_WRAP_COPY_ELIDE
 	if (elide_active != 0U) {
+#if CONFIG_NCM_WRAP_STATS
 		sample.elide_memset_preserved =
 			ncm_wrap_state.active_memset_preserved;
 		sample.elide_memcpy_skipped =
@@ -294,6 +317,7 @@ int __wrap_ncm_wrap_ntb(void *host_user, const void *packet,
 		} else {
 			sample.elide_fallback = 1U;
 		}
+#endif
 		ncm_wrap_state.active = 0U;
 		ncm_wrap_state.active_output = 0U;
 		ncm_wrap_state.active_packet = 0U;
@@ -307,6 +331,7 @@ int __wrap_ncm_wrap_ntb(void *host_user, const void *packet,
 			host_user, NCM_HOST_USER_TX_NTB_OFFSET);
 	}
 
+#if CONFIG_NCM_WRAP_STATS
 	sample.calls = 1U;
 	sample.bytes = packet_length;
 	sample.cycles = elapsed;
@@ -393,6 +418,10 @@ int __wrap_ncm_wrap_ntb(void *host_user, const void *packet,
 	if (sample.cycles_max > ncm_wrap_live.cycles_max) {
 		ncm_wrap_live.cycles_max = sample.cycles_max;
 	}
+	taskEXIT_CRITICAL();
+#endif
+
+	taskENTER_CRITICAL();
 	if (output_after != 0U && ncm_wrap_state.output != output_after) {
 		if (ncm_wrap_state.output != 0U) {
 			ncm_wrap_state.pointer_changes++;
@@ -417,6 +446,7 @@ int __wrap_ncm_wrap_ntb(void *host_user, const void *packet,
 
 void ncm_wrap_profiler_report(uint32_t sequence)
 {
+#if CONFIG_NCM_WRAP_STATS
 	ncm_wrap_profile_state_t state;
 	uint32_t cycles_per_us = SystemCoreClock / 1000000U;
 	uint32_t avg_us;
@@ -481,6 +511,9 @@ void ncm_wrap_profiler_report(uint32_t sequence)
 		  (unsigned long)ncm_wrap_snapshot.elide_fallback,
 		  (unsigned long)ncm_wrap_snapshot.elide_bytes,
 		  (unsigned long)state.payload_offset);
+#else
+	(void)sequence;
+#endif
 }
 
 #else

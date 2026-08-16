@@ -30,6 +30,10 @@
 #define AAC_DECODER_ROUTE_PROFILE_WINDOW_MS 10000U
 #endif
 
+#ifndef CONFIG_AAC_DECODER_ROUTE_PROFILE
+#define CONFIG_AAC_DECODER_ROUTE_PROFILE 0
+#endif
+
 #define CARBOX_AAC_DECODER_FDK_ONLY 0
 #define CARBOX_AAC_DECODER_HELIX_AUTO 1
 
@@ -158,6 +162,7 @@ static void aac_router_select_fdk(aac_router_t *router, const char *reason)
 static void aac_router_profile_record(aac_router_t *router,
 	const char *backend, AAC_DECODER_ERROR error)
 {
+#if CONFIG_AAC_DECODER_ROUTE_PROFILE
 	uint32_t now_us = hal_read_curtime_us();
 	uint32_t window_us;
 
@@ -191,6 +196,11 @@ static void aac_router_profile_record(aac_router_t *router,
 	router->profile_helix_frames = 0U;
 	router->profile_fdk_frames = 0U;
 	router->profile_errors = 0U;
+#else
+	(void)router;
+	(void)backend;
+	(void)error;
+#endif
 }
 
 HANDLE_AACDECODER __wrap_aacDecoder_Open(TRANSPORT_TYPE transport, UINT layers)

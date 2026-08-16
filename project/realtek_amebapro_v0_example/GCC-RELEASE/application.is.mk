@@ -886,26 +886,26 @@ TCP_OUTPUT_PROFILE ?= 0
 # Ten-second timing of the en3 CDC-NCM transmit path.  The closed NCM library
 # waits synchronously for USB completion, so measure that wait separately from
 # any lwIP pbuf-chain flattening done by ethernetif.c.
-NCM_TX_PROFILE ?= 1
+NCM_TX_PROFILE ?= 0
 # Move the closed synchronous NCM send/wait out of TCP_IP.
 NCM_TX_ASYNC ?= 1
 # Compact 10-second asynchronous NCM transmit health report.
 NCM_TX_ASYNC_PROFILE ?= 0
 # Compiler command-line changes are not tracked by ordinary source timestamps.
 # Force the sole consumer to rebuild whenever the observation mode changes.
-NCM_TX_PROFILE_STAMP := $(OBJ_DIR)/.ncm_tx_profile_$(NCM_TX_PROFILE)
+NCM_TX_PROFILE_STAMP := $(OBJ_DIR)/.ncm_tx_profile_$(NCM_TX_PROFILE)-async$(NCM_TX_ASYNC_PROFILE)
 $(NCM_TX_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.ncm_tx_profile_*
 	@touch $@
 ../../../component/common/network/lwip/lwip_v2.1.2/port/realtek/freertos/ethernetif.o: $(NCM_TX_PROFILE_STAMP)
-PC_PROFILER ?= 1
+PC_PROFILER ?= 0
 # Optional PC-level reports. Keep task utilization sampling enabled while
 # suppressing the verbose per-PC reports during IRQ-count investigation.
 PC_PROFILER_PC_DETAIL ?= 0
 PC_PROFILER_RTW_RECV_DETAIL ?= 0
 PC_PROFILER_RTW_DUMP_PROFILE ?= 0
-IRQ_PROFILE ?= 1
+IRQ_PROFILE ?= 0
 IRQ_PROFILE_REPORT ?= 0
 # Optional USB observations. These wrappers only record arguments/timing and
 # always preserve the customer implementation's calls and return values.
@@ -949,10 +949,10 @@ USBH_ISR_TASK_PRIORITY ?= 11
 USBH_MAIN_TASK_PRIORITY ?= 6
 # Overnight UI-freeze diagnosis: trace the CarPlay screen RX, handover queue,
 # and TX stages in the existing 10-second profiler report.
-SCREEN_QUEUE_PROFILE ?= 1
+SCREEN_QUEUE_PROFILE ?= 0
 # Production switch for the temporary RX/TX investigation reports. Keep the
 # limiter, pacer, handover gate, and pressure feedback active when this is off.
-SCREEN_DATAPATH_PROFILE ?= 1
+SCREEN_DATAPATH_PROFILE ?= 0
 # Pace receive-window credit only for the iPhone screen TCP connection.  The
 # closed receiver is identified once by task plus its validated 128-byte frame
 # header; all other sockets retain the stock lwIP receive path.
@@ -985,21 +985,22 @@ SCREEN_TX_PRESSURE_CLEAN_MS ?= 500
 # Narrow backpressure diagnostic for the closed AirPlay sender's "screen block"
 # retry.  It samples only failed ScreenThread writes and stays independent of
 # the older, verbose frame/queue profiler.
-SCREEN_BLOCK_PROFILE ?= 1
+SCREEN_BLOCK_PROFILE ?= 0
 # Once a screen write identifies the video TCP PCB, summarize the returning
 # ACK cadence and advertised-window behavior.  This distinguishes a slow peer
 # reader from local USB/NCM queueing without restoring the verbose TCP profile.
-SCREEN_TCP_ACK_PROFILE ?= 1
+SCREEN_TCP_ACK_PROFILE ?= 0
 # Measure both the closed AirPlay converter call and the nested FDK AAC decode.
 # Reporting is windowed so the probe adds no per-frame UART traffic.
-AUDIO_DECODE_PROFILE ?= 1
+AUDIO_DECODE_PROFILE ?= 0
 AUDIO_DECODE_PROFILE_WINDOW_MS ?= 10000
 AUDIO_DECODE_PROFILE_SLOW_US ?= 10000
 # Only decoder calls are routed; all AAC encoder symbols remain on FDK.
 # 0: FDK only. 1: Helix for supported raw AAC-LC, automatic FDK fallback.
 AAC_DECODER_MODE ?= 1
+AAC_DECODER_ROUTE_PROFILE ?= 0
 AAC_DECODER_ROUTE_PROFILE_WINDOW_MS ?= 10000
-AAC_DECODER_MODE_STAMP := $(OBJ_DIR)/.aac_decoder_mode_$(AAC_DECODER_MODE)
+AAC_DECODER_MODE_STAMP := $(OBJ_DIR)/.aac_decoder_mode_$(AAC_DECODER_MODE)-profile$(AAC_DECODER_ROUTE_PROFILE)
 $(AAC_DECODER_MODE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.aac_decoder_mode_*
@@ -1064,7 +1065,7 @@ TCP_OWNED_AGE_PROFILE ?= 0
 # Keep the expensive, already-concluded diagnostic probes independently
 # switchable.  The normal screen timing/backlog profiler does not need them.
 SCREEN_FRAME_FORMAT_PROFILE ?= 0
-SCREEN_TCP_BUFFER_PROFILE ?= 1
+SCREEN_TCP_BUFFER_PROFILE ?= 0
 # When SCREEN_QUEUE_PROFILE is enabled, correlate the local tick used to
 # generate each outgoing screen NTP timestamp with that frame's receive time.
 SCREEN_TIMESTAMP_PROFILE ?= 0
@@ -1072,17 +1073,18 @@ USB_HCD_PROFILE ?= 0
 USB_HCD_CHANNEL_PROFILE ?= 0
 # Correlate customer NCM send, HCD bulk-OUT attempts, observed URB completion,
 # return, and the source pbuf release.  Counters only; customer flow is intact.
-USB_TX_LIFETIME_PROFILE ?= 1
+USB_TX_LIFETIME_PROFILE ?= 0
 # Hardware-gated NCM wrapper. It calls the customer builder exactly once and,
 # for validated chained pbufs, removes only the redundant second payload copy.
 NCM_WRAP_PROFILE ?= 1
 NCM_WRAP_COPY_ELIDE ?= 1
+NCM_WRAP_STATS ?= 0
 ifneq ($(NCM_WRAP_COPY_ELIDE),0)
 ifneq ($(NCM_WRAP_PROFILE),1)
 $(error NCM_WRAP_COPY_ELIDE requires NCM_WRAP_PROFILE=1)
 endif
 endif
-USB_PROFILE_STAMP := $(OBJ_DIR)/.usb_profile_h$(USB_HCD_PROFILE)-c$(USB_HCD_CHANNEL_PROFILE)-life$(USB_TX_LIFETIME_PROFILE)-ncmwrap$(NCM_WRAP_PROFILE)-ncmelide$(NCM_WRAP_COPY_ELIDE)
+USB_PROFILE_STAMP := $(OBJ_DIR)/.usb_profile_h$(USB_HCD_PROFILE)-c$(USB_HCD_CHANNEL_PROFILE)-life$(USB_TX_LIFETIME_PROFILE)-ncmwrap$(NCM_WRAP_PROFILE)-ncmelide$(NCM_WRAP_COPY_ELIDE)-ncmstats$(NCM_WRAP_STATS)
 $(USB_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.usb_profile_*
@@ -1094,7 +1096,7 @@ NET_QUEUE_PROFILE ?= 0
 # Make the RX/queue/TX diagnostic switches safe for incremental builds. These
 # options affect both the wrappers and lwIP internals, so changing one must
 # recompile every consumer instead of silently retaining yesterday's objects.
-SCREEN_FLOW_PROFILE_STAMP := $(OBJ_DIR)/.screen_flow_profile_q$(SCREEN_QUEUE_PROFILE)-fmt$(SCREEN_FRAME_FORMAT_PROFILE)-buf$(SCREEN_TCP_BUFFER_PROFILE)-ack$(SCREEN_TCP_ACK_PROFILE)
+SCREEN_FLOW_PROFILE_STAMP := $(OBJ_DIR)/.screen_flow_profile_q$(SCREEN_QUEUE_PROFILE)-dp$(SCREEN_DATAPATH_PROFILE)-fmt$(SCREEN_FRAME_FORMAT_PROFILE)-buf$(SCREEN_TCP_BUFFER_PROFILE)-block$(SCREEN_BLOCK_PROFILE)-ack$(SCREEN_TCP_ACK_PROFILE)
 $(SCREEN_FLOW_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.screen_flow_profile_*
@@ -1107,6 +1109,19 @@ $(SCREEN_FLOW_PROFILE_STAMP):
 	../../../component/common/network/lwip/lwip_v2.1.2/src/api/sockets.o \
 	../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_in.o: \
 	$(SCREEN_FLOW_PROFILE_STAMP)
+# These switches affect several standalone profiler/wrapper objects.  Track
+# them explicitly so a diagnostic override cannot reuse release-mode objects.
+DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)
+$(DIAGNOSTIC_PROFILE_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.diagnostic_profile_*
+	@touch $@
+../src/carbox/pc_profiler.o \
+	../src/carbox/irq_profiler.o \
+	../src/carbox/usb_hcd_profiler.o \
+	../src/carbox/audio_decode_profiler.o \
+	../src/carbox/libusb_ref_compat/libusb_ref_compat_os.o: \
+	$(DIAGNOSTIC_PROFILE_STAMP)
 # Stage 1 validates the preallocated pbuf-pointer mailbox path without
 # aggregation, delay, or GTimer.  Each WLAN packet is still posted immediately.
 TCPIP_RX_BATCH_STAGE1 ?= 1
@@ -1197,6 +1212,7 @@ GCCFLAGS += -DCONFIG_AUDIO_DECODE_PROFILE=$(AUDIO_DECODE_PROFILE)
 GCCFLAGS += -DAUDIO_DECODE_PROFILE_WINDOW_MS=$(AUDIO_DECODE_PROFILE_WINDOW_MS)
 GCCFLAGS += -DAUDIO_DECODE_PROFILE_SLOW_US=$(AUDIO_DECODE_PROFILE_SLOW_US)
 GCCFLAGS += -DCARBOX_AAC_DECODER_MODE=$(AAC_DECODER_MODE)
+GCCFLAGS += -DCONFIG_AAC_DECODER_ROUTE_PROFILE=$(AAC_DECODER_ROUTE_PROFILE)
 GCCFLAGS += -DAAC_DECODER_ROUTE_PROFILE_WINDOW_MS=$(AAC_DECODER_ROUTE_PROFILE_WINDOW_MS)
 GCCFLAGS += -DCONFIG_AAC_DECODER_BENCHMARK=$(AAC_DECODER_BENCHMARK)
 GCCFLAGS += -DAAC_DECODER_BENCHMARK_LOOPS=$(AAC_DECODER_BENCHMARK_LOOPS)
@@ -1223,6 +1239,7 @@ GCCFLAGS += -DCONFIG_USB_HCD_CHANNEL_PROFILE=$(USB_HCD_CHANNEL_PROFILE)
 GCCFLAGS += -DCONFIG_USB_TX_LIFETIME_PROFILE=$(USB_TX_LIFETIME_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_WRAP_PROFILE=$(NCM_WRAP_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_WRAP_COPY_ELIDE=$(NCM_WRAP_COPY_ELIDE)
+GCCFLAGS += -DCONFIG_NCM_WRAP_STATS=$(NCM_WRAP_STATS)
 GCCFLAGS += -DCONFIG_NET_QUEUE_PROFILE=$(NET_QUEUE_PROFILE)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_STAGE1=$(TCPIP_RX_BATCH_STAGE1)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_TIMER_PROBE=$(TCPIP_RX_BATCH_TIMER_PROBE)
