@@ -40,9 +40,19 @@ VENDOR_ARCHIVE_EXTERNALS := $(BUILD_DIR)/vendor_archive.externals
 RECOVERED_ARCHIVE_EXTERNALS := $(BUILD_DIR)/recovered_archive.externals
 EXPECTED_ARCHIVE_MEMBERS := $(BUILD_DIR)/expected_archive.members
 RECOVERED_ARCHIVE_MEMBERS := $(BUILD_DIR)/recovered_archive.members
+ARCHIVE_STAGE_DIR := $(BUILD_DIR)/archive_stage
+VENDOR_MEMBER_LIST := $(BUILD_DIR)/vendor_archive.members
+MIXED_MEMBER_LIST := $(BUILD_DIR)/mixed_archive.members
+ARCHIVE_STAGE_STAMP := $(ARCHIVE_STAGE_DIR)/.prepared
+OBJECT_DEPS := $(RECOVERED_RX_OBJECT:.o=.d) \
+	$(COPY_PARITY_RX_OBJECT:.o=.d) \
+	$(RECOVERED_SKBUFF_OBJECT:.o=.d) \
+	$(VENDOR_PARITY_SKBUFF_OBJECT:.o=.d) \
+	$(DMA_MANAGER_OBJECT:.o=.d)
 
 CFLAGS := -march=armv8-m.main+dsp -mthumb -mcmse -mfloat-abi=softfp
 CFLAGS += -mfpu=fpv5-sp-d16 -Os -c -ffunction-sections -fdata-sections
+CFLAGS += -MMD -MP
 CFLAGS += -Wall -Wextra -Werror
 CFLAGS += -DCONFIG_PLATFORM_8195B -DCONFIG_PLATFORM_8195BHP
 CFLAGS += -DCONFIG_BUILD_RAM=1 -DCONFIG_BUILD_LIB=1
@@ -138,14 +148,43 @@ $(DMA_MANAGER_OBJECT): $(DMA_MANAGER_SOURCE) $(DMA_MANAGER_HEADER) | $(BUILD_DIR
 	@echo "  CC    WLAN RX DMA buffer manager"
 	@$(CC) $(CFLAGS) $< -o $@
 
-# Keep all unmodified vendor members.  ar replaces rtl8195b_recv.o and
-# freertos_skbuff.o by member name and adds the C DMA manager; rtw_recv.o
-# remains byte-identical to vendor.
-$(ZERO_COPY_ARCHIVE): $(ORIGINAL_ARCHIVE) $(RECOVERED_RX_OBJECT) \
-		$(RECOVERED_SKBUFF_OBJECT) $(DMA_MANAGER_OBJECT) Makefile
-	@cp $(ORIGINAL_ARCHIVE) $@
-	@$(AR) rcsD $@ $(RECOVERED_RX_OBJECT) $(RECOVERED_SKBUFF_OBJECT) \
-		$(DMA_MANAGER_OBJECT)
+# Build a complete object staging tree from the vendor archive, then replace
+# only the two source-recovered members and append the source-built DMA manager.
+# The manifest preserves vendor member order so link selection remains stable.
+$(ARCHIVE_STAGE_STAMP): $(ORIGINAL_ARCHIVE) $(RECOVERED_RX_OBJECT) \
+		$(RECOVERED_SKBUFF_OBJECT) $(DMA_MANAGER_OBJECT) Makefile | $(BUILD_DIR)
+	@echo "  EXTRACT vendor lib_wlan.a -> $(ARCHIVE_STAGE_DIR)"
+	@$(RM) -r $(ARCHIVE_STAGE_DIR)
+	@mkdir -p $(ARCHIVE_STAGE_DIR)
+	@$(AR) t $(ORIGINAL_ARCHIVE) > $(VENDOR_MEMBER_LIST)
+	@test -s $(VENDOR_MEMBER_LIST) || \
+		{ echo "ERROR: vendor archive contains no members"; exit 1; }
+	@test "$$(sort $(VENDOR_MEMBER_LIST) | uniq -d | wc -l)" = 0 || \
+		{ echo "ERROR: duplicate vendor archive member names are unsupported"; \
+		  sort $(VENDOR_MEMBER_LIST) | uniq -d; exit 1; }
+	@cd $(ARCHIVE_STAGE_DIR) && $(AR) x $(abspath $(ORIGINAL_ARCHIVE))
+	@cp $(RECOVERED_RX_OBJECT) $(ARCHIVE_STAGE_DIR)/rtl8195b_recv.o
+	@cp $(RECOVERED_SKBUFF_OBJECT) $(ARCHIVE_STAGE_DIR)/freertos_skbuff.o
+	@cp $(DMA_MANAGER_OBJECT) $(ARCHIVE_STAGE_DIR)/wlan_rx_dma_mgr.o
+	@cp $(VENDOR_MEMBER_LIST) $(MIXED_MEMBER_LIST)
+	@echo wlan_rx_dma_mgr.o >> $(MIXED_MEMBER_LIST)
+	@touch $@
+
+$(ZERO_COPY_ARCHIVE): $(ARCHIVE_STAGE_STAMP) Makefile
+	@echo "  AR    staged vendor + source-built objects -> $@"
+	@$(RM) $@.tmp
+	@set -e; first=1; while IFS= read -r member; do \
+		test -f "$(ARCHIVE_STAGE_DIR)/$$member" || \
+			{ echo "ERROR: missing staged member $$member"; exit 1; }; \
+		if [ $$first = 1 ]; then \
+			$(AR) rcsD $@.tmp "$(ARCHIVE_STAGE_DIR)/$$member"; first=0; \
+		else \
+			$(AR) qD $@.tmp "$(ARCHIVE_STAGE_DIR)/$$member"; \
+		fi; \
+	done < $(MIXED_MEMBER_LIST); \
+	test $$first = 0 || { echo "ERROR: mixed archive manifest is empty"; exit 1; }
+	@$(AR) sD $@.tmp
+	@mv -f $@.tmp $@
 	@test "$$($(AR) t $@ | grep -c '^rtl8195b_recv.o$$')" = 1 || \
 		{ echo "ERROR: recovered RX member missing or duplicated"; exit 1; }
 	@test "$$($(AR) t $@ | grep -c '^freertos_skbuff.o$$')" = 1 || \
@@ -292,4 +331,8 @@ clean:
 		$(VENDOR_ARCHIVE_GLOBALS) $(RECOVERED_ARCHIVE_GLOBALS) \
 		$(VENDOR_ARCHIVE_RAW_UNDEFINED) $(RECOVERED_ARCHIVE_RAW_UNDEFINED) \
 		$(VENDOR_ARCHIVE_EXTERNALS) $(RECOVERED_ARCHIVE_EXTERNALS) \
-		$(EXPECTED_ARCHIVE_MEMBERS) $(RECOVERED_ARCHIVE_MEMBERS)
+		$(EXPECTED_ARCHIVE_MEMBERS) $(RECOVERED_ARCHIVE_MEMBERS) \
+		$(VENDOR_MEMBER_LIST) $(MIXED_MEMBER_LIST) $(OBJECT_DEPS)
+	@$(RM) -r $(ARCHIVE_STAGE_DIR)
+
+-include $(OBJECT_DEPS)
