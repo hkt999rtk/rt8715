@@ -7,10 +7,20 @@ all: ram_lp ram_is
 OS := $(shell uname)
 .PRECIOUS: %.o %.d %.i
 
+# A caller-supplied CROSS_COMPILE may point at a toolchain installed outside
+# the repository.  Do not require or unpack the legacy in-tree toolchain when
+# that compiler is already executable.
+EXTERNAL_TOOLCHAIN_CC := $(if $(filter command\ line environment environment\ override,$(origin CROSS_COMPILE)),\
+	$(shell command -v $(CROSS_COMPILE)gcc 2>/dev/null))
+
 # Parallel build: auto-detect CPU cores (fallback to 4)
 MAKEFLAGS += --no-print-directory -j$(shell nproc 2>/dev/null || echo 4)
 	
 .PHONY: toolchain
+ifneq ($(strip $(EXTERNAL_TOOLCHAIN_CC)),)
+toolchain:
+	@echo "Using external toolchain: $(EXTERNAL_TOOLCHAIN_CC)"
+else
 toolchain:
 ifeq ($(findstring CYGWIN, $(OS)), CYGWIN)
 	if [ ! -d ../../../tools/arm-none-eabi-gcc/asdk ] ; then mkdir ../../../tools/arm-none-eabi-gcc/asdk; fi;\
@@ -26,6 +36,7 @@ endif
 ifeq ($(findstring Linux, $(OS)), Linux)
 	if [ ! -d ../../../tools/arm-none-eabi-gcc/asdk ] ; then mkdir ../../../tools/arm-none-eabi-gcc/asdk; fi;\
 	if [ ! -d ../../../tools/arm-none-eabi-gcc/asdk/linux ] ; then tar -jxf ../../../tools/arm-none-eabi-gcc/asdk-6.4.1-linux-newlib-build-3026-x86_64.tar.bz2 -C ../../../tools/arm-none-eabi-gcc/ ; mv ../../../tools/arm-none-eabi-gcc/asdk-6.4.1/linux ../../../tools/arm-none-eabi-gcc/asdk/linux ; rmdir ../../../tools/arm-none-eabi-gcc/asdk-6.4.1; fi
+endif
 endif
 
 # ----- Incremental builds (only recompile changed files) -----
