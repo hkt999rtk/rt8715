@@ -213,7 +213,7 @@ ifeq ($(CARBOX_USB_LIB),1)
 # a derived link archive without its old carplay_ota_compat.o and compile our
 # source replacement below.  All other customer objects remain byte-for-byte
 # identical to the latest supplied archive.
-CARBOX_USB_VENDOR_ARCHIVE := usb_lib/build/lib_usbsmart_ota.a
+CARBOX_USB_VENDOR_ARCHIVE := usb_lib/build/lib_usbsmart.a
 CARBOX_USB_ARCHIVE := usb_lib/build/lib_usbsmart_link.a
 endif
 
@@ -756,6 +756,7 @@ SRC_C += ../src/carbox/pc_profiler.c
 SRC_C += ../src/carbox/ota_local_upload_page.c
 SRC_C += ../src/carbox/ota/carplay_ota_compat.c
 SRC_C += ../src/carbox/irq_profiler.c
+SRC_C += ../src/carbox/usb_hcd_profiler.c
 SRC_C += ../src/carbox/gcd_sync_profiler.c
 SRC_C += ../src/carbox/screen_queue_profiler.c
 SRC_C += ../src/carbox/screen_rx_rate_limit.c
@@ -765,7 +766,9 @@ SRC_C += ../src/carbox/carbox_stubs.c
 SRC_C += ../src/carbox/libusb_ref_compat/libusb_ref_compat_hal.c
 SRC_C += ../src/carbox/libusb_ref_compat/libusb_ref_compat_os.c
 SRC_C += ../src/carbox/libusb_ref_compat/usb_ref_smart_compat.c
+SRC_C += ../src/carbox/libusb_ref_compat/usbsmart_otp_compat.c
 SRC_C += ../src/carbox/libusb_ref_compat/carplay_smart_api_stubs.c
+SRC_C += ../../../component/soc/realtek/8195b/misc/driver/efuse_logical_api.c
 SRC_C += ../src/carbox/vfs_compat/carbox_vfs_compat.c
 SRC_C += ../src/carbox/vfs_compat/vfs_wrap.c
 SRC_C += ../src/carbox/vfs_compat/vfs_fatfs.c
@@ -807,7 +810,6 @@ SRAM_C += ../src/carbox/screen_tx_direct_crypto.c
 # -------------------------------------------------------------------
 #@ERAM
 ERAM_C +=
-ERAM_C += ../src/carbox/usb_hcd_profiler.c
 # The RX hooks execute per packet; keep profiling out of XIP so the
 # instrumentation does not add flash stalls to the path being measured.
 ERAM_C += ../src/carbox/net_queue_profiler.c
@@ -882,60 +884,23 @@ TCP_OUTPUT_PROFILE ?= 0
 NCM_TX_PROFILE ?= 0
 # Move the closed synchronous NCM send/wait out of TCP_IP.
 NCM_TX_ASYNC ?= 1
-# Compact 10-second batch health report used to validate aggregation limits.
+# Compact 10-second asynchronous NCM transmit health report.
 NCM_TX_ASYNC_PROFILE ?= 0
-# Seal a multi-datagram NTB when it reaches either limit, or 5 ms after the
-# oldest retained Ethernet packet was queued.  The timeout is not sliding.
-NCM_TX_BATCH ?= 1
-NCM_TX_BATCH_MAX_PACKETS ?= 16
-NCM_TX_BATCH_MAX_BYTES ?= 4096
-NCM_TX_BATCH_TIMEOUT_MS ?= 1
-# Gather all pbuf fragments of a sealed NTB into the closed driver's contiguous
-# USB buffer with the linked-GDMA copyv path already validated by socket recv.
-# Header/table/cache-line edges stay on M33 and any busy/error falls back to a
-# complete CPU copy before the USB request is submitted.
-NCM_TX_BATCH_GDMA ?= 1
 PC_PROFILER ?= 1
 # Optional PC-level reports. Keep task utilization sampling enabled while
 # suppressing the verbose per-PC reports during IRQ-count investigation.
 PC_PROFILER_PC_DETAIL ?= 0
 PC_PROFILER_RTW_RECV_DETAIL ?= 0
 PC_PROFILER_RTW_DUMP_PROFILE ?= 0
-# Keep the IRQ hook/counter banks required by USB CH4 NAK coalescing, but stop
-# periodic IRQPROF reports once validation is complete.
 IRQ_PROFILE ?= 1
 IRQ_PROFILE_REPORT ?= 0
-# Diagnose the high-rate USB interrupt source by sampling GINTSTS & GINTMSK in
-# the IRQ trampoline.  This is independent of the aggregate IRQ counters.
+# Optional USB observations. These wrappers only record arguments/timing and
+# always preserve the customer implementation's calls and return values.
 IRQ_PROFILE_USB_CAUSE ?= 0
-# Low-overhead measurement at the existing ISR semaphore-give wrapper: count
-# successful wakeups and ISR-return yield requests only.
 IRQ_PROFILE_USB_HANDOFF ?= 0
-# Attribute channel-4 NAK/CHHLTD bottom-half service time and halt calls.
-# This is diagnostic only; the wrapper always calls the vendor implementation.
 IRQ_PROFILE_USB_CH4_FLOW ?= 0
-# Capture CDC-NCM NTB negotiation so channel-4's fixed 2 KiB receive submits
-# can be attributed to the device parameters or the host-side size selection.
 IRQ_PROFILE_USB_CH4_NCM ?= 0
-# After a channel-4 NAK, identify whether the next accepted receive submit or
-# CHHLTD arrives first. Diagnostic only; no HCD state or IRQ mask is changed.
 IRQ_PROFILE_USB_CH4_SEQUENCE ?= 0
-# Drop the stale NVIC latch just before the HCD task re-enables USB_IRQn, then
-# re-read the controller and software-pend any cause which arrived in the
-# clear/re-enable race window.
-USB_IRQ_SAFE_DEDUP ?= 1
-# Drop channel-3 ACK-only/non-PING causes in the IRQ top half.  The closed HCD
-# otherwise wakes its priority-11 task even though its ordinary ACK path is a
-# no-op.  PING ACK and every compound cause retain the vendor path.
-USB_IRQ_CH3_ACK_FASTPATH ?= 1
-# Defer a channel-4 NAK-only handoff until the hardware's following CHHLTD,
-# allowing the closed HCD to consume both latched reasons in one task wake.
-USB_IRQ_CH4_NAK_COALESCE ?= 1
-USB_IRQ_CH4_NAK_COALESCE_TIMEOUT_US ?= 50000
-# The closed HCD disables USB_IRQn in its top half and re-enables it only after
-# the ISR task drains HCINT.  Retain the original unsafe single-check experiment
-# as an off-by-default rollback reference; do not enable with SAFE_DEDUP.
-USB_IRQ_CLEAR_STALE_PENDING ?= 0
 MEMCPY_TASK_PROFILE ?= 0
 LARGE_MEMCPY_GDMA ?= 1
 LARGE_MEMCPY_GDMA_THRESHOLD ?= 4096
@@ -1091,8 +1056,6 @@ SCREEN_TCP_BUFFER_PROFILE ?= 1
 # generate each outgoing screen NTP timestamp with that frame's receive time.
 SCREEN_TIMESTAMP_PROFILE ?= 0
 USB_HCD_PROFILE ?= 0
-# Narrow NCM channel submit-size diagnostic.  This wraps only HCD submit and
-# is intentionally independent of the older verbose USB_HCD_PROFILE.
 USB_HCD_CHANNEL_PROFILE ?= 0
 NET_QUEUE_PROFILE ?= 0
 # Make the RX/queue/TX diagnostic switches safe for incremental builds. These
@@ -1144,11 +1107,6 @@ GCCFLAGS += -DCONFIG_TCP_OUTPUT_PROFILE=$(TCP_OUTPUT_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_TX_PROFILE=$(NCM_TX_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_TX_ASYNC=$(NCM_TX_ASYNC)
 GCCFLAGS += -DCONFIG_NCM_TX_ASYNC_PROFILE=$(NCM_TX_ASYNC_PROFILE)
-GCCFLAGS += -DCONFIG_NCM_TX_BATCH=$(NCM_TX_BATCH)
-GCCFLAGS += -DCONFIG_NCM_TX_BATCH_MAX_PACKETS=$(NCM_TX_BATCH_MAX_PACKETS)
-GCCFLAGS += -DCONFIG_NCM_TX_BATCH_MAX_BYTES=$(NCM_TX_BATCH_MAX_BYTES)
-GCCFLAGS += -DCONFIG_NCM_TX_BATCH_TIMEOUT_MS=$(NCM_TX_BATCH_TIMEOUT_MS)
-GCCFLAGS += -DCONFIG_NCM_TX_BATCH_GDMA=$(NCM_TX_BATCH_GDMA)
 GCCFLAGS += -DCONFIG_PC_PROFILER=$(PC_PROFILER)
 GCCFLAGS += -DCONFIG_PC_PROFILER_PC_DETAIL=$(PC_PROFILER_PC_DETAIL)
 GCCFLAGS += -DCONFIG_PC_PROFILER_RTW_RECV_DETAIL=$(PC_PROFILER_RTW_RECV_DETAIL)
@@ -1160,11 +1118,6 @@ GCCFLAGS += -DCONFIG_IRQ_PROFILE_USB_HANDOFF=$(IRQ_PROFILE_USB_HANDOFF)
 GCCFLAGS += -DCONFIG_IRQ_PROFILE_USB_CH4_FLOW=$(IRQ_PROFILE_USB_CH4_FLOW)
 GCCFLAGS += -DCONFIG_IRQ_PROFILE_USB_CH4_NCM=$(IRQ_PROFILE_USB_CH4_NCM)
 GCCFLAGS += -DCONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE=$(IRQ_PROFILE_USB_CH4_SEQUENCE)
-GCCFLAGS += -DCONFIG_USB_IRQ_SAFE_DEDUP=$(USB_IRQ_SAFE_DEDUP)
-GCCFLAGS += -DCONFIG_USB_IRQ_CH3_ACK_FASTPATH=$(USB_IRQ_CH3_ACK_FASTPATH)
-GCCFLAGS += -DCONFIG_USB_IRQ_CH4_NAK_COALESCE=$(USB_IRQ_CH4_NAK_COALESCE)
-GCCFLAGS += -DUSB_IRQ_CH4_NAK_COALESCE_TIMEOUT_US=$(USB_IRQ_CH4_NAK_COALESCE_TIMEOUT_US)
-GCCFLAGS += -DCONFIG_USB_IRQ_CLEAR_STALE_PENDING=$(USB_IRQ_CLEAR_STALE_PENDING)
 GCCFLAGS += -DCONFIG_MEMCPY_TASK_PROFILE=$(MEMCPY_TASK_PROFILE)
 GCCFLAGS += -DCONFIG_LARGE_MEMCPY_GDMA=$(LARGE_MEMCPY_GDMA)
 GCCFLAGS += -DLARGE_MEMCPY_GDMA_THRESHOLD=$(LARGE_MEMCPY_GDMA_THRESHOLD)
@@ -1296,12 +1249,6 @@ ifeq ($(PC_PROFILER_RTW_DUMP_PROFILE),1)
 LFLAGS += -Wl,--wrap=rtw_enter_critical -Wl,--wrap=rtw_exit_critical \
 	-Wl,--wrap=clean_cache_wlan -Wl,--wrap=rtl8195b_update_txdesc
 endif
-ifneq ($(filter 1,$(USB_IRQ_SAFE_DEDUP) $(USB_IRQ_CLEAR_STALE_PENDING)),)
-LFLAGS += -Wl,--wrap=usb_hal_enable_interrupt
-endif
-ifneq ($(filter 1,$(USB_IRQ_CH3_ACK_FASTPATH) $(USB_IRQ_CH4_NAK_COALESCE)),)
-LFLAGS += -Wl,--wrap=usb_hal_read_interrupts
-endif
 ifeq ($(IRQ_PROFILE_USB_CH4_FLOW),1)
 LFLAGS += -Wl,--wrap=usbh_hal_hc_halt
 endif
@@ -1313,9 +1260,6 @@ LFLAGS += -Wl,--wrap=dispatch_sync_f
 endif
 ifneq ($(strip $(filter-out -1,$(GCD_WORK_PRIORITY) $(USBH_ISR_TASK_PRIORITY) $(USBH_MAIN_TASK_PRIORITY))),)
 LFLAGS += -Wl,--wrap=xTaskCreate
-endif
-ifeq ($(NCM_TX_BATCH),1)
-LFLAGS += -Wl,--wrap=ncm_wrap_ntb
 endif
 ifeq ($(SCREEN_QUEUE_PROFILE),1)
 LFLAGS += -Wl,--wrap=AirPlayScreen_SendVideo
