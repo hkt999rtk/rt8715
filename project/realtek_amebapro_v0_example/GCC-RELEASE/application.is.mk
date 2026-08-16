@@ -864,7 +864,10 @@ NET_GDMA_OWNER_BOOST_PRIORITY ?= 11
 # RX ring hook. WLAN_RX_RING_SWAP enables the validated spare-buffer rotation;
 # disabling it leaves this as an observation-only legacy memcpy probe.
 WLAN_RX_SWAP_BRINGUP_PROFILE ?= 0
-WLAN_RX_RING_SWAP ?= 1
+WLAN_RX_RING_SWAP ?= 0
+# Source-recovered rtl8195b_recv.o uses ordinary skb-backed DMA buffers.
+# This is independent of the retired rtw_memcpy/kfree symbol-hook path.
+WLAN_RX_DMA_SKB ?= 1
 TCP_PHASE_PROFILE ?= 0
 # Detailed 10-second breakdown of tcp_input() processing. This is independent
 # of the compact 5-second TCP_PERF throughput/checksum summary above.
@@ -1134,6 +1137,7 @@ GCCFLAGS += -DCONFIG_NET_GDMA_STATS=$(NET_GDMA_STATS)
 GCCFLAGS += -DNET_GDMA_OWNER_BOOST_PRIORITY=$(NET_GDMA_OWNER_BOOST_PRIORITY)
 GCCFLAGS += -DCONFIG_WLAN_RX_SWAP_BRINGUP_PROFILE=$(WLAN_RX_SWAP_BRINGUP_PROFILE)
 GCCFLAGS += -DCONFIG_WLAN_RX_RING_SWAP=$(WLAN_RX_RING_SWAP)
+GCCFLAGS += -DCONFIG_WLAN_RX_DMA_SKB=$(WLAN_RX_DMA_SKB)
 GCCFLAGS += -DCONFIG_TCP_PHASE_PROFILE=$(TCP_PHASE_PROFILE)
 GCCFLAGS += -DCONFIG_TCP_CORE_PHASE_PROFILE=$(TCP_CORE_PHASE_PROFILE)
 GCCFLAGS += -DCONFIG_TCP_OUTPUT_PROFILE=$(TCP_OUTPUT_PROFILE)
@@ -1451,7 +1455,7 @@ LIBFLAGS =
 LIBFLAGS += ../../../component/soc/realtek/8195b/fwlib/hal-rtl8195b-hp/lib/lib/hal_pmc_hs.a
 LIBFLAGS += -L../../../component/soc/realtek/8195b/misc/bsp/lib/common/GCC/
 WLAN_RX_HOOK_DIR := ../../../component/common/drivers/wlan/realtek/wlan_rx_gdma
-WLAN_RX_HOOK_ARCHIVE := $(WLAN_RX_HOOK_DIR)/build/lib_wlan_rx_gdma.a
+WLAN_RX_HOOK_ARCHIVE := $(WLAN_RX_HOOK_DIR)/build/lib_wlan_zero_copy_minimal.a
 WLAN_RX_HOOK_ORIGINAL := ../../../component/soc/realtek/8195b/misc/bsp/lib/common/GCC/lib_wlan.a
 # lib_rtk264 is the standalone RTL8195B H.264 encoder wrapper.  It requires
 # lib_h264 plus the VOE/ISP video-subsystem HAL; keep all of them disabled as a
@@ -1464,7 +1468,7 @@ CARBOX_RTK264_SOURCE := $(CARBOX_RTK264_DIR)/lib_rtk264.c
 CARBOX_RTK264_HEADER := $(CARBOX_RTK264_DIR)/lib_rtk264.h
 CARBOX_RTK264_OBJECT := $(CARBOX_RTK264_BUILD_DIR)/lib_rtk264.o
 CARBOX_RTK264_ARCHIVE := $(CARBOX_RTK264_BUILD_DIR)/lib_rtk264.a
-ifneq ($(filter 1,$(NET_GDMA_COPY) $(WLAN_RX_SWAP_BRINGUP_PROFILE) $(WLAN_RX_RING_SWAP)),)
+ifeq ($(WLAN_RX_DMA_SKB),1)
 WLAN_RX_HOOK_LIBRARY := $(WLAN_RX_HOOK_ARCHIVE)
 else
 WLAN_RX_HOOK_LIBRARY := -l_wlan
@@ -1720,12 +1724,12 @@ endif
 # -------------------------------------------------------------------
 
 .PHONY: application
-ifneq ($(filter 1,$(NET_GDMA_COPY) $(WLAN_RX_SWAP_BRINGUP_PROFILE) $(WLAN_RX_RING_SWAP)),)
+ifeq ($(WLAN_RX_DMA_SKB),1)
 .PHONY: wlan_rx_hook
 wlan_rx_hook:
 	@$(MAKE) -C $(WLAN_RX_HOOK_DIR) \
 		CROSS_COMPILE=$(abspath $(CROSS_COMPILE)) \
-		ORIGINAL_ARCHIVE=$(abspath $(WLAN_RX_HOOK_ORIGINAL))
+		ORIGINAL_ARCHIVE=$(abspath $(WLAN_RX_HOOK_ORIGINAL)) zero-copy-minimal
 application: wlan_rx_hook
 endif
 $(CARBOX_RTK264_OBJECT): $(CARBOX_RTK264_SOURCE) $(CARBOX_RTK264_HEADER)
