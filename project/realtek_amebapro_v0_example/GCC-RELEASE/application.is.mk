@@ -881,11 +881,19 @@ TCP_OUTPUT_PROFILE ?= 0
 # Ten-second timing of the en3 CDC-NCM transmit path.  The closed NCM library
 # waits synchronously for USB completion, so measure that wait separately from
 # any lwIP pbuf-chain flattening done by ethernetif.c.
-NCM_TX_PROFILE ?= 0
+NCM_TX_PROFILE ?= 1
 # Move the closed synchronous NCM send/wait out of TCP_IP.
 NCM_TX_ASYNC ?= 1
 # Compact 10-second asynchronous NCM transmit health report.
 NCM_TX_ASYNC_PROFILE ?= 0
+# Compiler command-line changes are not tracked by ordinary source timestamps.
+# Force the sole consumer to rebuild whenever the observation mode changes.
+NCM_TX_PROFILE_STAMP := $(OBJ_DIR)/.ncm_tx_profile_$(NCM_TX_PROFILE)
+$(NCM_TX_PROFILE_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.ncm_tx_profile_*
+	@touch $@
+../../../component/common/network/lwip/lwip_v2.1.2/port/realtek/freertos/ethernetif.o: $(NCM_TX_PROFILE_STAMP)
 PC_PROFILER ?= 1
 # Optional PC-level reports. Keep task utilization sampling enabled while
 # suppressing the verbose per-PC reports during IRQ-count investigation.

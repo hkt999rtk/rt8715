@@ -516,6 +516,21 @@ struct ncm_tx_profile_stats {
 	u32_t chained_pbuf;
 	u32_t pbuf_segments;
 	u32_t pbuf_segments_max;
+	u32_t contiguous_storage;
+	u32_t external_storage;
+	u32_t custom_pbuf;
+	u32_t headroom_ge_32;
+	u32_t headroom_ge_64;
+	u32_t headroom_ge_128;
+	u32_t payload_align_4;
+	u32_t payload_align_32;
+	u32_t ref_1;
+	u32_t ref_2;
+	u32_t ref_gt_2;
+	u32_t eligible_head32;
+	u32_t ineligible_chain;
+	u32_t ineligible_storage;
+	u32_t ineligible_headroom;
 	u32_t send_ge_1ms;
 	u32_t send_ge_5ms;
 	u32_t send_ge_10ms;
@@ -582,6 +597,26 @@ static void ncm_tx_profile_report(u32_t now)
 	       (unsigned int)g_ncm_tx_profile.chained_pbuf,
 	       calls ? (unsigned int)((segments * 100U) / calls) : 0U,
 	       (unsigned int)(g_ncm_tx_profile.pbuf_segments_max * 100U));
+	printf("[NCMZC_PROFILE] candidate/head32=%u/%u reject chain/storage/head=%u/%u/%u "
+	       "storage contiguous/external/custom=%u/%u/%u\n",
+	       (unsigned int)g_ncm_tx_profile.calls,
+	       (unsigned int)g_ncm_tx_profile.eligible_head32,
+	       (unsigned int)g_ncm_tx_profile.ineligible_chain,
+	       (unsigned int)g_ncm_tx_profile.ineligible_storage,
+	       (unsigned int)g_ncm_tx_profile.ineligible_headroom,
+	       (unsigned int)g_ncm_tx_profile.contiguous_storage,
+	       (unsigned int)g_ncm_tx_profile.external_storage,
+	       (unsigned int)g_ncm_tx_profile.custom_pbuf);
+	printf("[NCMZC_PROFILE] headroom ge32/ge64/ge128=%u/%u/%u payload_align 4/32=%u/%u "
+	       "ref 1/2/>2=%u/%u/%u observation_only=1\n",
+	       (unsigned int)g_ncm_tx_profile.headroom_ge_32,
+	       (unsigned int)g_ncm_tx_profile.headroom_ge_64,
+	       (unsigned int)g_ncm_tx_profile.headroom_ge_128,
+	       (unsigned int)g_ncm_tx_profile.payload_align_4,
+	       (unsigned int)g_ncm_tx_profile.payload_align_32,
+	       (unsigned int)g_ncm_tx_profile.ref_1,
+	       (unsigned int)g_ncm_tx_profile.ref_2,
+	       (unsigned int)g_ncm_tx_profile.ref_gt_2);
 	printf("[NCMTXPROF] phase_us total/flatten/send/other=%u/%u/%u/%u avg=%u/%u/%u/%u "
 	       "max total/flatten/send=%u/%u/%u send_ge_ms 1/5/10/20=%u/%u/%u/%u\n",
 	       (unsigned int)ncm_tx_profile_cycles_to_us(g_ncm_tx_profile.total_cycles),
@@ -616,15 +651,30 @@ static void ncm_tx_profile_report(u32_t now)
 	g_ncm_tx_profile.window_start_us = now;
 }
 
-static void ncm_tx_profile_commit(u32_t bytes, u32_t segments, int result,
+static void ncm_tx_profile_commit(const struct pbuf *p, u32_t bytes,
+				  u32_t segments, int result,
 				  u32_t total_cycles, u32_t flatten_cycles,
 				  u32_t send_cycles)
 {
 	u32_t bin = ncm_tx_profile_size_bin(bytes);
 	u32_t send_us = ncm_tx_profile_cycles_to_us(send_cycles);
 	u32_t accounted = flatten_cycles + send_cycles;
-	u32_t other_cycles = total_cycles - accounted;
+	u32_t other_cycles = total_cycles >= accounted ? total_cycles - accounted : 0U;
 	u32_t now = hal_read_curtime_us();
+	u32_t headroom = 0U;
+	u8_t contiguous = 0U;
+
+	/* Mirror only pbuf_add_header_impl()'s bounds calculation.  Do not move
+	 * payload, alter lengths, or touch ownership in this observation stage. */
+	if ((p->type_internal & PBUF_TYPE_FLAG_STRUCT_DATA_CONTIGUOUS) != 0U) {
+		const u8_t *base = (const u8_t *)p +
+			LWIP_MEM_ALIGN_SIZE(sizeof(struct pbuf));
+		const u8_t *payload = (const u8_t *)p->payload;
+		contiguous = 1U;
+		if (payload >= base) {
+			headroom = (u32_t)(payload - base);
+		}
+	}
 
 	g_ncm_tx_profile.calls++;
 	if (result == 0) {
@@ -637,6 +687,35 @@ static void ncm_tx_profile_commit(u32_t bytes, u32_t segments, int result,
 		g_ncm_tx_profile.single_pbuf++;
 	} else {
 		g_ncm_tx_profile.chained_pbuf++;
+	}
+	if (contiguous != 0U) {
+		g_ncm_tx_profile.contiguous_storage++;
+	} else {
+		g_ncm_tx_profile.external_storage++;
+	}
+	if ((p->flags & PBUF_FLAG_IS_CUSTOM) != 0U) {
+		g_ncm_tx_profile.custom_pbuf++;
+	}
+	if (headroom >= 32U) g_ncm_tx_profile.headroom_ge_32++;
+	if (headroom >= 64U) g_ncm_tx_profile.headroom_ge_64++;
+	if (headroom >= 128U) g_ncm_tx_profile.headroom_ge_128++;
+	if ((((mem_ptr_t)p->payload) & 3U) == 0U) g_ncm_tx_profile.payload_align_4++;
+	if ((((mem_ptr_t)p->payload) & 31U) == 0U) g_ncm_tx_profile.payload_align_32++;
+	if (p->ref == 1U) {
+		g_ncm_tx_profile.ref_1++;
+	} else if (p->ref == 2U) {
+		g_ncm_tx_profile.ref_2++;
+	} else {
+		g_ncm_tx_profile.ref_gt_2++;
+	}
+	if (segments > 1U) {
+		g_ncm_tx_profile.ineligible_chain++;
+	} else if (contiguous == 0U) {
+		g_ncm_tx_profile.ineligible_storage++;
+	} else if (headroom < 32U) {
+		g_ncm_tx_profile.ineligible_headroom++;
+	} else {
+		g_ncm_tx_profile.eligible_head32++;
 	}
 	g_ncm_tx_profile.pbuf_segments += segments;
 	if (segments > g_ncm_tx_profile.pbuf_segments_max) {
@@ -803,7 +882,7 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
 				profile_flatten_cycles = DWT->CYCCNT -
 					profile_flatten_start_cycles;
-				ncm_tx_profile_commit((u32_t)p->tot_len, profile_segments,
+				ncm_tx_profile_commit(p, (u32_t)p->tot_len, profile_segments,
 					-1, DWT->CYCCNT - profile_start_cycles,
 					profile_flatten_cycles, 0U);
 #endif
@@ -838,7 +917,7 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 #endif
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
 	profile_send_cycles = DWT->CYCCNT - profile_send_start_cycles;
-	ncm_tx_profile_commit(size, profile_segments, ret,
+	ncm_tx_profile_commit(p, size, profile_segments, ret,
 		DWT->CYCCNT - profile_start_cycles, profile_flatten_cycles,
 		profile_send_cycles);
 #endif
