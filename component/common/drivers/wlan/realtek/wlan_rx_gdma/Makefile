@@ -38,6 +38,8 @@ VENDOR_ARCHIVE_RAW_UNDEFINED := $(BUILD_DIR)/vendor_archive.raw-undefined
 RECOVERED_ARCHIVE_RAW_UNDEFINED := $(BUILD_DIR)/recovered_archive.raw-undefined
 VENDOR_ARCHIVE_EXTERNALS := $(BUILD_DIR)/vendor_archive.externals
 RECOVERED_ARCHIVE_EXTERNALS := $(BUILD_DIR)/recovered_archive.externals
+EXPECTED_ARCHIVE_MEMBERS := $(BUILD_DIR)/expected_archive.members
+RECOVERED_ARCHIVE_MEMBERS := $(BUILD_DIR)/recovered_archive.members
 
 CFLAGS := -march=armv8-m.main+dsp -mthumb -mcmse -mfloat-abi=softfp
 CFLAGS += -mfpu=fpv5-sp-d16 -Os -c -ffunction-sections -fdata-sections
@@ -165,6 +167,21 @@ $(DROPIN_ARCHIVE): verify
 verify: $(ZERO_COPY_ARCHIVE)
 	@$(AR) p $(ORIGINAL_ARCHIVE) rtl8195b_recv.o > $(VENDOR_RX_OBJECT)
 	@$(AR) p $(ORIGINAL_ARCHIVE) freertos_skbuff.o > $(VENDOR_SKBUFF_OBJECT)
+	@{ $(AR) t $(ORIGINAL_ARCHIVE); echo wlan_rx_dma_mgr.o; } | \
+		sort | uniq -c > $(EXPECTED_ARCHIVE_MEMBERS)
+	@$(AR) t $(ZERO_COPY_ARCHIVE) | sort | uniq -c > $(RECOVERED_ARCHIVE_MEMBERS)
+	@cmp -s $(EXPECTED_ARCHIVE_MEMBERS) $(RECOVERED_ARCHIVE_MEMBERS) || \
+		{ echo "ERROR: zero-copy archive member inventory differs from vendor plus DMA manager"; \
+		  diff -u $(EXPECTED_ARCHIVE_MEMBERS) $(RECOVERED_ARCHIVE_MEMBERS); exit 1; }
+	@test "$$($(AR) p $(ZERO_COPY_ARCHIVE) rtl8195b_recv.o | sha256sum | cut -d' ' -f1)" = \
+		"$$(sha256sum $(RECOVERED_RX_OBJECT) | cut -d' ' -f1)" || \
+		{ echo "ERROR: archived rtl8195b_recv.o differs from compiled replacement"; exit 1; }
+	@test "$$($(AR) p $(ZERO_COPY_ARCHIVE) freertos_skbuff.o | sha256sum | cut -d' ' -f1)" = \
+		"$$(sha256sum $(RECOVERED_SKBUFF_OBJECT) | cut -d' ' -f1)" || \
+		{ echo "ERROR: archived freertos_skbuff.o differs from compiled replacement"; exit 1; }
+	@test "$$($(AR) p $(ZERO_COPY_ARCHIVE) wlan_rx_dma_mgr.o | sha256sum | cut -d' ' -f1)" = \
+		"$$(sha256sum $(DMA_MANAGER_OBJECT) | cut -d' ' -f1)" || \
+		{ echo "ERROR: archived wlan_rx_dma_mgr.o differs from compiled DMA manager"; exit 1; }
 	@$(NM) -g --defined-only -P $(VENDOR_RX_OBJECT) | \
 		cut -d' ' -f1,2 | sort -u > $(VENDOR_RX_GLOBALS)
 	@$(NM) -g --defined-only -P $(RECOVERED_RX_OBJECT) | \
@@ -274,4 +291,5 @@ clean:
 		$(VENDOR_SKBUFF_DATA_ABI) $(RECOVERED_SKBUFF_DATA_ABI) \
 		$(VENDOR_ARCHIVE_GLOBALS) $(RECOVERED_ARCHIVE_GLOBALS) \
 		$(VENDOR_ARCHIVE_RAW_UNDEFINED) $(RECOVERED_ARCHIVE_RAW_UNDEFINED) \
-		$(VENDOR_ARCHIVE_EXTERNALS) $(RECOVERED_ARCHIVE_EXTERNALS)
+		$(VENDOR_ARCHIVE_EXTERNALS) $(RECOVERED_ARCHIVE_EXTERNALS) \
+		$(EXPECTED_ARCHIVE_MEMBERS) $(RECOVERED_ARCHIVE_MEMBERS)
