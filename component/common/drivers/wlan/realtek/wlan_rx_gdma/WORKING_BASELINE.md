@@ -42,3 +42,19 @@ The same validated object composition was promoted from the temporary
   `adopted=24`, `live=24`, and `fallback=0/0`.
 - Observed TCP backpressure recovered normally: no pending screen-block
   episode, queue overflow, zero advertised window, or zero-copy fallback.
+
+## Clean-clone validation
+
+Commit `5e18a17` was cloned with `--no-hardlinks` into a new worktree with no
+untracked toolchain link, prior build output, or generated rootfs metadata. A
+full `make clean` followed by `make all` completed using an explicitly supplied
+external `CROSS_COMPILE` path.
+
+- Firmware build ID: `20260816122017_7A7D`
+- `application_is/flash_is.bin` SHA-256:
+  `5d85cf7b9bb28d108c9577fd7e4d776427c8316534464479b37efa10ffd4430b`
+- `build/lib_wlan_zero_copy.a` SHA-256:
+  `575225c264f0d4fb855bb33b69c74c535bb18b84d6b8a2a60fbc02129291a0f6`
+- Hardware result: CarPlay pairing, video, and audio operational.
+- Link result: canonical `lib_wlan_zero_copy.a` only; no legacy minimal archive.
+- Placement result: `rtl8195b_recv_tasklet` remained at address `0x00010000`.
