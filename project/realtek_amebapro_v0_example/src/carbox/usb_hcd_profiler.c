@@ -17,6 +17,10 @@
 #define CONFIG_USB_HCD_CHANNEL_PROFILE 0
 #endif
 
+#ifndef CONFIG_USB_TX_LIFETIME_PROFILE
+#define CONFIG_USB_TX_LIFETIME_PROFILE 0
+#endif
+
 #ifndef CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE
 #define CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE 0
 #endif
@@ -218,6 +222,390 @@ void usb_hcd_profiler_report(uint32_t sequence)
 		  (unsigned long)usbprof_snapshot.isr_sema_errors);
 }
 
+void usb_tx_lifetime_ncm_begin(const void *source, uint32_t length)
+{
+	(void)source;
+	(void)length;
+}
+
+void usb_tx_lifetime_ncm_end(int result)
+{
+	(void)result;
+}
+
+void usb_tx_lifetime_source_release(void)
+{
+}
+
+#elif CONFIG_USB_TX_LIFETIME_PROFILE
+
+/*
+ * Correlate one synchronous customer NCM send with the HCD OUT requests it
+ * issues.  This stage is observation-only: every wrapped function calls the
+ * customer implementation exactly once and preserves its return value.
+ */
+#define USBTXLIFE_CHANNELS 16U
+#define USBTXLIFE_STATES    8U
+
+typedef struct usbtxlife_channel_s {
+	uint32_t start_cycles;
+	uint32_t scope_sequence;
+	const uint8_t *buffer;
+	uint16_t length;
+	uint8_t active;
+} usbtxlife_channel_t;
+
+typedef struct usbtxlife_scope_s {
+	const uint8_t *source;
+	uint32_t source_length;
+	uint32_t start_cycles;
+	uint32_t end_cycles;
+	uint32_t sequence;
+	uint32_t submits;
+	uint32_t terminals;
+	uint8_t active;
+	uint8_t awaiting_release;
+} usbtxlife_scope_t;
+
+typedef struct usbtxlife_stats_s {
+	uint32_t logical_calls;
+	uint32_t logical_ok;
+	uint32_t logical_error;
+	uint32_t logical_bytes;
+	uint32_t logical_cycles;
+	uint32_t logical_cycles_max;
+	uint32_t logical_no_submit;
+	uint32_t logical_one_submit;
+	uint32_t logical_multi_submit;
+	uint32_t logical_submits;
+	uint32_t logical_terminals;
+	uint32_t logical_return_pending;
+	uint32_t source_releases;
+	uint32_t source_release_anomaly;
+	uint32_t source_release_pending;
+	uint32_t source_release_cycles;
+	uint32_t source_release_cycles_max;
+	uint32_t submit_calls;
+	uint32_t submit_errors;
+	uint32_t submit_bytes;
+	uint32_t submit_scoped;
+	uint32_t submit_replace_pending;
+	uint32_t submit_direct_exact;
+	uint32_t submit_direct_range;
+	uint32_t submit_internal;
+	uint32_t terminal_calls;
+	uint32_t terminal_state[USBTXLIFE_STATES];
+	uint32_t terminal_state_other;
+	uint32_t terminal_cycles;
+	uint32_t terminal_cycles_max;
+	uint32_t urb_polls;
+	uint32_t urb_idle_polls;
+	uint32_t live_now;
+	uint32_t live_max;
+} usbtxlife_stats_t;
+
+static usbtxlife_channel_t usbtxlife_channel[USBTXLIFE_CHANNELS];
+static usbtxlife_scope_t usbtxlife_scope;
+static usbtxlife_stats_t usbtxlife_live;
+static usbtxlife_stats_t usbtxlife_snapshot;
+
+extern uint8_t __real_usbh_hcd_hc_submit_request(
+	void *hcd, uint8_t channel, uint8_t direction, uint8_t ep_type,
+	uint8_t token, uint8_t *buffer, uint16_t length);
+extern uint8_t __real_usbh_hcd_hc_get_urb_state(void *hcd, uint8_t channel);
+
+static uint32_t usbtxlife_cycles_to_us(uint32_t cycles, uint32_t count)
+{
+	uint32_t cycles_per_us = SystemCoreClock / 1000000U;
+
+	return count != 0U && cycles_per_us != 0U ?
+		cycles / cycles_per_us / count : 0U;
+}
+
+static uint32_t usbtxlife_pending_for_scope(uint32_t sequence)
+{
+	uint32_t channel;
+	uint32_t pending = 0U;
+
+	for (channel = 0U; channel < USBTXLIFE_CHANNELS; channel++) {
+		if (usbtxlife_channel[channel].active != 0U &&
+		    usbtxlife_channel[channel].scope_sequence == sequence) {
+			pending++;
+		}
+	}
+	return pending;
+}
+
+void usb_tx_lifetime_ncm_begin(const void *source, uint32_t length)
+{
+	taskENTER_CRITICAL();
+	if (usbtxlife_scope.active != 0U ||
+	    usbtxlife_scope.awaiting_release != 0U) {
+		usbtxlife_live.source_release_anomaly++;
+	}
+	usbtxlife_scope.sequence++;
+	if (usbtxlife_scope.sequence == 0U) {
+		usbtxlife_scope.sequence = 1U;
+	}
+	usbtxlife_scope.source = (const uint8_t *)source;
+	usbtxlife_scope.source_length = length;
+	usbtxlife_scope.start_cycles = DWT->CYCCNT;
+	usbtxlife_scope.submits = 0U;
+	usbtxlife_scope.terminals = 0U;
+	usbtxlife_scope.active = 1U;
+	usbtxlife_scope.awaiting_release = 0U;
+	taskEXIT_CRITICAL();
+}
+
+void usb_tx_lifetime_ncm_end(int result)
+{
+	uint32_t elapsed;
+	uint32_t pending;
+
+	taskENTER_CRITICAL();
+	if (usbtxlife_scope.active == 0U) {
+		usbtxlife_live.source_release_anomaly++;
+		taskEXIT_CRITICAL();
+		return;
+	}
+	elapsed = DWT->CYCCNT - usbtxlife_scope.start_cycles;
+	pending = usbtxlife_pending_for_scope(usbtxlife_scope.sequence);
+	usbtxlife_live.logical_calls++;
+	usbtxlife_live.logical_bytes += usbtxlife_scope.source_length;
+	usbtxlife_live.logical_cycles += elapsed;
+	if (elapsed > usbtxlife_live.logical_cycles_max) {
+		usbtxlife_live.logical_cycles_max = elapsed;
+	}
+	if (result == 0) {
+		usbtxlife_live.logical_ok++;
+	} else {
+		usbtxlife_live.logical_error++;
+	}
+	if (usbtxlife_scope.submits == 0U) {
+		usbtxlife_live.logical_no_submit++;
+	} else if (usbtxlife_scope.submits == 1U) {
+		usbtxlife_live.logical_one_submit++;
+	} else {
+		usbtxlife_live.logical_multi_submit++;
+	}
+	usbtxlife_live.logical_submits += usbtxlife_scope.submits;
+	usbtxlife_live.logical_terminals += usbtxlife_scope.terminals;
+	if (pending != 0U) {
+		usbtxlife_live.logical_return_pending++;
+	}
+	usbtxlife_scope.end_cycles = DWT->CYCCNT;
+	usbtxlife_scope.active = 0U;
+	usbtxlife_scope.awaiting_release = 1U;
+	taskEXIT_CRITICAL();
+}
+
+void usb_tx_lifetime_source_release(void)
+{
+	uint32_t elapsed;
+	uint32_t pending;
+
+	taskENTER_CRITICAL();
+	if (usbtxlife_scope.awaiting_release == 0U) {
+		usbtxlife_live.source_release_anomaly++;
+		taskEXIT_CRITICAL();
+		return;
+	}
+	elapsed = DWT->CYCCNT - usbtxlife_scope.end_cycles;
+	pending = usbtxlife_pending_for_scope(usbtxlife_scope.sequence);
+	usbtxlife_live.source_releases++;
+	usbtxlife_live.source_release_cycles += elapsed;
+	if (elapsed > usbtxlife_live.source_release_cycles_max) {
+		usbtxlife_live.source_release_cycles_max = elapsed;
+	}
+	if (pending != 0U) {
+		usbtxlife_live.source_release_pending++;
+	}
+	usbtxlife_scope.awaiting_release = 0U;
+	usbtxlife_scope.source = NULL;
+	usbtxlife_scope.source_length = 0U;
+	taskEXIT_CRITICAL();
+}
+
+uint8_t __wrap_usbh_hcd_hc_submit_request(
+	void *hcd, uint8_t channel, uint8_t direction, uint8_t ep_type,
+	uint8_t token, uint8_t *buffer, uint16_t length)
+{
+	uint32_t start = DWT->CYCCNT;
+	uint8_t result = __real_usbh_hcd_hc_submit_request(
+		hcd, channel, direction, ep_type, token, buffer, length);
+
+	/* NCM data uses host bulk OUT.  Ignore control, interrupt and all RX URBs. */
+	if (direction == 0U && ep_type == 2U && channel < USBTXLIFE_CHANNELS) {
+		usbtxlife_channel_t *entry = &usbtxlife_channel[channel];
+
+		taskENTER_CRITICAL();
+		usbtxlife_live.submit_calls++;
+		usbtxlife_live.submit_bytes += length;
+		if (result != 0U) {
+			usbtxlife_live.submit_errors++;
+		} else {
+			if (entry->active != 0U) {
+				usbtxlife_live.submit_replace_pending++;
+			} else {
+				usbtxlife_live.live_now++;
+				if (usbtxlife_live.live_now > usbtxlife_live.live_max) {
+					usbtxlife_live.live_max = usbtxlife_live.live_now;
+				}
+			}
+			entry->start_cycles = start;
+			entry->scope_sequence = usbtxlife_scope.active != 0U ?
+				usbtxlife_scope.sequence : 0U;
+			entry->buffer = buffer;
+			entry->length = length;
+			entry->active = 1U;
+			if (usbtxlife_scope.active != 0U) {
+				uintptr_t source = (uintptr_t)usbtxlife_scope.source;
+				uintptr_t submit = (uintptr_t)buffer;
+
+				usbtxlife_scope.submits++;
+				usbtxlife_live.submit_scoped++;
+				if (submit == source &&
+				    (uint32_t)length == usbtxlife_scope.source_length) {
+					usbtxlife_live.submit_direct_exact++;
+				} else if (submit >= source &&
+					   (uint32_t)length <= usbtxlife_scope.source_length &&
+					   submit - source <=
+					   usbtxlife_scope.source_length - (uint32_t)length) {
+					usbtxlife_live.submit_direct_range++;
+				} else {
+					usbtxlife_live.submit_internal++;
+				}
+			}
+		}
+		taskEXIT_CRITICAL();
+	}
+	return result;
+}
+
+uint8_t __wrap_usbh_hcd_hc_get_urb_state(void *hcd, uint8_t channel)
+{
+	uint8_t state = __real_usbh_hcd_hc_get_urb_state(hcd, channel);
+
+	if (channel < USBTXLIFE_CHANNELS &&
+	    usbtxlife_channel[channel].active != 0U) {
+		taskENTER_CRITICAL();
+		if (usbtxlife_channel[channel].active != 0U) {
+			usbtxlife_live.urb_polls++;
+			if (state == 0U) {
+				usbtxlife_live.urb_idle_polls++;
+			} else {
+				uint32_t elapsed = DWT->CYCCNT -
+					usbtxlife_channel[channel].start_cycles;
+
+				usbtxlife_live.terminal_calls++;
+				usbtxlife_live.terminal_cycles += elapsed;
+				if (elapsed > usbtxlife_live.terminal_cycles_max) {
+					usbtxlife_live.terminal_cycles_max = elapsed;
+				}
+				if (state < USBTXLIFE_STATES) {
+					usbtxlife_live.terminal_state[state]++;
+				} else {
+					usbtxlife_live.terminal_state_other++;
+				}
+				if (usbtxlife_scope.active != 0U &&
+				    usbtxlife_channel[channel].scope_sequence ==
+				    usbtxlife_scope.sequence) {
+					usbtxlife_scope.terminals++;
+				}
+				usbtxlife_channel[channel].active = 0U;
+				if (usbtxlife_live.live_now != 0U) {
+					usbtxlife_live.live_now--;
+				}
+			}
+		}
+		taskEXIT_CRITICAL();
+	}
+	return state;
+}
+
+void usb_hcd_profiler_isr_sema_give(int success, int task_woken)
+{
+	(void)success;
+	(void)task_woken;
+}
+
+void usb_hcd_profiler_report(uint32_t sequence)
+{
+	uint32_t live_now;
+
+	taskENTER_CRITICAL();
+	usbtxlife_snapshot = usbtxlife_live;
+	live_now = usbtxlife_live.live_now;
+	memset(&usbtxlife_live, 0, sizeof(usbtxlife_live));
+	usbtxlife_live.live_now = live_now;
+	usbtxlife_live.live_max = live_now;
+	taskEXIT_CRITICAL();
+
+	rt_printf("[USBTXLIFE][%lu] logical calls/ok/error=%lu/%lu/%lu bytes=%lu "
+		  "time_us avg/max=%lu/%lu submit none/one/multi=%lu/%lu/%lu "
+		  "nested submit/terminal=%lu/%lu "
+		  "return_pending=%lu\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)usbtxlife_snapshot.logical_calls,
+		  (unsigned long)usbtxlife_snapshot.logical_ok,
+		  (unsigned long)usbtxlife_snapshot.logical_error,
+		  (unsigned long)usbtxlife_snapshot.logical_bytes,
+		  (unsigned long)usbtxlife_cycles_to_us(
+			usbtxlife_snapshot.logical_cycles,
+			usbtxlife_snapshot.logical_calls),
+		  (unsigned long)usbtxlife_cycles_to_us(
+			usbtxlife_snapshot.logical_cycles_max, 1U),
+		  (unsigned long)usbtxlife_snapshot.logical_no_submit,
+		  (unsigned long)usbtxlife_snapshot.logical_one_submit,
+		  (unsigned long)usbtxlife_snapshot.logical_multi_submit,
+		  (unsigned long)usbtxlife_snapshot.logical_submits,
+		  (unsigned long)usbtxlife_snapshot.logical_terminals,
+		  (unsigned long)usbtxlife_snapshot.logical_return_pending);
+	rt_printf("[USBTXLIFE][%lu] hcd submit/error=%lu/%lu bytes=%lu "
+		  "source scoped/exact/range/internal=%lu/%lu/%lu/%lu replace_pending=%lu "
+		  "terminal=%lu states0-7=%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu "
+		  "other=%lu time_us avg/max=%lu/%lu polls/idle=%lu/%lu live/max=%lu/%lu\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)usbtxlife_snapshot.submit_calls,
+		  (unsigned long)usbtxlife_snapshot.submit_errors,
+		  (unsigned long)usbtxlife_snapshot.submit_bytes,
+		  (unsigned long)usbtxlife_snapshot.submit_scoped,
+		  (unsigned long)usbtxlife_snapshot.submit_direct_exact,
+		  (unsigned long)usbtxlife_snapshot.submit_direct_range,
+		  (unsigned long)usbtxlife_snapshot.submit_internal,
+		  (unsigned long)usbtxlife_snapshot.submit_replace_pending,
+		  (unsigned long)usbtxlife_snapshot.terminal_calls,
+		  (unsigned long)usbtxlife_snapshot.terminal_state[0],
+		  (unsigned long)usbtxlife_snapshot.terminal_state[1],
+		  (unsigned long)usbtxlife_snapshot.terminal_state[2],
+		  (unsigned long)usbtxlife_snapshot.terminal_state[3],
+		  (unsigned long)usbtxlife_snapshot.terminal_state[4],
+		  (unsigned long)usbtxlife_snapshot.terminal_state[5],
+		  (unsigned long)usbtxlife_snapshot.terminal_state[6],
+		  (unsigned long)usbtxlife_snapshot.terminal_state[7],
+		  (unsigned long)usbtxlife_snapshot.terminal_state_other,
+		  (unsigned long)usbtxlife_cycles_to_us(
+			usbtxlife_snapshot.terminal_cycles,
+			usbtxlife_snapshot.terminal_calls),
+		  (unsigned long)usbtxlife_cycles_to_us(
+			usbtxlife_snapshot.terminal_cycles_max, 1U),
+		  (unsigned long)usbtxlife_snapshot.urb_polls,
+		  (unsigned long)usbtxlife_snapshot.urb_idle_polls,
+		  (unsigned long)live_now,
+		  (unsigned long)usbtxlife_snapshot.live_max);
+	rt_printf("[USBTXLIFE][%lu] source_release calls/anomaly/pending=%lu/%lu/%lu "
+		  "after_return_us avg/max=%lu/%lu observation_only=1\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)usbtxlife_snapshot.source_releases,
+		  (unsigned long)usbtxlife_snapshot.source_release_anomaly,
+		  (unsigned long)usbtxlife_snapshot.source_release_pending,
+		  (unsigned long)usbtxlife_cycles_to_us(
+			usbtxlife_snapshot.source_release_cycles,
+			usbtxlife_snapshot.source_releases),
+		  (unsigned long)usbtxlife_cycles_to_us(
+			usbtxlife_snapshot.source_release_cycles_max, 1U));
+}
+
 #elif CONFIG_USB_HCD_CHANNEL_PROFILE
 
 /*
@@ -359,6 +747,21 @@ void usb_hcd_profiler_report(uint32_t sequence)
 	}
 }
 
+void usb_tx_lifetime_ncm_begin(const void *source, uint32_t length)
+{
+	(void)source;
+	(void)length;
+}
+
+void usb_tx_lifetime_ncm_end(int result)
+{
+	(void)result;
+}
+
+void usb_tx_lifetime_source_release(void)
+{
+}
+
 #else
 
 void usb_hcd_profiler_isr_sema_give(int success, int task_woken)
@@ -370,6 +773,21 @@ void usb_hcd_profiler_isr_sema_give(int success, int task_woken)
 void usb_hcd_profiler_report(uint32_t sequence)
 {
 	(void)sequence;
+}
+
+void usb_tx_lifetime_ncm_begin(const void *source, uint32_t length)
+{
+	(void)source;
+	(void)length;
+}
+
+void usb_tx_lifetime_ncm_end(int result)
+{
+	(void)result;
+}
+
+void usb_tx_lifetime_source_release(void)
+{
 }
 
 #endif /* CONFIG_USB_HCD_PROFILE */

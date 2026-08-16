@@ -101,6 +101,172 @@ async queue 深度為 128，worker priority 與 `TCPIP_THREAD_PRIO` 相同，目
 版本；只有長度大於 4096 且 alignment/scheduler 等條件成立時才嘗試 GDMA。因此正常
 MTU 級 copy 多半是 M33，較大的 chained flatten 或組包才可能受益於 GDMA。
 
+## 2026-08-16 後續精確反組譯結果
+
+本節是在 USB TX lifetime profiler 通過實機測試後，針對客戶 archive 重新做的純靜態
+調查。這一階段沒有修改 firmware flow。
+
+### Object 邊界與 wrapper 可行性
+
+客戶 archive 中相關物件分離如下：
+
+```text
+usbh_cdc_ncm_hal.o
+  U ncm_wrap_ntb
+  U usbh_cdc_ncm_bulk_send
+  T usbh_cdc_ncm_send_data
+
+ncm.o
+  T ncm_wrap_ntb
+
+usbh_cdc_ncm.o
+  T usbh_cdc_ncm_bulk_send
+```
+
+因此 `usbh_cdc_ncm_hal.o` 對 `ncm_wrap_ntb` 是真正的 undefined relocation，GNU ld
+`--wrap=ncm_wrap_ntb` 技術上可以攔截，不存在「定義與呼叫都在同一個 object，導致
+`--wrap` 無法介入」的問題。這只證明 link interception 可行，不代表修改 flow 已經安全；
+先前 Stage 2 的硬體失敗仍然有效，任何新 wrapper 都必須單獨 clean build 與硬體 gate。
+
+### 客戶 TX buffer allocation 與 ownership
+
+`usbh_cdc_ncm_init_thread` 執行下列等價行為：
+
+```c
+host_user.tx_ntb = malloc(16384);
+```
+
+反組譯中的 packed offset 是 `host_user + 43`。`usbh_cdc_ncm_do_deinit()` 會讀取同一
+欄位、呼叫 `free()`，再將四個 pointer bytes 清零。因此這個 pointer 的 owner 是客戶
+library，生命週期涵蓋 NCM init 到 deinit。
+
+不能長期把此欄位改指向上游 pbuf 或我們的靜態 `TX_BUFFER`；否則 deinit 會對錯誤的
+pointer 執行 `free()`。若實驗需要暫時替換 pointer，必須證明 disconnect、error、retry、
+deinit 等每條路徑都能先還原原 pointer，目前不採用此高風險方案。
+
+### `ncm_wrap_ntb()` 的精確 common-case layout
+
+函式 ABI 已確認為：
+
+```c
+int ncm_wrap_ntb(void *host_user, const void *ethernet_packet,
+                 uint32_t packet_length);
+```
+
+目前 `ndp16_opts` 常數為：
+
+```text
+NTH signature       = "NCMH"
+NDP signature       = "NCM0"
+NTH16 size          = 12 bytes
+NDP16 base size     = 8 bytes
+datagram entry size = 4 bytes
+max datagrams       = 1
+CRC                 = off
+```
+
+common case 的計算結果是：
+
+```text
+payload_offset = align4(12 + 8 + 2 * 4) = 28
+ntb_length     = packet_length + 28
+```
+
+組包器依序執行：
+
+```c
+memset(host_user->tx_ntb, 0, packet_length + 28);
+memcpy(host_user->tx_ntb + 28, ethernet_packet, packet_length);
+/* fill NTH16 and NDP16 fields in bytes 0..27 */
+return packet_length + 28;
+```
+
+對應的單 datagram NTB16 layout 為：
+
+```text
+offset  size  contents
+0       4     NTH16 signature "NCMH"
+4       2     wHeaderLength = 12
+6       2     wSequence
+8       2     wBlockLength = packet_length + 28
+10      2     wNdpIndex = 12
+12      4     NDP16 signature "NCM0"
+16      2     wLength = 16
+18      2     wNextNdpIndex = 0
+20      2     datagram index = 28
+22      2     datagram length = packet_length
+24      4     terminating zero datagram entry
+28      N     Ethernet packet
+```
+
+`usbh_cdc_ncm_send_data()` 不使用 wrapper 回傳的 output pointer；它只使用回傳 length，
+然後重新從 `host_user + 43` 載入客戶 TX buffer pointer並呼叫
+`usbh_cdc_ncm_bulk_send()`。submit 成功後再無限等待 completion semaphore。
+
+因此「只在上游 pbuf 前 reserve 28 bytes」不會自動省 copy：原函式仍會清除客戶 buffer，
+把傳入 pointer 的內容複製到客戶 buffer `+28`，最後提交客戶 buffer。
+
+### Lifetime profiler 的實機交叉驗證
+
+```text
+[USBTXLIFE] logical calls/ok/error=6824/6824/0 bytes=9574942
+[USBTXLIFE] hcd submit/error=6825/0 bytes=9766014
+[USBTXLIFE] source scoped/exact/range/internal=6825/0/0/6825
+[USBTXLIFE] return_pending=0
+[USBTXLIFE] source_release anomaly/pending=0/0
+```
+
+HCD bytes 與 logical bytes 差值為：
+
+```text
+9766014 - 9574942 = 191072
+191072 / 6824 = 28 bytes per logical packet
+```
+
+這與反組譯得到的 NTB16 layout 精確一致。所有 HCD pointer 都被分類為客戶 internal
+buffer；沒有任何一次 HCD submit 直接使用來源 packet pointer。submit/terminal 平衡，
+logical send return 時沒有 pending transfer，pbuf release 時也沒有 pending/anomaly，證明
+目前客戶同步 completion 與上游 pbuf lifetime contract 是安全的。
+
+### USB DMA alignment 的精確結論
+
+DWC HCD source contract 寫明：transfer buffer physical address 若不是 DWORD-aligned，
+會改用 `dw_align_buf`。因此 USB controller 的最低起始地址要求是 **4 bytes**。
+
+32 bytes 是 M33 D-cache line 大小與建議 allocation/isolation alignment，不是 DWC USB DMA
+硬體的最低要求。TX buffer建議仍以32-byte配置，因為它同時滿足 DWORD alignment並簡化
+cache clean；但判定 HCD是否會因 unaligned而使用 bounce buffer時，關鍵是4-byte對齊。
+
+### 最保守的首次 copy-elision 方案
+
+目前不能安全地把客戶 `host_user.tx_ntb` pointer改成上游 packet。最低風險方案是保留客戶
+配置、提交、completion與free flow，只讓 chained pbuf直接 flatten 到客戶既有 buffer的
+`+28`：
+
+```text
+現況（chained pbuf）
+  pbuf chain -> our TX_BUFFER -> customer tx_ntb + 28 -> HCD
+
+候選方案
+  pbuf chain -----------------> customer tx_ntb + 28 -> HCD
+```
+
+這需要一個嚴格的 hybrid gate：
+
+1. observation wrapper先取得並發布客戶 `tx_ntb` pointer與有效 generation；
+2. NCM TX只有在 connected、buffer有效、單 worker序列化且長度不超過容量時，才直接
+   flatten到 `tx_ntb + 28`；
+3. `ncm_wrap_ntb` wrapper只有在 `input == tx_ntb + 28` 時，略過 payload `memcpy`，只清除
+   及建立前28 bytes header/table；
+4. 所有其他情況呼叫真實客戶 `ncm_wrap_ntb()`；
+5. detach/deinit前撤銷發布的 pointer，且 generation不匹配時禁止fast path；
+6. 不改客戶 pointer、不改 bulk send、不改 semaphore、不改free contract。
+
+這個方案只消除 chained pbuf 的第二次copy，不是完整 application-to-USB zero-copy。
+single pbuf若仍複製到客戶 `tx_ntb + 28`，copy次數與原 flow相同，沒有性能收益；若要讓
+single pbuf原地提交，則必須改變客戶 bulk-send pointer或整體 send function，風險高很多，
+不列入第一個實驗。
+
 ## Stage 1：observation-only profiler
 
 ### 量測內容
@@ -157,13 +323,82 @@ MTU 級 copy 多半是 M33，較大的 chained flatten 或組包才可能受益�
 - chained flatten 平均 4 us、最大 45 us，目前成本很低。只為移除 flatten copy 而
   引入高風險 ownership flow，效益有限。
 
+### 2026-08-16 observation wrapper 硬體 gate
+
+`--wrap=ncm_wrap_ntb` 的純觀察版本已實機測試。它正確轉送三個參數、回傳
+real function 的結果，且量到 39/39 個 header 完全符合、output pointer 沒有
+變動。第一次回報無法出圖，之後以相同 wrapper 重建並複測，確認可以配對及出圖；
+第一次結果屬於測試誤判。
+
+因此 observation wrapper 通過目前的硬體 gate，`NCM_WRAP_PROFILE` 恢復預設 `1`。
+它仍會增加巢狀 stack frame，並在每次組包後進入 critical section 更新統計；後續
+若加入 copy-elision，必須另外通過一次硬體 gate，不能沿用本次結論。
+
+更完整的反組譯也顯示 `ncm_wrap_ntb()` 是通用 builder；28-byte prefix 是目前
+negotiated NCM format/alignment 的 runtime 結果，不能硬編碼成無條件 ABI。
+
 ## Stage 2 攔截實驗與回退
+
+### Stage 2A：chained-pbuf scoped copy-elision
+
+第一個實驗只處理原本必須 flatten 的 chained pbuf，single pbuf 完全不變：
+
+1. 第一包仍走客戶原始 flow，wrapper 從實際 NTB header 學習 output pointer、
+   generation 與 payload offset。
+2. 後續 chained pbuf 取得一次性 token，直接 flatten 到客戶 internal NTB 的
+   payload 位置。
+3. 客戶 `ncm_wrap_ntb()` 仍完整執行，因此 sequence 與 negotiated header 都由
+   客戶程式產生。
+4. 只在 token、generation、pointer、length 全部吻合的 builder scope 內，
+   `memset` 保留已填入的 payload，且同位址 `memcpy` 成為 no-op。
+5. prepare、flatten 或 scope 驗證失敗時，取消 token 或保留原 libc 操作；不把
+   此路徑擴大到 single pbuf。
+
+此版本新增 `[NCMELIDE]`，必須以 `prepare == activate == preserve == skip ==
+success`、`cancel == fallback == 0` 作為正確性 gate，並同時確認
+`[NCMWRAP] header mismatch=0`、USB lifetime anomaly/pending=0 及實際可出圖。
+
+2026-08-16 實機 gate 通過，CarPlay 可正常出圖：
+
+```text
+[NCMELIDE][4] prepare/cancel/activate=6363/0/6363
+preserve/skip/success/fallback=6363/6363/6363/0
+bytes_saved=9410670 payload_offset=28
+[NCMWRAP][4] calls/ok/error=6737/6737/0 header match/mismatch=6737/0
+[USBTXLIFE][4] source_release calls/anomaly/pending=6737/0/0
+```
+
+同一窗口共有 6,619 個 NCM packet，其中 6,259 個是 chained pbuf；copy-elision
+覆蓋主要 data path。剩餘 single-pbuf 流量只有約 5.4% packet calls，且多為小型
+control packet。此結果證明可以移除 `TX_BUFFER -> customer NTB payload` 的第二次
+copy，但 pbuf segments 仍需 flatten 一次，才能形成客戶 USB flow 要求的連續 NTB。
+
+Stage 2A 因此固化為預設路徑。build 會核對通過實機 gate 的 customer
+`lib_usbsmart.a` SHA-256；archive 不一致時直接停止 build。這可防止未來客戶改成
+multi-datagram NTB 或更換 private layout 後，舊 wrapper 仍被誤用。新 archive 必須先
+重新 disassemble、更新 wrapper 並重做配對、出圖、header 與 lifetime gate。
+
+固化版 `flash_is.bin`（SHA-256
+`e69b9150d1e2acebc9f41d950b0ec0cdf49ac77b5c197cd8c3da5ffecc49ac77`）再次通過
+實機出圖 gate：
+
+```text
+[NCMELIDE][8] prepare/cancel/activate=6469/0/6469
+preserve/skip/success/fallback=6469/6469/6469/0 bytes_saved=9548714
+[NCMWRAP][8] calls/ok/error=6845/6845/0 header match/mismatch=6845/0
+output generation/publications/changes=1/1/0
+[USBTXLIFE][8] logical calls/ok/error=6788/6788/0 return_pending=0
+source_release calls/anomaly/pending=6788/0/0
+```
+
+builder 平均 8 us；單次最大 1.023 ms 是該窗口的 outlier，但沒有伴隨 error、
+fallback、lifetime anomaly 或 USB pending，不構成功能性失敗證據。
 
 Stage 2 曾以 `--wrap,ncm_wrap_ntb` 攔截客戶組包器。實驗 wrapper 先呼叫真實客戶
 builder，再於 stack 建立 28-byte shadow header 比對，設計上不應改寫客戶 output。
 
-硬體結果是不出圖；停用 wrapper 後只做增量 build 的版本仍不出圖。失敗 log 已經走到
-connected、AirPlay SetupInit/Info，之後出現：
+早期硬體測試曾回報不出圖，失敗 log 已經走到 connected、AirPlay SetupInit/Info，
+之後出現：
 
 ```text
 Modes changed: accessory not connect
@@ -171,8 +406,8 @@ Accessory info change
 CarApi_SoftReset
 ```
 
-這比較像 accessory state transition 失敗，而不是已證明的 NCM TX queue stall；但僅憑
-現有 log 無法確定是 wrapper 的 timing/ABI 影響，或增量 build 留下混合 object/layout。
+後續以相同 observation wrapper 重新 build 並實測已可出圖，因此早期結果不再視為
+wrapper failure 的證據。它不能用來推導 timing/ABI 或 NCM TX queue 有問題。
 
 之後執行下列保守回退：
 

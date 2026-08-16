@@ -3,6 +3,7 @@
 #include "screen_queue_profiler.h"
 #include "screen_rx_rate_limit.h"
 #include "usb_hcd_profiler.h"
+#include "ncm_wrap_profiler.h"
 #include "net_queue_profiler.h"
 #include "crypto_engine_profiler.h"
 #include "memcpy_task_profiler.h"
@@ -1017,8 +1018,12 @@ static void pcprof_task(void *arg)
 #endif
 #endif
 #if (defined(CONFIG_USB_HCD_PROFILE) && CONFIG_USB_HCD_PROFILE) || \
-	(defined(CONFIG_USB_HCD_CHANNEL_PROFILE) && CONFIG_USB_HCD_CHANNEL_PROFILE)
+	(defined(CONFIG_USB_HCD_CHANNEL_PROFILE) && CONFIG_USB_HCD_CHANNEL_PROFILE) || \
+	(defined(CONFIG_USB_TX_LIFETIME_PROFILE) && CONFIG_USB_TX_LIFETIME_PROFILE)
 		usb_hcd_profiler_report(sequence);
+#endif
+#if defined(CONFIG_NCM_WRAP_PROFILE) && CONFIG_NCM_WRAP_PROFILE
+		ncm_wrap_profiler_report(sequence);
 #endif
 #if defined(CONFIG_NET_QUEUE_PROFILE) && CONFIG_NET_QUEUE_PROFILE
 		net_queue_profiler_report(sequence);

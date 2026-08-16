@@ -215,6 +215,10 @@ ifeq ($(CARBOX_USB_LIB),1)
 # identical to the latest supplied archive.
 CARBOX_USB_VENDOR_ARCHIVE := usb_lib/build/lib_usbsmart.a
 CARBOX_USB_ARCHIVE := usb_lib/build/lib_usbsmart_link.a
+# Stage-2A copy-elision is tied to the exact customer builder that passed the
+# single-datagram hardware gate.  A replacement archive must be disassembled
+# and re-qualified instead of silently inheriting this ABI assumption.
+CARBOX_USB_NCM_ELIDE_VENDOR_SHA256 := 5c732996b89e6af1a93000ecf970abcce76adfc3a642b1903f8d989fc0d521ac
 endif
 
 CARBOX_USB_BUILD ?= 1
@@ -757,6 +761,7 @@ SRC_C += ../src/carbox/ota_local_upload_page.c
 SRC_C += ../src/carbox/ota/carplay_ota_compat.c
 SRC_C += ../src/carbox/irq_profiler.c
 SRC_C += ../src/carbox/usb_hcd_profiler.c
+SRC_C += ../src/carbox/ncm_wrap_profiler.c
 SRC_C += ../src/carbox/gcd_sync_profiler.c
 SRC_C += ../src/carbox/screen_queue_profiler.c
 SRC_C += ../src/carbox/screen_rx_rate_limit.c
@@ -952,14 +957,14 @@ SCREEN_DATAPATH_PROFILE ?= 1
 # closed receiver is identified once by task plus its validated 128-byte frame
 # header; all other sockets retain the stock lwIP receive path.
 SCREEN_RX_RATE_LIMIT ?= 1
-SCREEN_RX_RATE_LIMIT_BPS ?= 14000000
+SCREEN_RX_RATE_LIMIT_BPS ?= 10000000
 SCREEN_RX_RATE_LIMIT_INTERVAL_MS ?= 10
 SCREEN_RX_RATE_LIMIT_BUCKET_BYTES ?= 32768
 SCREEN_RX_RATE_LIMIT_CONTROL_MS ?= 100
 SCREEN_RX_RATE_LIMIT_DEADBAND_PERCENT ?= 10
 SCREEN_RX_RATE_LIMIT_FILTER_SHIFT ?= 2
 SCREEN_RX_RATE_LIMIT_VALVE_MIN_BPS ?= 1000000
-SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS ?= 14000000
+SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS ?= 10000000
 SCREEN_RX_RATE_LIMIT_OPEN_STEP_BPS ?= 125000
 SCREEN_RX_RATE_LIMIT_CLOSE_STEP_BPS ?= 500000
 SCREEN_RX_RATE_LIMIT_OPEN_HOLD_MS ?= 100
@@ -967,10 +972,10 @@ SCREEN_RX_RATE_LIMIT_CLOSE_HOLD_MS ?= 150
 SCREEN_RX_RATE_LIMIT_TASK_PRIORITY ?= 5
 SCREEN_RX_RATE_LIMIT_TASK_STACK ?= 512
 # Smooth each ScreenThread TCP write without creating a second long-term
-# controller. RX owns the long-term rate; TX has a slightly higher catch-up
-# ceiling but can burst by no more than the peer's observed 23,040-byte window.
+# controller. RX owns the long-term rate; TX uses the same 10-Mbps ceiling and
+# can burst by no more than the peer's observed 23,040-byte window.
 SCREEN_TX_PACER ?= 1
-SCREEN_TX_PACER_BPS ?= 15000000
+SCREEN_TX_PACER_BPS ?= 10000000
 SCREEN_TX_PACER_BUCKET_BYTES ?= 23040
 SCREEN_TX_PACER_CHUNK_BYTES ?= 4096
 SCREEN_TX_PACER_WAIT_MS ?= 1
@@ -1065,6 +1070,26 @@ SCREEN_TCP_BUFFER_PROFILE ?= 1
 SCREEN_TIMESTAMP_PROFILE ?= 0
 USB_HCD_PROFILE ?= 0
 USB_HCD_CHANNEL_PROFILE ?= 0
+# Correlate customer NCM send, HCD bulk-OUT attempts, observed URB completion,
+# return, and the source pbuf release.  Counters only; customer flow is intact.
+USB_TX_LIFETIME_PROFILE ?= 1
+# Hardware-gated NCM wrapper. It calls the customer builder exactly once and,
+# for validated chained pbufs, removes only the redundant second payload copy.
+NCM_WRAP_PROFILE ?= 1
+NCM_WRAP_COPY_ELIDE ?= 1
+ifneq ($(NCM_WRAP_COPY_ELIDE),0)
+ifneq ($(NCM_WRAP_PROFILE),1)
+$(error NCM_WRAP_COPY_ELIDE requires NCM_WRAP_PROFILE=1)
+endif
+endif
+USB_PROFILE_STAMP := $(OBJ_DIR)/.usb_profile_h$(USB_HCD_PROFILE)-c$(USB_HCD_CHANNEL_PROFILE)-life$(USB_TX_LIFETIME_PROFILE)-ncmwrap$(NCM_WRAP_PROFILE)-ncmelide$(NCM_WRAP_COPY_ELIDE)
+$(USB_PROFILE_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.usb_profile_*
+	@touch $@
+../src/carbox/usb_hcd_profiler.o \
+	../src/carbox/ncm_wrap_profiler.o \
+	../src/carbox/pc_profiler.o: $(USB_PROFILE_STAMP)
 NET_QUEUE_PROFILE ?= 0
 # Make the RX/queue/TX diagnostic switches safe for incremental builds. These
 # options affect both the wrappers and lwIP internals, so changing one must
@@ -1195,6 +1220,9 @@ GCCFLAGS += -DCONFIG_SCREEN_TCP_BUFFER_PROFILE=$(SCREEN_TCP_BUFFER_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_PROFILE=$(SCREEN_TIMESTAMP_PROFILE)
 GCCFLAGS += -DCONFIG_USB_HCD_PROFILE=$(USB_HCD_PROFILE)
 GCCFLAGS += -DCONFIG_USB_HCD_CHANNEL_PROFILE=$(USB_HCD_CHANNEL_PROFILE)
+GCCFLAGS += -DCONFIG_USB_TX_LIFETIME_PROFILE=$(USB_TX_LIFETIME_PROFILE)
+GCCFLAGS += -DCONFIG_NCM_WRAP_PROFILE=$(NCM_WRAP_PROFILE)
+GCCFLAGS += -DCONFIG_NCM_WRAP_COPY_ELIDE=$(NCM_WRAP_COPY_ELIDE)
 GCCFLAGS += -DCONFIG_NET_QUEUE_PROFILE=$(NET_QUEUE_PROFILE)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_STAGE1=$(TCPIP_RX_BATCH_STAGE1)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_TIMER_PROBE=$(TCPIP_RX_BATCH_TIMER_PROBE)
@@ -1332,8 +1360,19 @@ LFLAGS += -Wl,--wrap=usbh_hcd_hc_get_transfer_size
 endif
 ifeq ($(USB_HCD_CHANNEL_PROFILE),1)
 ifneq ($(USB_HCD_PROFILE),1)
+ifneq ($(USB_TX_LIFETIME_PROFILE),1)
 LFLAGS += -Wl,--wrap=usbh_hcd_hc_submit_request
 endif
+endif
+endif
+ifeq ($(USB_TX_LIFETIME_PROFILE),1)
+ifneq ($(USB_HCD_PROFILE),1)
+LFLAGS += -Wl,--wrap=usbh_hcd_hc_submit_request
+LFLAGS += -Wl,--wrap=usbh_hcd_hc_get_urb_state
+endif
+endif
+ifeq ($(NCM_WRAP_PROFILE),1)
+LFLAGS += -Wl,--wrap=ncm_wrap_ntb
 endif
 ifeq ($(CRYPTO_ENGINE_PROFILE),1)
 LFLAGS += -Wl,--wrap=device_mutex_lock -Wl,--wrap=device_mutex_unlock
@@ -1436,6 +1475,18 @@ endif
 all: LIBFLAGS += -lrtstream -lrtscamkit -lrtsv4l2
 LIBFLAGS += -Wl,-u,ram_start -Wl,-u,cinit_start
 ifeq ($(CARBOX_USB_LIB),1)
+ifeq ($(NCM_WRAP_COPY_ELIDE),1)
+.PHONY: ncm_copy_elide_vendor_guard
+ncm_copy_elide_vendor_guard:
+	@actual=`sha256sum "$(CARBOX_USB_VENDOR_ARCHIVE)" | awk '{print $$1}'`; \
+	if [ "$$actual" != "$(CARBOX_USB_NCM_ELIDE_VENDOR_SHA256)" ]; then \
+		echo "ERROR: NCM copy-elision is not qualified for this lib_usbsmart.a"; \
+		echo "       expected $(CARBOX_USB_NCM_ELIDE_VENDOR_SHA256)"; \
+		echo "       actual   $$actual"; \
+		exit 1; \
+	fi
+application: ncm_copy_elide_vendor_guard
+endif
 $(CARBOX_USB_ARCHIVE): $(CARBOX_USB_VENDOR_ARCHIVE) application.is.mk
 	@mkdir -p $(dir $@)
 	@cp -f $< $@

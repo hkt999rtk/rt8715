@@ -37,6 +37,7 @@
 #include <reent.h>
 
 #include "large_memcpy_gdma.h"
+#include "ncm_wrap_profiler.h"
 #include "video_handover_zero_copy.h"
 
 #ifndef CONFIG_MEMCPY_TASK_PROFILE
@@ -679,6 +680,9 @@ void *__wrap_memcpy(void *s1, const void *s2, size_t n)
 	 * part of the AirPlay handover transaction, so reject it before calling the
 	 * hook and let the normal ISR-safe M33 fallback below perform the copy. */
 	__asm volatile("mrs %0, ipsr" : "=r" (ipsr));
+	if ((ipsr == 0U) && ncm_wrap_copy_elide_memcpy(s1, s2, n)) {
+		return result;
+	}
 	if ((ipsr == 0U) &&
 	    carbox_video_handover_memcpy_is_elided(s1, s2, n)) {
 		return result;
@@ -808,11 +812,16 @@ void *__wrap_memmove (void *destaddr, const void *sourceaddr, unsigned length)
 void *__wrap_memset(void *dst0, int val, size_t length)
 {
 	void *result;
+	uint32_t ipsr;
 #if CONFIG_MEMCPY_TASK_PROFILE
 	carbox_memprof_guard_t profile_guard;
 	carbox_memprof_begin(&profile_guard,
 		(uintptr_t)__builtin_return_address(0));
 #endif
+	__asm volatile("mrs %0, ipsr" : "=r" (ipsr));
+	if ((ipsr == 0U) && ncm_wrap_copy_elide_memset(dst0, val, length)) {
+		return dst0;
+	}
 	result = __real_memset(dst0, val, length);
 #if CONFIG_MEMCPY_TASK_PROFILE
 	carbox_memprof_finish(&profile_guard, dst0, NULL, length,

@@ -74,6 +74,10 @@
 #if defined(CONFIG_PLATFORM_8195BHP)
 #include "cmsis.h"
 #include "hal_timer.h"
+#if defined(CONFIG_USBH_CDC_NCM)
+#include "ncm_wrap_profiler.h"
+#include "usb_hcd_profiler.h"
+#endif
 #endif
 
 #define netifMTU                                (1500)
@@ -1068,6 +1072,9 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 	struct pbuf *q;
 	u8 *pdata = TX_BUFFER;
 	u8 *tx_data = TX_BUFFER;
+	void *tx_allocation_end = TX_BUFFER + MAX_BUFFER_SIZE;
+	u32_t ncm_elide_token = 0U;
+	u8_t ncm_elide_prepared = 0U;
 	u32 size = 0;
 	int ret = 0;
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
@@ -1087,6 +1094,17 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 		tx_data = (u8 *)p->payload;
 		size = p->len;
 	} else {
+		void *prepared_payload = NULL;
+		void *prepared_end = NULL;
+
+		if (ncm_wrap_copy_elide_prepare((u32_t)p->tot_len,
+				&prepared_payload, &prepared_end,
+				&ncm_elide_token)) {
+			pdata = (u8 *)prepared_payload;
+			tx_data = (u8 *)prepared_payload;
+			tx_allocation_end = prepared_end;
+			ncm_elide_prepared = 1U;
+		}
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
 		profile_flatten_start_cycles = DWT->CYCCNT;
 		profile_segments = 0U;
@@ -1096,6 +1114,9 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 			profile_segments++;
 #endif
 			if (q->len > (MAX_BUFFER_SIZE - size)) {
+				if (ncm_elide_prepared != 0U) {
+					ncm_wrap_copy_elide_cancel(ncm_elide_token);
+				}
 				printf("%s chained pbuf too large: %u\n", __func__,
 				       (unsigned int)p->tot_len);
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
@@ -1109,7 +1130,10 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 			}
 #if defined(CONFIG_PLATFORM_8195BHP)
 			if (rltk_network_gdma_copy_tx(pdata, q->payload, q->len,
-						 TX_BUFFER + MAX_BUFFER_SIZE) != 0) {
+						 tx_allocation_end) != 0) {
+				if (ncm_elide_prepared != 0U) {
+					ncm_wrap_copy_elide_cancel(ncm_elide_token);
+				}
 				printf("[NET_GDMA][ERROR] NCM TX packet dropped len=%u\n",
 				       (unsigned int)p->tot_len);
 				return ERR_BUF;
@@ -1132,7 +1156,9 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 #if defined(CONFIG_USBH_CDC_ECM)
 	ret = usbh_cdc_ecm_send_data(tx_data, size);
 #elif defined(CONFIG_USBH_CDC_NCM)
+	usb_tx_lifetime_ncm_begin(tx_data, size);
 	ret = usbh_cdc_ncm_send_data(tx_data, size);
+	usb_tx_lifetime_ncm_end(ret);
 #endif
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
 	profile_send_cycles = DWT->CYCCNT - profile_send_start_cycles;
@@ -1276,6 +1302,7 @@ static void ncm_tx_async_worker(void *arg)
 			(void)result;
 #endif
 			/* linkoutput() retained one reference before returning to lwIP. */
+			usb_tx_lifetime_source_release();
 			pbuf_free(item.p);
 			ncm_tx_async_report(hal_read_curtime_us());
 		}
@@ -1369,7 +1396,12 @@ static err_t low_level_output_mii(struct netif *netif, struct pbuf *p)
 		 * two callers through the closed NCM TX state machine concurrently. */
 	}
 #endif
-	return ncm_send_pbuf_sync(p);
+	{
+		err_t result = ncm_send_pbuf_sync(p);
+
+		usb_tx_lifetime_source_release();
+		return result;
+	}
 }
 
 
