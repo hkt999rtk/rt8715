@@ -1713,7 +1713,7 @@ ifeq ($(findstring Linux, $(OS)), Linux)
 	@chmod 777 ../../../component/soc/realtek/8195b/misc/iar_utility/checksum.linux
 	@chmod 777 ../../../component/soc/realtek/8195b/misc/gcc_utility/postbuild.sh
 	@chmod 777 ../../../component/soc/realtek/8195b/misc/gcc_utility/set_fw_json_serial.sh
-	@if [ -d $(VFSDIR) ]; then \
+	@if [ -f $(VFSDIR)/Version.txt ]; then \
 		chmod 777 $(VFSDIR)/Version.txt; \
 	fi
 	@chmod 777 $(UTILITYDIR)/vfs.py
