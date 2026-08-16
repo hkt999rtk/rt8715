@@ -504,6 +504,7 @@ void             tcp_owned_buffer_unref(struct tcp_owned_buffer *owner);
 err_t            tcp_write_owned(struct tcp_pcb *pcb, const void *dataptr,
                                  u16_t len, u8_t apiflags,
                                  struct tcp_owned_buffer *owner);
+int              tcp_owned_pbuf_is_owned(const struct pbuf *p);
 void             tcp_owned_write_report(unsigned int sequence);
 #endif
 

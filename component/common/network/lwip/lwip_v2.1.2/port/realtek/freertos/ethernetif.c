@@ -48,6 +48,7 @@
 #include "lwip/mem.h"
 #include "lwip/pbuf.h"
 #include "lwip/sys.h"
+#include "lwip/tcp.h"
 #include "lwip/tcpip.h"
 #include "lwip/icmp.h"
 #include "netif/etharp.h"
@@ -519,6 +520,23 @@ struct ncm_tx_profile_stats {
 	u32_t contiguous_storage;
 	u32_t external_storage;
 	u32_t custom_pbuf;
+	u32_t chain_custom_packets;
+	u32_t chain_owned_packets;
+	u32_t chain_custom_segments;
+	u32_t chain_owned_segments;
+	u32_t chain_custom_bytes;
+	u32_t chain_owned_bytes;
+	u32_t tcp_packets;
+	u32_t tcp_data_packets;
+	u32_t tcp_payload_bytes;
+	u32_t tcp_owned_payload_bytes;
+	u32_t tcp_copied_payload_bytes;
+	u32_t tcp_full_owned_packets;
+	u32_t tcp_partial_owned_packets;
+	u32_t tcp_copy_only_packets;
+	u32_t parse_non_tcp_packets;
+	u32_t parse_errors;
+	u32_t owned_over_payload;
 	u32_t headroom_ge_32;
 	u32_t headroom_ge_64;
 	u32_t headroom_ge_128;
@@ -570,12 +588,129 @@ static u32_t ncm_tx_profile_size_bin(u32_t bytes)
 	return 3U;
 }
 
+static u16_t ncm_tx_profile_be16(const u8_t *p)
+{
+	return (u16_t)(((u16_t)p[0] << 8) | p[1]);
+}
+
+/* Return 1 for TCP (including ACK-only packets), 0 for non-TCP, and -1 when
+ * the packet claims a header layout that cannot be safely inspected. */
+static int ncm_tx_profile_tcp_payload(const struct pbuf *p,
+				      u32_t *payload_bytes)
+{
+	u8_t header[256];
+	u32_t copied;
+	u32_t l2 = 14U;
+	u32_t offset;
+	u32_t remaining;
+	u32_t header_len;
+	u16_t ether_type;
+	u8_t next_header;
+
+	*payload_bytes = 0U;
+	copied = pbuf_copy_partial(p, header,
+		(u16_t)LWIP_MIN((u32_t)p->tot_len, (u32_t)sizeof(header)), 0U);
+	if (copied < l2) {
+		return -1;
+	}
+	ether_type = ncm_tx_profile_be16(header + 12U);
+	while ((ether_type == 0x8100U) || (ether_type == 0x88A8U) ||
+	       (ether_type == 0x9100U)) {
+		if (copied < l2 + 4U) {
+			return -1;
+		}
+		ether_type = ncm_tx_profile_be16(header + l2 + 2U);
+		l2 += 4U;
+	}
+
+	if (ether_type == 0x0800U) {
+		u32_t ip_total;
+		u32_t ip_header_len;
+
+		if ((copied < l2 + 20U) || ((header[l2] >> 4) != 4U)) {
+			return -1;
+		}
+		ip_header_len = (u32_t)(header[l2] & 0x0FU) * 4U;
+		ip_total = ncm_tx_profile_be16(header + l2 + 2U);
+		if ((ip_header_len < 20U) || (ip_total < ip_header_len) ||
+		    ((u32_t)p->tot_len < l2 + ip_total)) {
+			return -1;
+		}
+		/* This profiler attributes application bytes to a TCP header in the
+		 * same frame.  Do not guess across IPv4 fragment boundaries. */
+		if ((ncm_tx_profile_be16(header + l2 + 6U) & 0x3FFFU) != 0U) {
+			return -1;
+		}
+		if (header[l2 + 9U] != 6U) {
+			return 0;
+		}
+		offset = l2 + ip_header_len;
+		remaining = ip_total - ip_header_len;
+	} else if (ether_type == 0x86DDU) {
+		if ((copied < l2 + 40U) || ((header[l2] >> 4) != 6U)) {
+			return -1;
+		}
+		remaining = ncm_tx_profile_be16(header + l2 + 4U);
+		if ((remaining == 0U) ||
+		    ((u32_t)p->tot_len < l2 + 40U + remaining)) {
+			return -1;
+		}
+		next_header = header[l2 + 6U];
+		offset = l2 + 40U;
+		while (next_header != 6U) {
+			if ((next_header == 0U) || (next_header == 43U) ||
+			    (next_header == 60U)) {
+				if (copied < offset + 2U) {
+					return -1;
+				}
+				header_len = ((u32_t)header[offset + 1U] + 1U) * 8U;
+			} else if (next_header == 44U) {
+				if (copied < offset + 8U) {
+					return -1;
+				}
+				if ((ncm_tx_profile_be16(header + offset + 2U) & 0xFFF8U) != 0U) {
+					return -1;
+				}
+				header_len = 8U;
+			} else if (next_header == 51U) {
+				if (copied < offset + 2U) {
+					return -1;
+				}
+				header_len = ((u32_t)header[offset + 1U] + 2U) * 4U;
+			} else {
+				return 0;
+			}
+			if ((header_len > remaining) || (copied < offset + header_len)) {
+				return -1;
+			}
+			next_header = header[offset];
+			offset += header_len;
+			remaining -= header_len;
+		}
+	} else {
+		return 0;
+	}
+
+	if ((remaining < 20U) || (copied < offset + 13U)) {
+		return -1;
+	}
+	header_len = (u32_t)(header[offset + 12U] >> 4) * 4U;
+	if ((header_len < 20U) || (header_len > remaining) ||
+	    (copied < offset + header_len)) {
+		return -1;
+	}
+	*payload_bytes = remaining - header_len;
+	return 1;
+}
+
 static void ncm_tx_profile_report(u32_t now)
 {
 	u32_t window;
 	u32_t calls;
 	u32_t segments;
 	u32_t bin;
+	u32_t app_coverage_x10;
+	u32_t frame_owned_x10;
 
 	if (g_ncm_tx_profile.window_start_us == 0U) {
 		g_ncm_tx_profile.window_start_us = now;
@@ -617,6 +752,38 @@ static void ncm_tx_profile_report(u32_t now)
 	       (unsigned int)g_ncm_tx_profile.ref_1,
 	       (unsigned int)g_ncm_tx_profile.ref_2,
 	       (unsigned int)g_ncm_tx_profile.ref_gt_2);
+	frame_owned_x10 = g_ncm_tx_profile.bytes ?
+		(u32_t)(((uint64_t)g_ncm_tx_profile.chain_owned_bytes * 1000U) /
+			g_ncm_tx_profile.bytes) : 0U;
+	printf("[NCMCHAIN_PROFILE] packets custom/owned=%u/%u segments total/custom/owned=%u/%u/%u "
+	       "bytes total/custom/owned=%u/%u/%u owned_frame_pct_x10=%u observation_only=1\n",
+	       (unsigned int)g_ncm_tx_profile.chain_custom_packets,
+	       (unsigned int)g_ncm_tx_profile.chain_owned_packets,
+	       (unsigned int)segments,
+	       (unsigned int)g_ncm_tx_profile.chain_custom_segments,
+	       (unsigned int)g_ncm_tx_profile.chain_owned_segments,
+	       (unsigned int)g_ncm_tx_profile.bytes,
+	       (unsigned int)g_ncm_tx_profile.chain_custom_bytes,
+	       (unsigned int)g_ncm_tx_profile.chain_owned_bytes,
+	       (unsigned int)frame_owned_x10);
+	app_coverage_x10 = g_ncm_tx_profile.tcp_payload_bytes ?
+		(u32_t)(((uint64_t)g_ncm_tx_profile.tcp_owned_payload_bytes * 1000U) /
+			g_ncm_tx_profile.tcp_payload_bytes) : 0U;
+	printf("[NCMAPP_PROFILE] tcp packets/data=%u/%u payload total/owned/copied=%u/%u/%u "
+	       "owned_pct_x10=%u packet full/partial/copy=%u/%u/%u "
+	       "parse non_tcp/error/owned_over=%u/%u/%u observation_only=1\n",
+	       (unsigned int)g_ncm_tx_profile.tcp_packets,
+	       (unsigned int)g_ncm_tx_profile.tcp_data_packets,
+	       (unsigned int)g_ncm_tx_profile.tcp_payload_bytes,
+	       (unsigned int)g_ncm_tx_profile.tcp_owned_payload_bytes,
+	       (unsigned int)g_ncm_tx_profile.tcp_copied_payload_bytes,
+	       (unsigned int)app_coverage_x10,
+	       (unsigned int)g_ncm_tx_profile.tcp_full_owned_packets,
+	       (unsigned int)g_ncm_tx_profile.tcp_partial_owned_packets,
+	       (unsigned int)g_ncm_tx_profile.tcp_copy_only_packets,
+	       (unsigned int)g_ncm_tx_profile.parse_non_tcp_packets,
+	       (unsigned int)g_ncm_tx_profile.parse_errors,
+	       (unsigned int)g_ncm_tx_profile.owned_over_payload);
 	printf("[NCMTXPROF] phase_us total/flatten/send/other=%u/%u/%u/%u avg=%u/%u/%u/%u "
 	       "max total/flatten/send=%u/%u/%u send_ge_ms 1/5/10/20=%u/%u/%u/%u\n",
 	       (unsigned int)ncm_tx_profile_cycles_to_us(g_ncm_tx_profile.total_cycles),
@@ -662,7 +829,15 @@ static void ncm_tx_profile_commit(const struct pbuf *p, u32_t bytes,
 	u32_t other_cycles = total_cycles >= accounted ? total_cycles - accounted : 0U;
 	u32_t now = hal_read_curtime_us();
 	u32_t headroom = 0U;
+	u32_t custom_bytes = 0U;
+	u32_t owned_bytes = 0U;
+	u32_t tcp_payload_bytes = 0U;
+	u32_t credited_owned_bytes;
 	u8_t contiguous = 0U;
+	u8_t has_custom = 0U;
+	u8_t has_owned = 0U;
+	int tcp_result;
+	const struct pbuf *q;
 
 	/* Mirror only pbuf_add_header_impl()'s bounds calculation.  Do not move
 	 * payload, alter lengths, or touch ownership in this observation stage. */
@@ -695,6 +870,50 @@ static void ncm_tx_profile_commit(const struct pbuf *p, u32_t bytes,
 	}
 	if ((p->flags & PBUF_FLAG_IS_CUSTOM) != 0U) {
 		g_ncm_tx_profile.custom_pbuf++;
+	}
+	for (q = p; q != NULL; q = q->next) {
+		if ((q->flags & PBUF_FLAG_IS_CUSTOM) != 0U) {
+			has_custom = 1U;
+			custom_bytes += q->len;
+			g_ncm_tx_profile.chain_custom_segments++;
+		}
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
+		if (tcp_owned_pbuf_is_owned(q)) {
+			has_owned = 1U;
+			owned_bytes += q->len;
+			g_ncm_tx_profile.chain_owned_segments++;
+		}
+#endif
+	}
+	if (has_custom != 0U) g_ncm_tx_profile.chain_custom_packets++;
+	if (has_owned != 0U) g_ncm_tx_profile.chain_owned_packets++;
+	g_ncm_tx_profile.chain_custom_bytes += custom_bytes;
+	g_ncm_tx_profile.chain_owned_bytes += owned_bytes;
+	tcp_result = ncm_tx_profile_tcp_payload(p, &tcp_payload_bytes);
+	if (tcp_result > 0) {
+		g_ncm_tx_profile.tcp_packets++;
+		if (tcp_payload_bytes != 0U) {
+			g_ncm_tx_profile.tcp_data_packets++;
+			g_ncm_tx_profile.tcp_payload_bytes += tcp_payload_bytes;
+			credited_owned_bytes = LWIP_MIN(owned_bytes, tcp_payload_bytes);
+			g_ncm_tx_profile.tcp_owned_payload_bytes += credited_owned_bytes;
+			g_ncm_tx_profile.tcp_copied_payload_bytes +=
+				tcp_payload_bytes - credited_owned_bytes;
+			if (owned_bytes > tcp_payload_bytes) {
+				g_ncm_tx_profile.owned_over_payload++;
+			}
+			if (credited_owned_bytes == tcp_payload_bytes) {
+				g_ncm_tx_profile.tcp_full_owned_packets++;
+			} else if (credited_owned_bytes != 0U) {
+				g_ncm_tx_profile.tcp_partial_owned_packets++;
+			} else {
+				g_ncm_tx_profile.tcp_copy_only_packets++;
+			}
+		}
+	} else if (tcp_result == 0) {
+		g_ncm_tx_profile.parse_non_tcp_packets++;
+	} else {
+		g_ncm_tx_profile.parse_errors++;
 	}
 	if (headroom >= 32U) g_ncm_tx_profile.headroom_ge_32++;
 	if (headroom >= 64U) g_ncm_tx_profile.headroom_ge_64++;

@@ -266,6 +266,18 @@ tcp_owned_pbuf_free(struct pbuf *p)
   tcp_owned_buffer_unref(owner);
 }
 
+int
+tcp_owned_pbuf_is_owned(const struct pbuf *p)
+{
+  const struct pbuf_custom *custom;
+
+  if ((p == NULL) || ((p->flags & PBUF_FLAG_IS_CUSTOM) == 0U)) {
+    return 0;
+  }
+  custom = (const struct pbuf_custom *)p;
+  return custom->custom_free_function == tcp_owned_pbuf_free;
+}
+
 static struct pbuf *
 tcp_owned_pbuf_alloc(struct tcp_owned_buffer *owner, const void *payload,
                      u16_t length)
