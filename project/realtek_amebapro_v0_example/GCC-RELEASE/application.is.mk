@@ -1537,7 +1537,7 @@ ifeq ($(CARBOX_FDK_AAC_OPTIMIZED),1)
 .PHONY: carbox_fdkaac
 carbox_fdkaac:
 	$(MAKE) -C $(CARBOX_FDK_AAC_SOURCE_DIR) -f Makefile.rtl8195b \
-		TOOLCHAIN_BIN=$(abspath $(ARM_GCC_TOOLCHAIN))
+		TOOLCHAIN_BIN=$(abspath $(dir $(CROSS_COMPILE)))
 application: carbox_fdkaac
 endif
 $(CARBOX_CHACHA_CONFIG_STAMP):
