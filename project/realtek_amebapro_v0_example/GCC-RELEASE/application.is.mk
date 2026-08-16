@@ -1455,7 +1455,7 @@ LIBFLAGS =
 LIBFLAGS += ../../../component/soc/realtek/8195b/fwlib/hal-rtl8195b-hp/lib/lib/hal_pmc_hs.a
 LIBFLAGS += -L../../../component/soc/realtek/8195b/misc/bsp/lib/common/GCC/
 WLAN_RX_HOOK_DIR := ../../../component/common/drivers/wlan/realtek/wlan_rx_gdma
-WLAN_RX_HOOK_ARCHIVE := $(WLAN_RX_HOOK_DIR)/build/lib_wlan_zero_copy_minimal.a
+WLAN_RX_HOOK_ARCHIVE := $(WLAN_RX_HOOK_DIR)/build/lib_wlan_zero_copy.a
 WLAN_RX_HOOK_ORIGINAL := ../../../component/soc/realtek/8195b/misc/bsp/lib/common/GCC/lib_wlan.a
 # lib_rtk264 is the standalone RTL8195B H.264 encoder wrapper.  It requires
 # lib_h264 plus the VOE/ISP video-subsystem HAL; keep all of them disabled as a
@@ -1729,7 +1729,7 @@ ifeq ($(WLAN_RX_DMA_SKB),1)
 wlan_rx_hook:
 	@$(MAKE) -C $(WLAN_RX_HOOK_DIR) \
 		CROSS_COMPILE=$(abspath $(CROSS_COMPILE)) \
-		ORIGINAL_ARCHIVE=$(abspath $(WLAN_RX_HOOK_ORIGINAL)) zero-copy-minimal
+		ORIGINAL_ARCHIVE=$(abspath $(WLAN_RX_HOOK_ORIGINAL)) zero-copy
 application: wlan_rx_hook
 endif
 $(CARBOX_RTK264_OBJECT): $(CARBOX_RTK264_SOURCE) $(CARBOX_RTK264_HEADER)

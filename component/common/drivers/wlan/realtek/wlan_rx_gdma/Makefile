@@ -17,12 +17,10 @@ RECOVERED_RX_OBJECT := $(BUILD_DIR)/rtl8195b_recv.o
 COPY_PARITY_RX_OBJECT := $(BUILD_DIR)/copy_parity/rtl8195b_recv.o
 RECOVERED_SKBUFF_OBJECT := $(BUILD_DIR)/freertos_skbuff.o
 VENDOR_PARITY_SKBUFF_OBJECT := $(BUILD_DIR)/copy_parity/freertos_skbuff.o
-MINIMAL_ZC_SKBUFF_OBJECT := $(BUILD_DIR)/zero_copy_minimal/freertos_skbuff.o
 DMA_MANAGER_OBJECT := $(BUILD_DIR)/wlan_rx_dma_mgr.o
 ZERO_COPY_ARCHIVE := $(BUILD_DIR)/lib_wlan_zero_copy.a
 COPY_PARITY_ARCHIVE := $(BUILD_DIR)/lib_wlan_rx_recovered_copy_parity.a
 SKBUFF_PARITY_ARCHIVE := $(BUILD_DIR)/lib_wlan_recovered_skb_copy_parity.a
-MINIMAL_ZC_ARCHIVE := $(BUILD_DIR)/lib_wlan_zero_copy_minimal.a
 DROPIN_ARCHIVE := $(BUILD_DIR)/lib_wlan.a
 VENDOR_RX_OBJECT := $(BUILD_DIR)/vendor_rtl8195b_recv.o
 VENDOR_SKBUFF_OBJECT := $(BUILD_DIR)/vendor_freertos_skbuff.o
@@ -62,7 +60,7 @@ CFLAGS += -I$(RECOVERED_DIR)
 RX_EXTRA_CFLAGS ?=
 
 .NOTPARALLEL:
-.PHONY: all check-input verify copy-parity skbuff-parity zero-copy-minimal clean
+.PHONY: all check-input verify zero-copy copy-parity skbuff-parity clean
 
 all: check-input verify $(DROPIN_ARCHIVE)
 
@@ -94,7 +92,7 @@ copy-parity: check-input $(COPY_PARITY_ARCHIVE)
 
 skbuff-parity: check-input $(SKBUFF_PARITY_ARCHIVE)
 
-zero-copy-minimal: check-input $(MINIMAL_ZC_ARCHIVE)
+zero-copy: check-input verify
 
 $(COPY_PARITY_ARCHIVE): $(ORIGINAL_ARCHIVE) $(COPY_PARITY_RX_OBJECT) Makefile
 	@cp $(ORIGINAL_ARCHIVE) $@
@@ -125,38 +123,18 @@ $(SKBUFF_PARITY_ARCHIVE): $(ORIGINAL_ARCHIVE) $(COPY_PARITY_RX_OBJECT) \
 	@echo "  WLAN  recovered-skb/copy-RX parity archive -> $@"
 
 $(RECOVERED_SKBUFF_OBJECT): $(RECOVERED_SKBUFF_SOURCE) | $(BUILD_DIR)
-	@echo "  CC    recovered freertos_skbuff.c"
-	@$(CC) $(CFLAGS) $< -o $@
+	@echo "  CC    recovered freertos_skbuff.c (vendor + DMA-shared only)"
+	@$(CC) $(CFLAGS) -DCONFIG_RECOVERED_SKBUFF_VENDOR_PARITY=1 \
+		-DCONFIG_RECOVERED_SKBUFF_DMA_SHARED_ONLY=1 $< -o $@
 
 $(VENDOR_PARITY_SKBUFF_OBJECT): $(RECOVERED_SKBUFF_SOURCE) | $(BUILD_DIR)
 	@echo "  CC    recovered freertos_skbuff.c (vendor parity)"
 	@mkdir -p $(dir $@)
 	@$(CC) $(CFLAGS) -DCONFIG_RECOVERED_SKBUFF_VENDOR_PARITY=1 $< -o $@
 
-$(MINIMAL_ZC_SKBUFF_OBJECT): $(RECOVERED_SKBUFF_SOURCE) | $(BUILD_DIR)
-	@echo "  CC    recovered freertos_skbuff.c (vendor + DMA-shared only)"
-	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) -DCONFIG_RECOVERED_SKBUFF_VENDOR_PARITY=1 \
-		-DCONFIG_RECOVERED_SKBUFF_DMA_SHARED_ONLY=1 $< -o $@
-
 $(DMA_MANAGER_OBJECT): $(DMA_MANAGER_SOURCE) $(DMA_MANAGER_HEADER) | $(BUILD_DIR)
 	@echo "  CC    WLAN RX DMA buffer manager"
 	@$(CC) $(CFLAGS) $< -o $@
-
-$(MINIMAL_ZC_ARCHIVE): $(ORIGINAL_ARCHIVE) $(RECOVERED_RX_OBJECT) \
-		$(MINIMAL_ZC_SKBUFF_OBJECT) $(DMA_MANAGER_OBJECT) Makefile
-	@cp $(ORIGINAL_ARCHIVE) $@
-	@$(AR) rcsD $@ $(RECOVERED_RX_OBJECT) $(MINIMAL_ZC_SKBUFF_OBJECT) \
-		$(DMA_MANAGER_OBJECT)
-	@test "$$($(AR) t $@ | grep -c '^rtl8195b_recv.o$$')" = 1 || \
-		{ echo "ERROR: recovered RX member missing or duplicated"; exit 1; }
-	@test "$$($(AR) t $@ | grep -c '^freertos_skbuff.o$$')" = 1 || \
-		{ echo "ERROR: minimal skbuff member missing or duplicated"; exit 1; }
-	@test "$$($(AR) t $@ | grep -c '^wlan_rx_dma_mgr.o$$')" = 1 || \
-		{ echo "ERROR: DMA manager member missing or duplicated"; exit 1; }
-	@$(NM) -A $@ | grep -q ' T wlan_rx_dma_rotate$$' || \
-		{ echo "ERROR: minimal archive missing DMA rotation"; exit 1; }
-	@echo "  WLAN  vendor-parity + DMA-shared-only zero-copy archive -> $@"
 
 # Keep all unmodified vendor members.  ar replaces rtl8195b_recv.o and
 # freertos_skbuff.o by member name and adds the C DMA manager; rtw_recv.o
@@ -166,7 +144,15 @@ $(ZERO_COPY_ARCHIVE): $(ORIGINAL_ARCHIVE) $(RECOVERED_RX_OBJECT) \
 	@cp $(ORIGINAL_ARCHIVE) $@
 	@$(AR) rcsD $@ $(RECOVERED_RX_OBJECT) $(RECOVERED_SKBUFF_OBJECT) \
 		$(DMA_MANAGER_OBJECT)
-	@echo "  AR    $@"
+	@test "$$($(AR) t $@ | grep -c '^rtl8195b_recv.o$$')" = 1 || \
+		{ echo "ERROR: recovered RX member missing or duplicated"; exit 1; }
+	@test "$$($(AR) t $@ | grep -c '^freertos_skbuff.o$$')" = 1 || \
+		{ echo "ERROR: recovered skbuff member missing or duplicated"; exit 1; }
+	@test "$$($(AR) t $@ | grep -c '^wlan_rx_dma_mgr.o$$')" = 1 || \
+		{ echo "ERROR: DMA manager member missing or duplicated"; exit 1; }
+	@$(NM) -A $@ | grep -q ' T wlan_rx_dma_rotate$$' || \
+		{ echo "ERROR: zero-copy archive missing DMA rotation"; exit 1; }
+	@echo "  WLAN  vendor-parity + DMA-shared-only zero-copy archive -> $@"
 
 # Same archive under the vendor filename for consumers that require a direct
 # lib_wlan.a replacement.  Keep the descriptive filename for SDK integration.
@@ -275,10 +261,11 @@ verify: $(ZERO_COPY_ARCHIVE)
 
 clean:
 	@rm -f $(ZERO_COPY_ARCHIVE) $(DROPIN_ARCHIVE) $(RECOVERED_RX_OBJECT) \
+		$(BUILD_DIR)/lib_wlan_zero_copy_minimal.a \
+		$(BUILD_DIR)/zero_copy_minimal/freertos_skbuff.o \
 		$(COPY_PARITY_ARCHIVE) $(SKBUFF_PARITY_ARCHIVE) \
 		$(COPY_PARITY_RX_OBJECT) \
 		$(RECOVERED_SKBUFF_OBJECT) $(VENDOR_PARITY_SKBUFF_OBJECT) \
-		$(MINIMAL_ZC_SKBUFF_OBJECT) $(MINIMAL_ZC_ARCHIVE) \
 		$(DMA_MANAGER_OBJECT) \
 		$(VENDOR_RX_OBJECT) $(VENDOR_SKBUFF_OBJECT) \
 		$(VENDOR_RX_GLOBALS) $(RECOVERED_RX_GLOBALS) \
