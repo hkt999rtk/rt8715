@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include "system_overclock.h"
+#include "spic_overclock.h"
 
 #ifndef CONFIG_SYS_PLL_OVERCLOCK
 #define CONFIG_SYS_PLL_OVERCLOCK 0
@@ -209,6 +210,16 @@ int carbox_system_overclock_early(void)
 
 	primask = carbox_irq_save();
 
+	/*
+	 * Snapshot the ROM's 300 MHz calibration slot and slow SPIC while the
+	 * clock classifier still reports Clk300MHz.  Calling this after selecting
+	 * ANA would incorrectly snapshot the Clk4MHz slot.
+	 */
+	if (carbox_spic_overclock_prepare(CONFIG_SYS_PLL_TARGET_HZ) < 0) {
+		carbox_irq_restore(primask);
+		return CARBOX_OVERCLOCK_SPIC_PREPARE_FAILED;
+	}
+
 	/* Run temporarily from the 4 MHz ANA clock while SYS PLL is relocked. */
 	*clk_reg = original_clk & ~CARBOX_SYS_CLK_SOURCE_PLL;
 	carbox_clock_barrier();
@@ -221,6 +232,7 @@ int carbox_system_overclock_early(void)
 		*clk_reg = original_clk;
 		SystemCoreClock = CARBOX_SYS_PLL_NOMINAL_HZ;
 		carbox_clock_barrier();
+		carbox_spic_overclock_restore();
 		carbox_irq_restore(primask);
 		return CARBOX_OVERCLOCK_STOP_TIMEOUT;
 	}
@@ -243,6 +255,7 @@ int carbox_system_overclock_early(void)
 		carbox_clock_barrier();
 		if (carbox_pll_wait_ready() != 0) {
 			SystemCoreClock = CARBOX_SYS_PLL_INPUT_HZ / 10U;
+			carbox_spic_overclock_restore();
 			carbox_irq_restore(primask);
 			return CARBOX_OVERCLOCK_RESTORE_FAILED;
 		}
@@ -250,6 +263,7 @@ int carbox_system_overclock_early(void)
 		*clk_reg = original_clk;
 		SystemCoreClock = CARBOX_SYS_PLL_NOMINAL_HZ;
 		carbox_clock_barrier();
+		carbox_spic_overclock_restore();
 		carbox_irq_restore(primask);
 		return CARBOX_OVERCLOCK_LOCK_TIMEOUT;
 	}
@@ -259,6 +273,32 @@ int carbox_system_overclock_early(void)
 	*clk_reg = original_clk;
 	SystemCoreClock = CONFIG_SYS_PLL_TARGET_HZ;
 	carbox_clock_barrier();
+	if (carbox_spic_overclock_calibrate(CONFIG_SYS_PLL_TARGET_HZ) < 0) {
+		/* Return to ANA clock before restoring the ROM-established 300 MHz PLL. */
+		*clk_reg = original_clk & ~CARBOX_SYS_CLK_SOURCE_PLL;
+		carbox_clock_barrier();
+		*pll0_reg = original_pll0 & ~(CARBOX_PLL_CLK_ENABLE | CARBOX_PLL_ENABLE);
+		carbox_clock_barrier();
+		(void)carbox_pll_wait_stopped();
+		*pll1_reg = original_pll1;
+		*pll3_reg = original_pll3;
+		carbox_clock_barrier();
+		*pll0_reg = original_pll0 & ~CARBOX_PLL_CLK_ENABLE;
+		carbox_clock_barrier();
+		if (carbox_pll_wait_ready() != 0) {
+			SystemCoreClock = CARBOX_SYS_PLL_INPUT_HZ / 10U;
+			carbox_spic_overclock_restore();
+			carbox_irq_restore(primask);
+			return CARBOX_OVERCLOCK_RESTORE_FAILED;
+		}
+		*pll0_reg = original_pll0;
+		*clk_reg = original_clk;
+		SystemCoreClock = CARBOX_SYS_PLL_NOMINAL_HZ;
+		carbox_clock_barrier();
+		carbox_spic_overclock_restore();
+		carbox_irq_restore(primask);
+		return CARBOX_OVERCLOCK_SPIC_CALIBRATION_FAILED;
+	}
 	carbox_irq_restore(primask);
 
 	return CARBOX_OVERCLOCK_APPLIED;

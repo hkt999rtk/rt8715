@@ -14,6 +14,7 @@
 #include "carbox/large_memcpy_gdma.h"
 #include "carbox/ota_local_upload_page.h"
 #include "carbox/pc_profiler.h"
+#include "carbox/spic_overclock.h"
 #include "carbox/system_overclock.h"
 #if defined(CONFIG_MEMCHECK)
 #include "carbox/memcheck.h"
@@ -478,6 +479,7 @@ void main(void)
 {
 	int ret = 0;
 	int clock_status = carbox_system_overclock_early();
+	struct carbox_spic_overclock_report spic_clock_report;
 
 	/* Initialize log uart and at command service */
 #if WINBOND_FLASH_UNPROTECT
@@ -489,6 +491,21 @@ void main(void)
     rt_printf("main build_version %s\r\n",BOX_APP_VERSION);
 	rt_printf("[CLOCK] overclock status=%d requested=%lu Hz\r\n",
 		  clock_status, (unsigned long)CONFIG_SYS_PLL_TARGET_HZ);
+	carbox_spic_overclock_get_report(&spic_clock_report);
+	rt_printf("[SPICCLK] status=%ld target/max/actual=%lu/%lu/%lu Hz "
+		  "id=%02x%02x%02x mode=%u div=%u->%u dummy/delay/window=%u/%u/%u "
+		  "seq=%u->%u\r\n",
+		  (long)spic_clock_report.status,
+		  (unsigned long)spic_clock_report.target_sys_hz,
+		  (unsigned long)spic_clock_report.qualified_max_hz,
+		  (unsigned long)spic_clock_report.selected_spic_hz,
+		  spic_clock_report.flash_id[0], spic_clock_report.flash_id[1],
+		  spic_clock_report.flash_id[2], spic_clock_report.io_mode,
+		  spic_clock_report.old_divider, spic_clock_report.selected_divider,
+		  spic_clock_report.selected_dummy, spic_clock_report.selected_delay,
+		  spic_clock_report.delay_window,
+		  spic_clock_report.sequential_was_enabled,
+		  spic_clock_report.sequential_is_enabled);
 	carbox_clock_register_dump();
 	
 #ifdef CONFIG_FATFS

@@ -800,6 +800,7 @@ SRAM_C += ../../../component/common/file_system/fatfs/disk_if/src/flash_fatfs.c
 SRAM_C += ../src/carbox/vfs_compat/carbox_littlefs.c
 SRAM_C += ../../../component/soc/realtek/8195b/fwlib/hal-rtl8195b-hp/source/ram_s/hal_flash.c
 SRAM_C += ../src/carbox/system_overclock.c
+SRAM_C += ../src/carbox/spic_overclock.c
 # This wrapper intercepts every device lock, including FLASH locks used before
 # external RAM is ready, so it must execute from internal SRAM.
 SRAM_C += ../src/carbox/crypto_engine_profiler.c
@@ -1141,18 +1142,28 @@ TCPIP_RX_BATCH_PROFILE ?= 0
 CRYPTO_ENGINE_PROFILE ?= 0
 CARBOX_CRYPTO_OWNER_BOOST_PRIORITY ?= 11
 SYS_PLL_OVERCLOCK ?= 1
-SYS_PLL_TARGET_HZ ?= 330000000
+SYS_PLL_TARGET_HZ ?= 360000000
+SPIC_ADAPTIVE_OVERCLOCK ?= 1
+SPIC_QUALIFIED_MAX_HZ ?= 75000000
+SPIC_CAL_MIN_WINDOW ?= 8
+SPIC_CAL_VERIFY_COUNT ?= 4
 # The clock configuration is supplied through compiler defines, so normal
 # source timestamps cannot detect an override change.  Rebuild both consumers
 # whenever either value changes: system_overclock.c applies it and main.c logs
 # the requested rate.
-SYS_PLL_CONFIG_STAMP := $(OBJ_DIR)/.sys_pll_config_$(SYS_PLL_OVERCLOCK)-$(SYS_PLL_TARGET_HZ)
+SYS_PLL_CONFIG_STAMP := $(OBJ_DIR)/.sys_pll_config_$(SYS_PLL_OVERCLOCK)-$(SYS_PLL_TARGET_HZ)-$(SPIC_ADAPTIVE_OVERCLOCK)-$(SPIC_QUALIFIED_MAX_HZ)-$(SPIC_CAL_MIN_WINDOW)-$(SPIC_CAL_VERIFY_COUNT)
 $(SYS_PLL_CONFIG_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.sys_pll_config_*
 	@touch $@
 ../src/carbox/system_overclock.o \
+	../src/carbox/spic_overclock.o \
 	../src/main.o: $(SYS_PLL_CONFIG_STAMP)
+
+GCCFLAGS += -DCONFIG_SPIC_ADAPTIVE_OVERCLOCK=$(SPIC_ADAPTIVE_OVERCLOCK)
+GCCFLAGS += -DCONFIG_SPIC_QUALIFIED_MAX_HZ=$(SPIC_QUALIFIED_MAX_HZ)
+GCCFLAGS += -DCONFIG_SPIC_CAL_MIN_WINDOW=$(SPIC_CAL_MIN_WINDOW)
+GCCFLAGS += -DCONFIG_SPIC_CAL_VERIFY_COUNT=$(SPIC_CAL_VERIFY_COUNT)
 GCCFLAGS += -DCONFIG_NET_GDMA_COPY=$(NET_GDMA_COPY)
 GCCFLAGS += -DCONFIG_NET_GDMA_BENCH=$(NET_GDMA_BENCH)
 GCCFLAGS += -DCONFIG_NET_GDMA_STATS=$(NET_GDMA_STATS)
@@ -1808,6 +1819,16 @@ application: prerequirement $(SRC_O) $(ERAM_O) $(SRAM_O) $(CINIT_O) $(ASM_O) $(I
 	done
 	@echo "  LD   linking..."
 	@$(LD) $(LFLAGS) -o $(BIN_DIR)/$(TARGET).axf  $(OBJ_LIST) $(ROMIMG) $(LIBFLAGS) -T$(LDSCRIPT)
+	@for sym in carbox_system_overclock_early \
+		carbox_spic_overclock_prepare carbox_spic_overclock_calibrate \
+		carbox_spic_overclock_restore spic_query_system_clk \
+		spic_set_delay_line spic_verify_calibration_para; do \
+		addr=$$($(NM) -an $(BIN_DIR)/$(TARGET).axf | awk -v s=$$sym '$$3 == s { print $$1; exit }'); \
+		case "$$addr" in \
+			201*) ;; \
+			*) echo "ERROR: SPIC/PLL critical symbol $$sym is not in internal SRAM (address=$$addr)"; exit 1 ;; \
+		esac; \
+	done
 	@$(OBJDUMP) -d $(BIN_DIR)/$(TARGET).axf > $(BIN_DIR)/$(TARGET).asm
 
 
