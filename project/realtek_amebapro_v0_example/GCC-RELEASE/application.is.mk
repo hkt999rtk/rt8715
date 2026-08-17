@@ -1140,8 +1140,19 @@ TCPIP_RX_BATCH_TIMEOUT_US ?= 1000
 TCPIP_RX_BATCH_PROFILE ?= 0
 CRYPTO_ENGINE_PROFILE ?= 0
 CARBOX_CRYPTO_OWNER_BOOST_PRIORITY ?= 11
-SYS_PLL_OVERCLOCK ?= 0
-SYS_PLL_TARGET_HZ ?= 300000000
+SYS_PLL_OVERCLOCK ?= 1
+SYS_PLL_TARGET_HZ ?= 330000000
+# The clock configuration is supplied through compiler defines, so normal
+# source timestamps cannot detect an override change.  Rebuild both consumers
+# whenever either value changes: system_overclock.c applies it and main.c logs
+# the requested rate.
+SYS_PLL_CONFIG_STAMP := $(OBJ_DIR)/.sys_pll_config_$(SYS_PLL_OVERCLOCK)-$(SYS_PLL_TARGET_HZ)
+$(SYS_PLL_CONFIG_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.sys_pll_config_*
+	@touch $@
+../src/carbox/system_overclock.o \
+	../src/main.o: $(SYS_PLL_CONFIG_STAMP)
 GCCFLAGS += -DCONFIG_NET_GDMA_COPY=$(NET_GDMA_COPY)
 GCCFLAGS += -DCONFIG_NET_GDMA_BENCH=$(NET_GDMA_BENCH)
 GCCFLAGS += -DCONFIG_NET_GDMA_STATS=$(NET_GDMA_STATS)
