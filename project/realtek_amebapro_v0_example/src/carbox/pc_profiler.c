@@ -1,4 +1,5 @@
 #include "pc_profiler.h"
+#include "i2c_bitbang_pacing.h"
 #include "gcd_sync_profiler.h"
 #include "screen_queue_profiler.h"
 #include "screen_rx_rate_limit.h"
@@ -10,6 +11,8 @@
 #include "irq_profiler.h"
 #include "video_handover_zero_copy.h"
 #include "screen_tx_direct_crypto.h"
+#include "spic_overclock.h"
+#include "system_overclock.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -19,6 +22,7 @@
 #include "cmsis.h"
 #include "diag.h"
 #include "hal_flash_boot.h"
+#include "hal_syson.h"
 #include "hal_timer.h"
 #include "lwip_intf.h"
 #include "lwip/sockets.h"
@@ -35,6 +39,46 @@
 #ifndef CONFIG_PC_PROFILER_RTW_DUMP_PROFILE
 #define CONFIG_PC_PROFILER_RTW_DUMP_PROFILE 0
 #endif
+#ifndef CONFIG_SYS_PLL_TARGET_HZ
+#define CONFIG_SYS_PLL_TARGET_HZ 300000000UL
+#endif
+#ifndef CONFIG_ROM_CLOCK_DUMP
+#define CONFIG_ROM_CLOCK_DUMP 0
+#endif
+
+#define PCPROF_SYSON_REG32(offset) \
+	(*(volatile const uint32_t *)(0x40000000UL + (offset)))
+
+typedef struct pcprof_clock_boot_snapshot_s {
+	int32_t status;
+	uint32_t requested_hz;
+	uint32_t runtime_hz;
+	uint32_t clk_ctrl1;
+	uint32_t pll_ctrl0;
+	uint32_t pll_ctrl1;
+	uint32_t pll_ctrl3;
+	uint32_t pll_test;
+	struct carbox_system_overclock_report overclock;
+	struct carbox_pll_isolated_probe_report isolated;
+	struct carbox_spic_overclock_report spic;
+} pcprof_clock_boot_snapshot_t;
+
+static pcprof_clock_boot_snapshot_t pcprof_clock_boot;
+
+void carbox_pc_profiler_set_clock_boot_status(int status)
+{
+	pcprof_clock_boot.status = status;
+	pcprof_clock_boot.requested_hz = CONFIG_SYS_PLL_TARGET_HZ;
+	pcprof_clock_boot.runtime_hz = SystemCoreClock;
+	pcprof_clock_boot.clk_ctrl1 = PCPROF_SYSON_REG32(0x14U);
+	pcprof_clock_boot.pll_ctrl0 = PCPROF_SYSON_REG32(0x50U);
+	pcprof_clock_boot.pll_ctrl1 = PCPROF_SYSON_REG32(0x54U);
+	pcprof_clock_boot.pll_ctrl3 = PCPROF_SYSON_REG32(0x5CU);
+	pcprof_clock_boot.pll_test = PCPROF_SYSON_REG32(0xA0U);
+	carbox_system_overclock_get_report(&pcprof_clock_boot.overclock);
+	carbox_pll_isolated_probe_get_report(&pcprof_clock_boot.isolated);
+	carbox_spic_overclock_get_report(&pcprof_clock_boot.spic);
+}
 
 #define PCPROF_NEEDS_PC_HASH \
 	(CONFIG_PC_PROFILER_PC_DETAIL || CONFIG_PC_PROFILER_RTW_RECV_DETAIL)
@@ -57,6 +101,416 @@
 #define PCPROF_RTW_DUMP_EXIT_COUNT         6U
 #define PCPROF_TASK_STACK_BYTES       8192U
 #define PCPROF_LATE_REJECT_US            10U
+#define PCPROF_CLOCK_MEASURE_MS           100U
+
+typedef struct pcprof_clock_measurement_s {
+	uint32_t cycles;
+	uint32_t ref_us;
+	uint32_t measured_hz;
+	uint32_t runtime_hz;
+	int32_t runtime_error_ppm;
+	int32_t target_error_ppm;
+	uint8_t valid;
+} pcprof_clock_measurement_t;
+
+static pcprof_clock_measurement_t pcprof_clock_measurement;
+
+#if CONFIG_ROM_CLOCK_DUMP
+#define PCPROF_ROM_START                    0x10000000UL
+#define PCPROF_ROM_END                      0x100B0000UL
+#define PCPROF_ROM_STORE_MAX_MATCHES                 32U
+#define PCPROF_ROM_BASE_LOOKBACK_HALFWORDS          128U
+#define PCPROF_ROM_CODE_LINE_BYTES                    16U
+
+static void pcprof_rom_dump_code(const char *name, uint32_t address,
+				 uint32_t length)
+{
+	static const char hex[] = "0123456789abcdef";
+	volatile const uint8_t *rom;
+	char bytes[PCPROF_ROM_CODE_LINE_BYTES * 3U + 1U];
+	uint32_t offset;
+	uint32_t i;
+
+	if (address < PCPROF_ROM_START || length == 0U ||
+	    address + length < address || address + length > PCPROF_ROM_END ||
+	    (length % PCPROF_ROM_CODE_LINE_BYTES) != 0U) {
+		rt_printf("[ROMCODE][%s] address/length=%08lx/%lu invalid\r\n",
+			  name, (unsigned long)address, (unsigned long)length);
+		return;
+	}
+	rom = (volatile const uint8_t *)(uintptr_t)address;
+	rt_printf("[ROMCODE][%s] base=%08lx length=%lu read_only=1\r\n",
+		  name, (unsigned long)address, (unsigned long)length);
+	for (offset = 0U; offset < length;
+	     offset += PCPROF_ROM_CODE_LINE_BYTES) {
+		for (i = 0U; i < PCPROF_ROM_CODE_LINE_BYTES; ++i) {
+			uint8_t value = rom[offset + i];
+
+			bytes[i * 3U] = hex[value >> 4];
+			bytes[i * 3U + 1U] = hex[value & 0x0FU];
+			bytes[i * 3U + 2U] =
+				(i + 1U == PCPROF_ROM_CODE_LINE_BYTES) ? '\0' : ' ';
+		}
+		rt_printf("[ROMCODE][%s][%08lx] %s\r\n", name,
+			  (unsigned long)(address + offset), bytes);
+	}
+}
+
+struct pcprof_rom_store_match {
+	uint32_t address;
+	uint16_t offset;
+	uint8_t base_reg;
+	uint8_t wide;
+};
+
+static int pcprof_rom_has_syson_base_before(volatile const uint16_t *rom,
+					     uint32_t index, uint8_t base_reg)
+{
+	uint32_t first = index > PCPROF_ROM_BASE_LOOKBACK_HALFWORDS ?
+		index - PCPROF_ROM_BASE_LOOKBACK_HALFWORDS : 0U;
+	uint32_t i;
+
+	/* MOV.W Rn,#0x40000000 is encoded as f04f 4n80 on Cortex-M33. */
+	for (i = index; i > first; --i) {
+		uint16_t first_half = rom[i - 1U];
+		uint16_t second_half;
+
+		if (first_half != 0xF04FU || i >= index) {
+			continue;
+		}
+		second_half = rom[i];
+		if ((second_half & 0xF0FFU) == 0x4080U &&
+		    ((second_half >> 8) & 0x0FU) == base_reg) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static void pcprof_rom_scan_pll_stores(void)
+{
+	volatile const uint16_t *rom =
+		(volatile const uint16_t *)(uintptr_t)PCPROF_ROM_START;
+	uint32_t halfword_count = (PCPROF_ROM_END - PCPROF_ROM_START) /
+				  sizeof(uint16_t);
+	struct pcprof_rom_store_match raw[PCPROF_ROM_STORE_MAX_MATCHES];
+	struct pcprof_rom_store_match qualified[PCPROF_ROM_STORE_MAX_MATCHES];
+	uint32_t raw_total = 0U;
+	uint32_t raw_stored = 0U;
+	uint32_t qualified_total = 0U;
+	uint32_t qualified_stored = 0U;
+	uint32_t i;
+
+	for (i = 0U; i < halfword_count; ++i) {
+		uint16_t first = rom[i];
+		uint16_t offset = 0U;
+		uint8_t base_reg = 0U;
+		uint8_t wide = 0U;
+		int match = 0;
+
+		/* Thumb STR (immediate), where imm5 is scaled by four. */
+		if ((first & 0xF800U) == 0x6000U) {
+			offset = (uint16_t)(((first >> 6) & 0x1FU) * 4U);
+			base_reg = (uint8_t)((first >> 3) & 0x07U);
+			match = offset >= 0x50U && offset <= 0x5CU;
+		} else if ((first & 0xFFF0U) == 0xF8C0U &&
+			   i + 1U < halfword_count) {
+			/* Thumb-2 STR.W Rt,[Rn,#imm12]. */
+			uint16_t second = rom[i + 1U];
+
+			offset = second & 0x0FFFU;
+			base_reg = (uint8_t)(first & 0x0FU);
+			wide = 1U;
+			match = offset >= 0x50U && offset <= 0x5CU &&
+				(offset & 3U) == 0U;
+		}
+		if (!match) {
+			continue;
+		}
+		if (raw_stored < PCPROF_ROM_STORE_MAX_MATCHES) {
+			raw[raw_stored].address = PCPROF_ROM_START + i * 2U;
+			raw[raw_stored].offset = offset;
+			raw[raw_stored].base_reg = base_reg;
+			raw[raw_stored].wide = wide;
+			raw_stored++;
+		}
+		raw_total++;
+		if (!pcprof_rom_has_syson_base_before(rom, i, base_reg)) {
+			continue;
+		}
+		if (qualified_stored < PCPROF_ROM_STORE_MAX_MATCHES) {
+			qualified[qualified_stored].address =
+				PCPROF_ROM_START + i * 2U;
+			qualified[qualified_stored].offset = offset;
+			qualified[qualified_stored].base_reg = base_reg;
+			qualified[qualified_stored].wide = wide;
+			qualified_stored++;
+		}
+		qualified_total++;
+	}
+
+	rt_printf("[ROMSTORE] raw/qualified=%lu/%lu shown=%lu lookback=%uB "
+		  "read_only=1\r\n",
+		  (unsigned long)raw_total, (unsigned long)qualified_total,
+		  (unsigned long)(qualified_stored != 0U ? qualified_stored :
+				  raw_stored),
+		  (unsigned int)(PCPROF_ROM_BASE_LOOKBACK_HALFWORDS * 2U));
+	for (i = 0U; i < (qualified_stored != 0U ? qualified_stored :
+				 raw_stored); ++i) {
+		const struct pcprof_rom_store_match *entry =
+			qualified_stored != 0U ? &qualified[i] : &raw[i];
+
+		rt_printf("[ROMSTORE][%c%02lu] address=%08lx offset=%02x "
+			  "base=r%u encoding=%c read_only=1\r\n",
+			  qualified_stored != 0U ? 'Q' : 'R',
+			  (unsigned long)i,
+			  (unsigned long)entry->address,
+			  (unsigned int)entry->offset,
+			  (unsigned int)entry->base_reg,
+			  entry->wide != 0U ? 'w' : 'n');
+	}
+}
+
+static void pcprof_rom_pll_scan_once(void)
+{
+	uint32_t pll0 = PCPROF_SYSON_REG32(0x50U);
+	uint32_t pll1 = PCPROF_SYSON_REG32(0x54U);
+	uint32_t pll2 = PCPROF_SYSON_REG32(0x58U);
+	uint32_t pll3 = PCPROF_SYSON_REG32(0x5CU);
+
+	rt_printf("[ROMSCAN][LIVE] pll050/054/058/05c="
+		  "%08lx/%08lx/%08lx/%08lx range=%08lx-%08lx read_only=1\r\n",
+		  (unsigned long)pll0, (unsigned long)pll1,
+		  (unsigned long)pll2, (unsigned long)pll3,
+		  (unsigned long)PCPROF_ROM_START,
+		  (unsigned long)PCPROF_ROM_END);
+	/*
+	 * The first pass ruled out all nine syntactic stores: cluster_a is the
+	 * SYS clock mux/divider helper and cluster_b uses a peripheral structure
+	 * pointer rather than SYSON.  The remaining ROM references to the literal
+	 * SYSON base (0x40000000) live in these two regions.  Dump their enclosing
+	 * functions so the PLL_SYS power/ramp/SDM sequence can be reconstructed
+	 * without touching any clock register on the target.
+	 */
+	pcprof_rom_dump_code("syson_ref_33", 0x10033A80UL, 0x000001C0UL);
+	pcprof_rom_dump_code("syson_ref_5f", 0x1005F900UL, 0x00000300UL);
+}
+
+static void pcprof_rom_clock_dump_once(void)
+{
+	static uint8_t dumped;
+	uint32_t select_addr;
+	uint32_t divide_addr;
+	uint32_t query_addr;
+	uint32_t set_addr;
+
+	if (dumped != 0U) {
+		return;
+	}
+	dumped = 1U;
+	select_addr = (uint32_t)(uintptr_t)hal_syson_stubs.hal_syson_sys_clk_sel;
+	divide_addr = (uint32_t)(uintptr_t)hal_syson_stubs.hal_syson_sys_clk_div;
+	query_addr = (uint32_t)(uintptr_t)hal_syson_stubs.hal_syson_query_sys_clk;
+	set_addr = (uint32_t)(uintptr_t)hal_syson_stubs.hal_syson_set_sys_clk;
+	rt_printf("[ROMCLK][STUB] base=%08lx select/divide/query/set="
+		  "%08lx/%08lx/%08lx/%08lx read_only=1\r\n",
+		  (unsigned long)(uintptr_t)&hal_syson_stubs,
+		  (unsigned long)select_addr, (unsigned long)divide_addr,
+		  (unsigned long)query_addr, (unsigned long)set_addr);
+	pcprof_rom_pll_scan_once();
+}
+#endif
+
+/*
+ * The HS system GTimer is sourced from CONFIG_TIMER_SCLK_FREQ (normally the
+ * fixed 2 MHz clock), not SYS PLL.  Pair each reference read with DWT samples
+ * and use their midpoint so the GTimer latch/poll latency does not become a
+ * one-sided frequency error.
+ */
+static uint32_t pcprof_clock_reference_sample(uint32_t *cycle_midpoint)
+{
+	uint32_t before = DWT->CYCCNT;
+	uint32_t reference = hal_read_curtime_us();
+	uint32_t after = DWT->CYCCNT;
+
+	*cycle_midpoint = before + ((after - before) / 2U);
+	return reference;
+}
+
+static void pcprof_clock_measure_once(void)
+{
+	uint32_t cycle_start;
+	uint32_t cycle_end;
+	uint32_t ref_start;
+	uint32_t ref_end;
+	uint32_t ref_us;
+	uint32_t cycles;
+	uint32_t measured_hz;
+	int64_t error_ppm;
+
+	ref_start = pcprof_clock_reference_sample(&cycle_start);
+	/* Keep the core awake: DWT CYCCNT may stop while the CPU is in WFI. */
+	while ((hal_read_curtime_us() - ref_start) <
+	       (PCPROF_CLOCK_MEASURE_MS * 1000U)) {
+		__NOP();
+	}
+	ref_end = pcprof_clock_reference_sample(&cycle_end);
+	ref_us = ref_end - ref_start;
+	cycles = cycle_end - cycle_start;
+
+	pcprof_clock_measurement.ref_us = ref_us;
+	pcprof_clock_measurement.cycles = cycles;
+	if (ref_us < (PCPROF_CLOCK_MEASURE_MS * 500U) || cycles == 0U) {
+		return;
+	}
+
+	measured_hz = (uint32_t)(((uint64_t)cycles * 1000000ULL +
+				     (ref_us / 2U)) / ref_us);
+	pcprof_clock_measurement.measured_hz = measured_hz;
+	pcprof_clock_measurement.runtime_hz = SystemCoreClock;
+	if (pcprof_clock_measurement.runtime_hz != 0U) {
+		error_ppm = ((int64_t)measured_hz -
+			     (int64_t)pcprof_clock_measurement.runtime_hz) *
+			1000000LL / (int64_t)pcprof_clock_measurement.runtime_hz;
+		pcprof_clock_measurement.runtime_error_ppm = (int32_t)error_ppm;
+	}
+	if (CONFIG_SYS_PLL_TARGET_HZ != 0U) {
+		error_ppm = ((int64_t)measured_hz -
+			     (int64_t)CONFIG_SYS_PLL_TARGET_HZ) *
+			1000000LL / (int64_t)CONFIG_SYS_PLL_TARGET_HZ;
+		pcprof_clock_measurement.target_error_ppm = (int32_t)error_ppm;
+	}
+	/* Catch a reset/stopped DWT without accepting a plausible-looking result. */
+	pcprof_clock_measurement.valid =
+		(measured_hz >= 100000000U && measured_hz <= 500000000U) ? 1U : 0U;
+}
+
+static void pcprof_clock_report(uint32_t sequence)
+{
+	struct carbox_system_overclock_report *overclock =
+		&pcprof_clock_boot.overclock;
+	struct carbox_pll_isolated_probe_report *isolated =
+		&pcprof_clock_boot.isolated;
+	struct carbox_spic_overclock_report *spic = &pcprof_clock_boot.spic;
+
+	rt_printf("[PCPROF][%lu][CLOCKBOOT] status=%ld requested/runtime=%lu/%luHz "
+		  "regs014/050/054/05c/0a0=%08lx/%08lx/%08lx/%08lx/%08lx "
+		  "spic status/target/max/actual=%ld/%lu/%lu/%luHz\r\n",
+		  (unsigned long)sequence, (long)pcprof_clock_boot.status,
+		  (unsigned long)pcprof_clock_boot.requested_hz,
+		  (unsigned long)pcprof_clock_boot.runtime_hz,
+		  (unsigned long)pcprof_clock_boot.clk_ctrl1,
+		  (unsigned long)pcprof_clock_boot.pll_ctrl0,
+		  (unsigned long)pcprof_clock_boot.pll_ctrl1,
+		  (unsigned long)pcprof_clock_boot.pll_ctrl3,
+		  (unsigned long)pcprof_clock_boot.pll_test,
+		  (long)spic->status,
+		  (unsigned long)spic->target_sys_hz,
+		  (unsigned long)spic->qualified_max_hz,
+		  (unsigned long)spic->selected_spic_hz);
+	rt_printf("[PCPROF][%lu][CLOCKVERIFY] cpu/pll/measured=%lu/%lu/%luHz "
+		  "sdm divn/fon/fof=%u/%u/%u valid/rollback=%u/%u "
+		  "rollback_measured=%luHz cycles/ref_us=%lu/%lu tolerance=%u%%\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)overclock->target_hz,
+		  (unsigned long)overclock->pll_target_hz,
+		  (unsigned long)overclock->measured_hz,
+		  (unsigned int)overclock->divn,
+		  (unsigned int)overclock->fon,
+		  (unsigned int)overclock->fof,
+		  (unsigned int)overclock->measurement_valid,
+		  (unsigned int)overclock->rolled_back,
+		  (unsigned long)overclock->rollback_measured_hz,
+		  (unsigned long)overclock->cycles,
+		  (unsigned long)overclock->reference_us,
+		  (unsigned int)overclock->tolerance_pct);
+	rt_printf("[PCPROF][%lu][PLLISO] status=%ld target/observe=%lu/%luHz "
+		  "sdm=%u/%u/%u ready/restored=%u/%u "
+		  "direct=%u measured before/ana/base_div2/candidate/restore="
+		  "%lu/%lu/%lu/%lu/%luHz\r\n",
+		  (unsigned long)sequence, (long)isolated->status,
+		  (unsigned long)isolated->target_pll_hz,
+		  (unsigned long)isolated->expected_div2_hz,
+		  (unsigned int)isolated->divn,
+		  (unsigned int)isolated->fon,
+		  (unsigned int)isolated->fof,
+		  (unsigned int)isolated->target_ready,
+		  (unsigned int)isolated->restored,
+		  (unsigned int)isolated->target_direct,
+		  (unsigned long)isolated->before.measured_hz,
+		  (unsigned long)isolated->ana.measured_hz,
+		  (unsigned long)isolated->baseline_div2.measured_hz,
+		  (unsigned long)isolated->target_div2.measured_hz,
+		  (unsigned long)isolated->restored_sample.measured_hz);
+	rt_printf("[PCPROF][%lu][PLLISOREG] clk original/ana/div2/restored="
+		  "%08lx/%08lx/%08lx/%08lx pll1 original/target=%08lx/%08lx "
+		  "pll3 original/target=%08lx/%08lx test=%08lx "
+		  "raw candidate cycles/ref_us=%lu/%lu\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)isolated->original_clk_ctrl1,
+		  (unsigned long)isolated->ana.clk_ctrl1,
+		  (unsigned long)isolated->target_div2.clk_ctrl1,
+		  (unsigned long)isolated->restored_sample.clk_ctrl1,
+		  (unsigned long)isolated->original_pll_ctrl1,
+		  (unsigned long)isolated->target_pll_ctrl1,
+		  (unsigned long)isolated->original_pll_ctrl3,
+		  (unsigned long)isolated->target_pll_ctrl3,
+		  (unsigned long)isolated->target_pll_test,
+		  (unsigned long)isolated->target_div2.cycles,
+		  (unsigned long)isolated->target_div2.reference_us);
+	rt_printf("[PCPROF][%lu][PLLISOPOWER] enabled/drop target/restore=%u/%u/%u "
+		  "sdm_after_enable/manual_transition=%u/%u "
+		  "freq_sel=%u->%u "
+		  "ctrl0 original/off/target/restored=%08lx/%08lx/%08lx/%08lx\n",
+		  (unsigned long)sequence,
+		  (unsigned int)isolated->power_cycle,
+		  (unsigned int)isolated->target_ready_dropped,
+		  (unsigned int)isolated->restore_ready_dropped,
+		  (unsigned int)isolated->sdm_power_after_enable,
+		  (unsigned int)isolated->manual_mode_transition,
+		  (unsigned int)isolated->original_freq_sel,
+		  (unsigned int)isolated->target_freq_sel,
+		  (unsigned long)isolated->original_pll_ctrl0,
+		  (unsigned long)isolated->disabled_pll_ctrl0,
+		  (unsigned long)isolated->target_pll_ctrl0,
+		  (unsigned long)isolated->restored_pll_ctrl0);
+	rt_printf("[PCPROF][%lu][SPICBOOT] id=%02x%02x%02x mode=%u "
+		  "div=%u->%u dummy/delay/window=%u/%u/%u seq=%u->%u\r\n",
+		  (unsigned long)sequence,
+		  (unsigned int)spic->flash_id[0],
+		  (unsigned int)spic->flash_id[1],
+		  (unsigned int)spic->flash_id[2],
+		  (unsigned int)spic->io_mode,
+		  (unsigned int)spic->old_divider,
+		  (unsigned int)spic->selected_divider,
+		  (unsigned int)spic->selected_dummy,
+		  (unsigned int)spic->selected_delay,
+		  (unsigned int)spic->delay_window,
+		  (unsigned int)spic->sequential_was_enabled,
+		  (unsigned int)spic->sequential_is_enabled);
+	rt_printf("[PCPROF][%lu][CLOCK] valid=%u measured=%luHz "
+		  "runtime_measure/now=%lu/%luHz error_ppm runtime/target=%ld/%ld "
+		  "cycles/ref_us=%lu/%lu ref=HS_GTimer(%uHz) "
+		  "regs_now014/050/054/05c/0a0=%08lx/%08lx/%08lx/%08lx/%08lx\r\n",
+		  (unsigned long)sequence,
+		  (unsigned int)pcprof_clock_measurement.valid,
+		  (unsigned long)pcprof_clock_measurement.measured_hz,
+		  (unsigned long)pcprof_clock_measurement.runtime_hz,
+		  (unsigned long)SystemCoreClock,
+		  (long)pcprof_clock_measurement.runtime_error_ppm,
+		  (long)pcprof_clock_measurement.target_error_ppm,
+		  (unsigned long)pcprof_clock_measurement.cycles,
+		  (unsigned long)pcprof_clock_measurement.ref_us,
+		  (unsigned int)CONFIG_TIMER_SCLK_FREQ,
+		  (unsigned long)PCPROF_SYSON_REG32(0x14U),
+		  (unsigned long)PCPROF_SYSON_REG32(0x50U),
+		  (unsigned long)PCPROF_SYSON_REG32(0x54U),
+		  (unsigned long)PCPROF_SYSON_REG32(0x5CU),
+		  (unsigned long)PCPROF_SYSON_REG32(0xA0U));
+#if CONFIG_ROM_CLOCK_DUMP
+	pcprof_rom_clock_dump_once();
+#endif
+}
 
 static void pcprof_fw_slot_report(uint32_t sequence)
 {
@@ -315,8 +769,8 @@ static inline __attribute__((always_inline)) int pcprof_valid_pc(uint32_t pc)
 	return (pc < 0x00100000U) ||
 	       (pc >= 0x10000000U && pc < 0x10200000U) ||
 	       (pc >= 0x20000000U && pc < 0x20200000U) ||
-	       (pc >= 0x70000000U && pc < 0x71000000U) ||
-	       (pc >= 0x98000000U && pc < 0x99000000U);
+	       (pc >= 0x70000000U && pc < 0x72000000U) ||
+	       (pc >= 0x98000000U && pc < 0x9C000000U);
 }
 
 static inline __attribute__((always_inline)) int pcprof_valid_xpsr(uint32_t xpsr)
@@ -874,6 +1328,7 @@ static void pcprof_task(void *arg)
 	(void)arg;
 	CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
 	DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+	pcprof_clock_measure_once();
 	pcprof_period_cycles =
 		(uint32_t)(((uint64_t)SystemCoreClock * PCPROF_SAMPLE_PERIOD_US) /
 			   1000000U);
@@ -970,6 +1425,8 @@ static void pcprof_task(void *arg)
 			      interval_cycles_sum, interval_cycles_max,
 			      interval_count, late_10us, late_100us,
 			      caller_attributed);
+		pcprof_clock_report(sequence);
+		carbox_i2c_bitbang_pacing_report(sequence);
 		pcprof_fw_slot_report(sequence);
 #if defined(CONFIG_IRQ_PROFILE_REPORT) && CONFIG_IRQ_PROFILE_REPORT
 		carbox_irq_profiler_report(sequence, PCPROF_REPORT_PERIOD_MS);

@@ -183,11 +183,30 @@ SECTIONS
 		*(.wlan.text.rtw_recv_indicatepkt)
 		*(.wlan.text.rltk_netif_rx)
 
+		/* Source-owned GDMA RX rotation is called directly by the receive
+		 * tasklet.  Its complete executable/constant footprint is about 1 KiB;
+		 * keep it with the surrounding WLAN receive path in ITCM. */
+		*lib_wlan_zero_copy.a:wlan_rx_dma_mgr.o(.text* .rodata*)
+
 		/* Called at every context switch; keep the DWT read beside the
 		 * FreeRTOS scheduler in ITCM and avoid an XIP/DRAM veneer. */
 		*(.cinit.itcm.text.atss_runtime_counter_get)
 		/* CINIT compilation prefixes explicit sections with `.cinit`. */
 		*(.cinit.itcm.text.libc_memcpy_m33)
+
+		/* Small source-owned crypto alias wrappers are on every protected
+		 * audio packet.  Keep lookup/copy helpers beside the existing hot
+		 * crypto wrappers rather than fetching them from NOR. */
+		*chacha_key_alias_fix.o(.text* .rodata*)
+
+		/* Repeated PC samples from the audio and WLAN tasks land in these
+		 * compact time, allocation-accounting and arithmetic helpers. */
+		*FreeRTOS_POSIX_clock.o(.text* .rodata*)
+		*FreeRTOS_POSIX_utils.o(.text* .rodata*)
+		*osdep_service.o(.text* .rodata*)
+		*libgcc.a:_aeabi_ldivmod.o(.text*)
+		*libgcc.a:_aeabi_uldivmod.o(.text*)
+		*lib_SystemLib.a:Window.o(.text.GetTickCount)
 
 		/*
 		 * The public mem* wrappers deliberately avoid the slower Realtek
@@ -201,32 +220,12 @@ SECTIONS
 		*(.itcm.text*)
 
 		/*
-		 * Codec placement experiment (2026-08-04): lwIP is compiled into
-		 * LPDDR so ITCM can be spent on sustained audio loops.  Select
-		 * function sections instead of entire archives: lib_fdkaac is about
-		 * 616 KiB and lib_opus is about 169 KiB, so neither archive fits in
-		 * the 128 KiB ITCM as a whole.
-		 *
-		 * FDK AAC: frame-level encode/decode, psychoacoustic/QC, SBR, TNS,
-		 * transform, FFT and QMF loops.  Lookup tables intentionally remain
-		 * in LPDDR; only executable hot paths consume ITCM.
+		 * The production AAC-LC route uses Helix and retains FDK only as a
+		 * compatibility fallback/encoder.  Do not spend ITCM on the 50 KiB
+		 * selected FDK subset; the complete FDK archive is placed in LPDDR
+		 * below.  Helix executable sections remain in ITCM, while its lookup
+		 * tables are separated into internal SRAM data sections later.
 		 */
-		*lib_fdkaac*.a:*(
-			.text.*FDKaacEnc_EncodeFrame*
-			.text.*FDKaacEnc_psyMain*
-			.text.*FDKaacEnc_QCMain*
-			.text.*FDKaacEnc_Transform_Real*
-			.text.*FDKaacEnc_MsStereoProcessing*
-			.text.*CAacDecoder_DecodeFrame*
-			.text.*CBlock_FrequencyToTime*
-			.text.*CTns_Filter*
-			.text.*sbr_dec*
-			.text.*lppTransposer*
-			.text.*imdct_block*
-			.text.*InvMdctTransformLowDelay_fdk*
-		)
-		*lib_fdkaac*.a:fft.o(.text*)
-		*lib_fdkaac*.a:qmf.o(.text*)
 
 		/*
 		 * Opus: CELT/SILK decode plus the two dominant top-level encoder
@@ -256,15 +255,87 @@ SECTIONS
 		)
 
 		/*
-		 * CDC-NCM TX runs synchronously in the TCP_IP output path.  Keep only
-		 * the three per-packet functions in ITCM; the rest of lib_usbsmart is
-		 * placed in LPDDR below so no USB code falls back to NOR XIP.
+		 * CDC-NCM TX runs synchronously in the TCP_IP output path.  The
+		 * customer archive is transformed into lib_usbsmart_link.a before it
+		 * is linked, so match both that archive and an untransformed customer
+		 * archive.  Keep the small per-packet path in ITCM; the rest of the USB
+		 * stack is placed in LPDDR below.
 		 */
-		*lib_usbsmart.a:usbh_cdc_ncm_hal.o(.text.usbh_cdc_ncm_send_data)
-		*lib_usbsmart.a:ncm.o(.text.ncm_wrap_ntb)
-		*lib_usbsmart.a:usbh_cdc_ncm.o(.text.usbh_cdc_ncm_bulk_send)
+		*lib_usbsmart*.a:usbh_cdc_ncm_hal.o(.text.usbh_cdc_ncm_send_data)
+		*lib_usbsmart*.a:ncm.o(.text.ncm_wrap_ntb)
+		*lib_usbsmart*.a:usbh_cdc_ncm.o(.text.usbh_cdc_ncm_bulk_send)
+		*(.text.__wrap_ncm_wrap_ntb)
+		*ncm_wrap_profiler.o(.text.ncm_wrap_copy_elide*)
+		*(.eram.text.ncm_send_pbuf_sync)
+		*(.eram.text.ncm_tx_async_worker)
+		*lib_usbsmart*.a:usbh_cdc_ncm.o(
+			.text.usbh_cdc_ncm_bulk_tx
+			.text.usbh_cdc_ncm_process_bulk_out
+		)
 
-		*(.haac.text*)
+		/* The USB host ISR and its small direct completion helpers execute for
+		 * every bulk transfer.  Keep this bounded set in ITCM; enumeration,
+		 * setup and class-control paths remain in LPDDR. */
+		*lib_usbsmart*.a:usbh_hcd.o(
+			.text.usbh_hcd_irq_handler
+			.text.usbh_hcd_isr_task
+			.text.usbh_hcd_hc_get_urb_state
+			.text.usbh_hcd_handle_*
+			.text.usbh_hcd_release_channel*
+			.text.usbh_hcd_save_data_toggle*
+			.text.usbh_hcd_hc_halt
+			.text.usbh_hcd_hc_submit_request
+		)
+		*lib_usbsmart*.a:usbh_hal.o(
+			.text.usbh_hal_hc_halt
+			.text.usbh_hal_hc_read_interrupt
+			.text.usbh_hal_init_hc_int_mask
+			.text.usbh_hal_hc_start_transfer
+			.text.usbh_hal_init_clock
+		)
+		*lib_usbsmart*.a:usb_hal.o(
+			.text.usb_hal_disable_interrupt
+			.text.usb_hal_read_interrupts
+			.text.usb_hal_read_packet
+			.text.usb_hal_write_packet
+			.text.usb_hal_get_otg_mode
+			.text.usb_hal_enable_interrupt
+		)
+		*lib_usbsmart*.a:usb_os.o(
+			.text.usb_os_lock
+			.text.usb_os_unlock
+			.text.usb_os_sema_take
+		)
+		*lib_usbsmart*.a:usbh_core.o(
+			.text.usbh_core_enable_port
+			.text.usbh_core_disable_port
+			.text.usbh_core_notify_urb_state_change
+			.text.usbh_core_get_urb_state
+			.text.usbh_core_bulk_send_data
+			.text.usbh_core_get_time_tick_stamp
+		)
+		*lib_usbsmart*.a:usbh.o(
+			.text.usbh_get_urb_state
+			.text.usbh_get_elapsed_ticks
+			.text.usbh_get_tick
+			.text.usbh_bulk_send_data
+		)
+		*(.text.DCache_Clean)
+		*(.text.DCache_Invalidate)
+		/* The hardware IRQ entry wakes the HCD task through this compatibility
+		 * wrapper.  Keeping both tiny functions here avoids an LPDDR/NOR fetch
+		 * on every USB interrupt. */
+		*(.text.__wrap_usb_os_sema_give)
+		*(.text.carbox_libusb_ref_yield_from_isr)
+
+		/* lwIP's owned write and output functions are the synchronous bridge
+		 * from application-owned payloads to the NCM packet path. */
+		*(.eram.text.tcp_write_owned)
+		*(.eram.text.tcp_output)
+		*(.eram.text.tcp_output_control_segment)
+		*(.eram.text.tcp_owned_pbuf_free)
+
+		*(.haac.text.text*)
 		*(.faac.text*)
 		*(.hmp3.text*)
 
@@ -303,17 +374,26 @@ SECTIONS
 		*(.eram.text*)
 		*(.speex.text*)
 
+		/* Compatibility code participates in the USB runtime path.  Hot leaf
+		 * functions selected above live in ITCM; keep every remaining wrapper
+		 * in LPDDR so USB execution never falls back to NOR XIP. */
+		*libusb_ref_compat_hal.o(.text*)
+		*libusb_ref_compat_os.o(.text*)
+		*usb_ref_smart_compat.o(.text*)
+		*usbsmart_otp_compat.o(.text*)
+		*carplay_smart_api_stubs.o(.text*)
+
 		/* Keep the sustained USB host controller path out of NOR XIP. */
-		*lib_usbsmart.a:usbh_hcd.o(.text*)
-		*lib_usbsmart.a:usbh_hal.o(.text*)
-		*lib_usbsmart.a:usb_hal.o(.text*)
-		*lib_usbsmart.a:usb_os.o(.text*)
+		*lib_usbsmart*.a:usbh_hcd.o(.text*)
+		*lib_usbsmart*.a:usbh_hal.o(.text*)
+		*lib_usbsmart*.a:usb_hal.o(.text*)
+		*lib_usbsmart*.a:usb_os.o(.text*)
 		/*
 		 * Keep the complete USB stack out of NOR XIP.  Sections selected for
 		 * ITCM above have already been consumed; every remaining USB function
 		 * executes from LPDDR.
 		 */
-		*lib_usbsmart.a:*(.text*)
+		*lib_usbsmart*.a:*(.text*)
 
 		/*
 		 * Sustained CarPlay screen/audio processing must not compete with
@@ -326,6 +406,61 @@ SECTIONS
 		*lib_CarPlay_chacha_m33.a:*(.text*)
 		*lib_fdkaac*.a:*(.text*)
 		*lib_Accessory2.a:AirPlayScreen.o(.text*)
+
+		/* The active build links handover-suffixed CarPlay archives.  Keep the
+		 * sustained screen receive/dispatch path out of NOR without pulling the
+		 * complete (roughly 1 MiB) handover archives into LPDDR. */
+		*lib_Accessory2_handover.a:AirPlayScreen.o(.text*)
+		*lib_CarPlay_chacha_m33_handover.a:AirPlayReceiverSessionScreen.o(.text*)
+		*lib_CarPlay_chacha_m33_handover.a:ScreenUtilsStub.o(.text*)
+		*lib_CarPlay_chacha_m33_handover.a:AirPlayReceiverSession.o(.text._ScreenThread)
+
+		/* Sustained audio decode/output path from the same handover archives.
+		 * AirPlayReceiverSession.o is large, so select only its audio receive
+		 * function instead of relocating the complete object. */
+		*lib_Accessory2_handover.a:AirPlayAudio.o(.text*)
+		*lib_CarPlay_chacha_m33_handover.a:AudioConverter_FDKAAC_OPUS.o(.text*)
+		*lib_CarPlay_chacha_m33_handover.a:AudioUtilsALSA.o(.text*)
+		*lib_CarPlay_chacha_m33_handover.a:AirPlayReceiverSession.o(.text.AirPlayReceiverSessionReadAudio)
+
+		/* PC sampling shows the active audio output path repeatedly executing
+		 * these software ChaCha/Poly1305 sections from NOR.  Relocate only the
+		 * observed functions; the much larger fallback object stays in XIP. */
+		*lib_CarPlay_chacha_m33_handover.a:ChaCha20Poly1305.o(
+			.text.chacha20_poly1305_xor
+			.text.chacha20_poly1305_finish_tag
+			.text.chacha20_poly1305_final
+			.text.poly1305_blocks_c
+			.text.chacha20_poly1305_init_64x64_software
+			.text.chacha_select_hardware_backend
+			.text.chacha_deferred_copy
+			.text.chacha_hardware_xor_chunks
+			.text.chacha_hardware_auth_standalone
+			.text.poly1305_update_state
+			.text.chacha20_poly1305_init_64x64
+			.text.chacha20_poly1305_add_aad
+			.text.chacha20_poly1305_encrypt
+			.text.chacha20_poly1305_decrypt
+			.text.chacha20_poly1305_verify
+			.text.chacha_mode2_finish_encrypt_software
+		)
+		*lib_CarPlay_chacha_m33_handover.a:MiscUtils.o(.text.Swap16Mem)
+
+		/* Default executable placement: after the explicit ITCM and LPDDR
+		 * selectors above, put every remaining ordinary text section in
+		 * LPDDR.  The excluded objects are consumed later by the internal-RAM
+		 * and C-init output sections; they must remain executable while flash
+		 * or LPDDR clocks/controllers are being initialized or reconfigured. */
+		*(EXCLUDE_FILE (
+			*hal_spic.o
+			*hal_lpddr.o
+			*hal_misc.o
+			*hal_sys_ctrl.o
+			*ram_start.o
+			*_arm_addsubdf3.o
+			*_arm_muldivdf3.o
+			*_arm_fixunsdfsi.o
+		) .text*)
 
 		__psram_code_text_end__ = .;
 		__lpddr_code_text_end__ = .;
@@ -351,18 +486,53 @@ SECTIONS
 		*(.usbd.rodata.str1*)
 		*(.wlan.rodata.str1*)
 		*(.eram.rodata.str1*)
+		*libusb_ref_compat_hal.o(.rodata*)
+		*libusb_ref_compat_os.o(.rodata*)
+		*usb_ref_smart_compat.o(.rodata*)
+		*usbsmart_otp_compat.o(.rodata*)
+		*carplay_smart_api_stubs.o(.rodata*)
 
-		*lib_usbsmart.a:usbh_hcd.o(.rodata*)
-		*lib_usbsmart.a:usbh_hal.o(.rodata*)
-		*lib_usbsmart.a:usb_hal.o(.rodata*)
-		*lib_usbsmart.a:usb_os.o(.rodata*)
-		*lib_usbsmart.a:*(.rodata*)
+		*lib_usbsmart*.a:usbh_hcd.o(.rodata*)
+		*lib_usbsmart*.a:usbh_hal.o(.rodata*)
+		*lib_usbsmart*.a:usb_hal.o(.rodata*)
+		*lib_usbsmart*.a:usb_os.o(.rodata*)
+		*lib_usbsmart*.a:*(.rodata*)
 
 		/* Keep hot codec/crypto lookup tables with their LPDDR text. */
 		*lib_CarPlay.a:*(.rodata*)
 		*lib_CarPlay_chacha_m33.a:*(.rodata*)
 		*lib_fdkaac*.a:*(.rodata* .haac.rodata* .faac.rodata*)
 		*lib_Accessory2.a:AirPlayScreen.o(.rodata*)
+
+		*lib_Accessory2_handover.a:AirPlayScreen.o(.rodata*)
+		*lib_CarPlay_chacha_m33_handover.a:AirPlayReceiverSessionScreen.o(.rodata*)
+		*lib_CarPlay_chacha_m33_handover.a:ScreenUtilsStub.o(.rodata*)
+		*lib_CarPlay_chacha_m33_handover.a:AirPlayReceiverSession.o(.rodata._ScreenThread*)
+
+		*lib_Accessory2_handover.a:AirPlayAudio.o(.rodata*)
+		*lib_CarPlay_chacha_m33_handover.a:AudioConverter_FDKAAC_OPUS.o(.rodata*)
+		*lib_CarPlay_chacha_m33_handover.a:AudioUtilsALSA.o(.rodata*)
+		*lib_CarPlay_chacha_m33_handover.a:AirPlayReceiverSession.o(.rodata.AirPlayReceiverSessionReadAudio*)
+		*lib_CarPlay_chacha_m33_handover.a:ChaCha20Poly1305.o(
+			.rodata.chacha20_poly1305_final*
+			.rodata.chacha20_poly1305_init_64x64*
+			.rodata.chacha20_poly1305_verify*
+			.rodata.zeros.*
+		)
+
+		/* Default constants follow their code into LPDDR.  Preserve the
+		 * controller/startup objects selected by .ram.code_rodata below. */
+		*(EXCLUDE_FILE (
+			*hal_spic.o
+			*hal_lpddr.o
+			*hal_misc.o
+			*hal_sys_ctrl.o
+			*ram_start.o
+		) .rodata*)
+		*(.itcm.rodata*)
+		*(.haac.rodata*)
+		*(.faac.rodata*)
+		*(.speex.rodata*)
 
 		. = ALIGN(4);
 		__psram_code_rodata_end__ = .;
@@ -381,7 +551,10 @@ SECTIONS
 		*(.sdram.data*)
 		*(.usbd.data*)
 		*(.wlan.data*)
-		*(.eram.data*)
+		/* tcpip.o owns the per-packet RX stage-1 pool and its small free-list
+		 * state.  Leave those sections for the internal-SRAM data output below;
+		 * all other ERAM data remains in LPDDR. */
+		*(EXCLUDE_FILE (*tcpip.o) .eram.data*)
 		*/mem.o (.itcm.bss*)
 		*/memp.o (.itcm.bss*)
 
@@ -403,7 +576,7 @@ SECTIONS
 		*(.sdram.bss*)
 		*(.usbd.bss*)
 		*(.wlan.bss*)
-		*(.eram.bss*)
+		*(EXCLUDE_FILE (*tcpip.o) .eram.bss*)
 		*(.bss.eram*)
 
 		__eram_bss_end__ = .;
@@ -457,6 +630,10 @@ SECTIONS
 		*hal_sys_ctrl.o(.rodata*)
 		*ram_start.o(.rodata*)
 
+		/* Helix AAC constant lookup tables are read for every decoded frame.
+		 * Keep them in internal SRAM without consuming instruction TCM. */
+		*(.haac.text.rodata*)
+
 		*(.sram.rodata*)
 		*(.sram.rodata.str1*)
 		. = ALIGN(4);
@@ -468,6 +645,13 @@ SECTIONS
 		. = ALIGN(16);
 		__fw_img_start__ = .;
 		__data_start__ = .;
+		/* The vendor Helix archive labels large twiddle/window/Huffman tables
+		 * as sdram.data below a .haac.text prefix.  They are hot read-mostly
+		 * data, so place them in internal SRAM rather than ITCM or LPDDR. */
+		*(.haac.text.sdram.data*)
+		/* RX stage-1 free-list indices are touched with the pool for every
+		 * packet.  Keep them in the same internal-SRAM bank. */
+		*tcpip.o(.eram.data*)
 		*(vtable)
 		*(.data*)
 		*(.sram.data*)
@@ -617,6 +801,14 @@ SECTIONS
 		__xip_code_rodata_end__ = .;
 	} > XIP_FLASH
 
+	/* The release placement policy is ITCM/SRAM first and LPDDR otherwise.
+	 * Fail at link time if a new ordinary text/rodata section silently falls
+	 * back to NOR XIP.  ARM unwind metadata is intentionally left separate. */
+	ASSERT(__xip_code_text_end__ == __xip_code_text_start__,
+	       "unselected executable text fell back to NOR XIP")
+	ASSERT(__xip_code_rodata_end__ == __xip_code_rodata_start__,
+	       "unselected read-only data fell back to NOR XIP")
+
 	/*******************************************************************************************/
 	/*   Others placement                                                                      */
 	/*******************************************************************************************/
@@ -638,6 +830,11 @@ SECTIONS
 		__cinit_bss_end__ = .;
 
 		__bss_start__ = .;
+		/* The 5.5 KiB pointer-message pool is a per-packet data hot spot.  VOE
+		 * is disabled in this image, so the pool and its control state can use
+		 * shared internal SRAM instead of LPDDR without changing ownership or
+		 * queue semantics. */
+		*tcpip.o(.eram.bss*)
 		*(.bss*)
 		*(.sram.bss*)
 		*(.itcm.bss*)
@@ -657,7 +854,14 @@ SECTIONS
 		__ns_bss_end__ = .;
 		__bss_end__ = .;
 	} > RAM
-	
+
+	/* Only 0x20100000..0x2017A000 is qualified as bus-visible internal SRAM
+	 * when VOE is disabled.  RAM_LENGTH is intentionally broader for legacy
+	 * image layout, so fail the link rather than silently placing static data
+	 * beyond the qualified shared-SRAM bank. */
+	ASSERT(__bss_end__ <= 0x2017A000,
+	       "internal SRAM static data exceeds VOE-disabled safe boundary")
+
 	/* Non-Cacheable memory, the memory range should be configured by a MPU region */
 	.non_cacheable_data :
 	{

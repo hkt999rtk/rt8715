@@ -12,6 +12,9 @@ extern "C" {
  */
 void carbox_pc_profiler_start(void);
 
+/* Save the early PLL/SPIC result before console output can be observed. */
+void carbox_pc_profiler_set_clock_boot_status(int status);
+
 #ifdef __cplusplus
 }
 #endif

@@ -757,6 +757,7 @@ SRC_C += ../src/carbox/aes_backend_select.c
 SRC_C += ../src/carbox/aes_ctr_periodic_selftest.c
 SRC_C += ../src/carbox/carbox_diag.c
 SRC_C += ../src/carbox/pc_profiler.c
+SRC_C += ../src/carbox/i2c_bitbang_pacing.c
 SRC_C += ../src/carbox/ota_local_upload_page.c
 SRC_C += ../src/carbox/ota/carplay_ota_compat.c
 SRC_C += ../src/carbox/irq_profiler.c
@@ -900,12 +901,14 @@ $(NCM_TX_PROFILE_STAMP):
 	@rm -f $(OBJ_DIR)/.ncm_tx_profile_*
 	@touch $@
 ../../../component/common/network/lwip/lwip_v2.1.2/port/realtek/freertos/ethernetif.o: $(NCM_TX_PROFILE_STAMP)
-PC_PROFILER ?= 0
+# Keep the boot-time PLL/SPIC result visible in the recurring 10-second report.
+PC_PROFILER ?= 1
 # Optional PC-level reports. Keep task utilization sampling enabled while
 # suppressing the verbose per-PC reports during IRQ-count investigation.
 PC_PROFILER_PC_DETAIL ?= 0
 PC_PROFILER_RTW_RECV_DETAIL ?= 0
 PC_PROFILER_RTW_DUMP_PROFILE ?= 0
+ROM_CLOCK_DUMP ?= 0
 IRQ_PROFILE ?= 0
 IRQ_PROFILE_REPORT ?= 0
 # Optional USB observations. These wrappers only record arguments/timing and
@@ -958,14 +961,14 @@ SCREEN_DATAPATH_PROFILE ?= 0
 # closed receiver is identified once by task plus its validated 128-byte frame
 # header; all other sockets retain the stock lwIP receive path.
 SCREEN_RX_RATE_LIMIT ?= 1
-SCREEN_RX_RATE_LIMIT_BPS ?= 10000000
+SCREEN_RX_RATE_LIMIT_BPS ?= 9000000
 SCREEN_RX_RATE_LIMIT_INTERVAL_MS ?= 10
 SCREEN_RX_RATE_LIMIT_BUCKET_BYTES ?= 32768
 SCREEN_RX_RATE_LIMIT_CONTROL_MS ?= 100
 SCREEN_RX_RATE_LIMIT_DEADBAND_PERCENT ?= 10
 SCREEN_RX_RATE_LIMIT_FILTER_SHIFT ?= 2
 SCREEN_RX_RATE_LIMIT_VALVE_MIN_BPS ?= 1000000
-SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS ?= 10000000
+SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS ?= 9000000
 SCREEN_RX_RATE_LIMIT_OPEN_STEP_BPS ?= 125000
 SCREEN_RX_RATE_LIMIT_CLOSE_STEP_BPS ?= 500000
 SCREEN_RX_RATE_LIMIT_OPEN_HOLD_MS ?= 100
@@ -973,8 +976,8 @@ SCREEN_RX_RATE_LIMIT_CLOSE_HOLD_MS ?= 150
 SCREEN_RX_RATE_LIMIT_TASK_PRIORITY ?= 5
 SCREEN_RX_RATE_LIMIT_TASK_STACK ?= 512
 # Smooth each ScreenThread TCP write without creating a second long-term
-# controller. RX owns the long-term rate; TX uses the same 10-Mbps ceiling and
-# can burst by no more than the peer's observed 23,040-byte window.
+# controller. RX owns the 9-Mbps long-term rate; TX retains a 10-Mbps ceiling
+# and can burst by no more than the peer's observed 23,040-byte window.
 SCREEN_TX_PACER ?= 1
 SCREEN_TX_PACER_BPS ?= 10000000
 SCREEN_TX_PACER_BUCKET_BYTES ?= 23040
@@ -1141,26 +1144,114 @@ TCPIP_RX_BATCH_TIMEOUT_US ?= 1000
 TCPIP_RX_BATCH_PROFILE ?= 0
 CRYPTO_ENGINE_PROFILE ?= 0
 CARBOX_CRYPTO_OWNER_BOOST_PRIORITY ?= 11
+# Public clock selection.  Use only SYSTEM_CLOCK_PROFILE on normal builds;
+# SYS_PLL_OVERCLOCK and SYS_PLL_TARGET_HZ are derived implementation details.
+# Supported release profiles:
+#   300: retain the ROM-established PLL_SYS/CPU 300 MHz path
+#   400: apply the qualified PLL_SYS/CPU 400 MHz preset during early boot
+SYSTEM_CLOCK_PROFILE ?= 300
+ifeq ($(SYSTEM_CLOCK_PROFILE),300)
+SYS_PLL_OVERCLOCK ?= 0
+SYS_PLL_TARGET_HZ ?= 300000000
+else ifeq ($(SYSTEM_CLOCK_PROFILE),400)
 SYS_PLL_OVERCLOCK ?= 1
-SYS_PLL_TARGET_HZ ?= 360000000
+SYS_PLL_TARGET_HZ ?= 400000000
+else
+$(error Unsupported SYSTEM_CLOCK_PROFILE=$(SYSTEM_CLOCK_PROFILE); use 300 or 400)
+endif
+
+# Reject contradictory legacy overrides instead of silently producing a build
+# whose profile name and compiled PLL behavior disagree.
+ifeq ($(SYSTEM_CLOCK_PROFILE),300)
+ifneq ($(SYS_PLL_OVERCLOCK),0)
+$(error SYSTEM_CLOCK_PROFILE=300 requires SYS_PLL_OVERCLOCK=0)
+endif
+ifneq ($(SYS_PLL_TARGET_HZ),300000000)
+$(error SYSTEM_CLOCK_PROFILE=300 requires SYS_PLL_TARGET_HZ=300000000)
+endif
+else
+ifneq ($(SYS_PLL_OVERCLOCK),1)
+$(error SYSTEM_CLOCK_PROFILE=400 requires SYS_PLL_OVERCLOCK=1)
+endif
+ifneq ($(SYS_PLL_TARGET_HZ),400000000)
+$(error SYSTEM_CLOCK_PROFILE=400 requires SYS_PLL_TARGET_HZ=400000000)
+endif
+endif
+
+# At 400 MHz, SPIC is moved to a conservative clock and recalibrated before
+# XIP resumes. I2C pacing preserves the 300 MHz software-I2C edge timing.
+I2C_BITBANG_PACING ?= 1
+I2C_BITBANG_BASELINE_HZ ?= 300000000
+# One-shot isolated characterization: CPU leaves PLL_SYS before the request,
+# observes the candidate through /2 or an explicitly enabled SRAM-only direct
+# window, then restores the exact 300 MHz image.
+SYS_PLL_ISOLATED_PROBE ?= 0
+SYS_PLL_ISOLATED_TARGET_HZ ?= 400000000
+# Milestone: validate PLL_SYS disable/program/enable and exact-image rollback
+# at the nominal frequency before applying the sequence to an overclock.
+SYS_PLL_ISOLATED_POWER_CYCLE ?= 1
+# Keep the documented frequency-ramp enable asserted while the candidate is
+# measured. The exact boot image (bit clear) is restored before normal boot.
+SYS_PLL_ISOLATED_TRIGGER_HOLD ?= 0
+# RTL8721D's official driver exposes the otherwise-reserved CTRL1 bit0 as
+# POW_SDM_FCODE and enables it before applying manual fractional PLL codes.
+SYS_PLL_ISOLATED_SDM_POWER ?= 1
+# Homologous Realtek PLL code uses hidden CTRL0 bit2 as auto/manual mode.
+SYS_PLL_ISOLATED_MANUAL_MODE ?= 1
+# Probe one additional coarse preset at a time.  The CPU remains on ANA while
+# PLL_SYS is changed and observes the candidate only through the /2 path.
+SYS_PLL_ISOLATED_FREQ_SEL ?= 0
+# Execute the candidate clock directly only inside the SRAM-resident,
+# interrupt-masked measurement window; normal boot is restored to 300 MHz.
+SYS_PLL_ISOLATED_DIRECT ?= 1
+SYS_CLK_SWITCH_PROBE ?= 0
 SPIC_ADAPTIVE_OVERCLOCK ?= 1
-SPIC_QUALIFIED_MAX_HZ ?= 75000000
+# First sustained 400 MHz qualification intentionally limits SPIC to 50 MHz.
+SPIC_QUALIFIED_MAX_HZ ?= 50000000
 SPIC_CAL_MIN_WINDOW ?= 8
 SPIC_CAL_VERIFY_COUNT ?= 4
+CLOCK_CRITICAL_SYMBOLS := carbox_system_overclock_early
+ifeq ($(SYS_PLL_ISOLATED_PROBE),1)
+CLOCK_CRITICAL_SYMBOLS += carbox_pll_isolated_probe_early
+endif
+ifeq ($(SYS_CLK_SWITCH_PROBE),1)
+CLOCK_CRITICAL_SYMBOLS += carbox_sysclk_probe_early
+endif
+ifeq ($(SYS_PLL_OVERCLOCK),1)
+ifneq ($(SYS_PLL_TARGET_HZ),300000000)
+CLOCK_CRITICAL_SYMBOLS += carbox_spic_overclock_prepare \
+	carbox_spic_overclock_calibrate carbox_spic_overclock_restore \
+	spic_query_system_clk spic_set_delay_line spic_verify_calibration_para
+endif
+endif
 # The clock configuration is supplied through compiler defines, so normal
 # source timestamps cannot detect an override change.  Rebuild both consumers
 # whenever either value changes: system_overclock.c applies it and main.c logs
 # the requested rate.
-SYS_PLL_CONFIG_STAMP := $(OBJ_DIR)/.sys_pll_config_$(SYS_PLL_OVERCLOCK)-$(SYS_PLL_TARGET_HZ)-$(SPIC_ADAPTIVE_OVERCLOCK)-$(SPIC_QUALIFIED_MAX_HZ)-$(SPIC_CAL_MIN_WINDOW)-$(SPIC_CAL_VERIFY_COUNT)
+SYS_PLL_CONFIG_STAMP := $(OBJ_DIR)/.sys_pll_config_$(SYSTEM_CLOCK_PROFILE)-$(SYS_PLL_OVERCLOCK)-$(SYS_PLL_TARGET_HZ)-$(SYS_PLL_ISOLATED_PROBE)-$(SYS_PLL_ISOLATED_TARGET_HZ)-$(SYS_PLL_ISOLATED_POWER_CYCLE)-$(SYS_PLL_ISOLATED_TRIGGER_HOLD)-$(SYS_PLL_ISOLATED_SDM_POWER)-$(SYS_PLL_ISOLATED_MANUAL_MODE)-$(SYS_PLL_ISOLATED_FREQ_SEL)-$(SYS_PLL_ISOLATED_DIRECT)-$(SYS_CLK_SWITCH_PROBE)-$(ROM_CLOCK_DUMP)-$(SPIC_ADAPTIVE_OVERCLOCK)-$(SPIC_QUALIFIED_MAX_HZ)-$(SPIC_CAL_MIN_WINDOW)-$(SPIC_CAL_VERIFY_COUNT)-$(I2C_BITBANG_PACING)-$(I2C_BITBANG_BASELINE_HZ)
 $(SYS_PLL_CONFIG_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.sys_pll_config_*
 	@touch $@
 ../src/carbox/system_overclock.o \
 	../src/carbox/spic_overclock.o \
+	../src/carbox/i2c_bitbang_pacing.o \
+	../src/carbox/pc_profiler.o \
 	../src/main.o: $(SYS_PLL_CONFIG_STAMP)
 
 GCCFLAGS += -DCONFIG_SPIC_ADAPTIVE_OVERCLOCK=$(SPIC_ADAPTIVE_OVERCLOCK)
+GCCFLAGS += -DCONFIG_I2C_BITBANG_PACING=$(I2C_BITBANG_PACING)
+GCCFLAGS += -DCONFIG_I2C_BITBANG_BASELINE_HZ=$(I2C_BITBANG_BASELINE_HZ)
+GCCFLAGS += -DCONFIG_SYS_CLK_SWITCH_PROBE=$(SYS_CLK_SWITCH_PROBE)
+GCCFLAGS += -DCONFIG_SYS_PLL_ISOLATED_PROBE=$(SYS_PLL_ISOLATED_PROBE)
+GCCFLAGS += -DCONFIG_SYS_PLL_ISOLATED_TARGET_HZ=$(SYS_PLL_ISOLATED_TARGET_HZ)
+GCCFLAGS += -DCONFIG_SYS_PLL_ISOLATED_POWER_CYCLE=$(SYS_PLL_ISOLATED_POWER_CYCLE)
+GCCFLAGS += -DCONFIG_SYS_PLL_ISOLATED_TRIGGER_HOLD=$(SYS_PLL_ISOLATED_TRIGGER_HOLD)
+GCCFLAGS += -DCONFIG_SYS_PLL_ISOLATED_SDM_POWER=$(SYS_PLL_ISOLATED_SDM_POWER)
+GCCFLAGS += -DCONFIG_SYS_PLL_ISOLATED_MANUAL_MODE=$(SYS_PLL_ISOLATED_MANUAL_MODE)
+GCCFLAGS += -DCONFIG_SYS_PLL_ISOLATED_FREQ_SEL=$(SYS_PLL_ISOLATED_FREQ_SEL)
+GCCFLAGS += -DCONFIG_SYS_PLL_ISOLATED_DIRECT=$(SYS_PLL_ISOLATED_DIRECT)
+GCCFLAGS += -DCONFIG_ROM_CLOCK_DUMP=$(ROM_CLOCK_DUMP)
 GCCFLAGS += -DCONFIG_SPIC_QUALIFIED_MAX_HZ=$(SPIC_QUALIFIED_MAX_HZ)
 GCCFLAGS += -DCONFIG_SPIC_CAL_MIN_WINDOW=$(SPIC_CAL_MIN_WINDOW)
 GCCFLAGS += -DCONFIG_SPIC_CAL_VERIFY_COUNT=$(SPIC_CAL_VERIFY_COUNT)
@@ -1320,6 +1411,9 @@ CPPFLAGS += -Wall -Wpointer-arith -Wundef -Wno-write-strings -Wno-maybe-uninitia
 LFLAGS = 
 LFLAGS += -march=armv8-m.main+dsp -mthumb -mcmse -mfloat-abi=softfp -mfpu=fpv5-sp-d16 -Os -nostartfiles -specs=nosys.specs -nodefaultlibs -nostdlib
 LFLAGS += -Wl,--gc-sections -Wl,-Map=$(BIN_DIR)/$(TARGET).map -Wl,--cref -Wl,--build-id=none -Wl,--use-blx 
+ifeq ($(I2C_BITBANG_PACING),1)
+LFLAGS += -Wl,--wrap=gpio_init -Wl,--wrap=gpio_write
+endif
 ifeq ($(PC_PROFILER_RTW_DUMP_PROFILE),1)
 LFLAGS += -Wl,--wrap=rtw_enter_critical -Wl,--wrap=rtw_exit_critical \
 	-Wl,--wrap=clean_cache_wlan -Wl,--wrap=rtl8195b_update_txdesc
@@ -1819,10 +1913,7 @@ application: prerequirement $(SRC_O) $(ERAM_O) $(SRAM_O) $(CINIT_O) $(ASM_O) $(I
 	done
 	@echo "  LD   linking..."
 	@$(LD) $(LFLAGS) -o $(BIN_DIR)/$(TARGET).axf  $(OBJ_LIST) $(ROMIMG) $(LIBFLAGS) -T$(LDSCRIPT)
-	@for sym in carbox_system_overclock_early \
-		carbox_spic_overclock_prepare carbox_spic_overclock_calibrate \
-		carbox_spic_overclock_restore spic_query_system_clk \
-		spic_set_delay_line spic_verify_calibration_para; do \
+	@for sym in $(CLOCK_CRITICAL_SYMBOLS); do \
 		addr=$$($(NM) -an $(BIN_DIR)/$(TARGET).axf | awk -v s=$$sym '$$3 == s { print $$1; exit }'); \
 		case "$$addr" in \
 			201*) ;; \
@@ -1993,6 +2084,7 @@ build_info:
 prerequirement:
 	@echo ===========================================================
 	@echo Build $(TARGET)
+	@echo "Clock profile: $(SYSTEM_CLOCK_PROFILE) MHz (PLL overclock=$(SYS_PLL_OVERCLOCK), target=$(SYS_PLL_TARGET_HZ) Hz)"
 	@echo ===========================================================
 	@mkdir -p $(OBJ_DIR)
 	@mkdir -p $(BIN_DIR)
@@ -2039,6 +2131,16 @@ $(ERAM_O): %.o : %.c
 	@echo "  CC   $<"
 	@$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 	@$(OBJCOPY) --prefix-alloc-sections .eram $@
+	# Keep only the frequently traversed TCP segment descriptors and their
+	# free-list head in internal SRAM.  TCP payload buffers and ownership stay
+	# unchanged; all other lwIP pools remain in LPDDR.
+	@case "$(@F)" in \
+		memp.o) \
+			$(OBJCOPY) \
+				--rename-section .eram.bss.memp_memory_TCP_SEG_base=.sram.bss.memp_memory_TCP_SEG_base \
+				--rename-section .eram.bss.memp_tab_TCP_SEG=.sram.bss.memp_tab_TCP_SEG \
+				$@ ;; \
+	 esac
 	@echo "  CC   $<"
 	@$(CC) $(CFLAGS) $(INCLUDES) -c $< -MM -MT $@ -MF $(OBJ_DIR)/$(notdir $(patsubst %.o,%.d,$@))
 	@cp $@ $(OBJ_DIR)/$(notdir $@)

@@ -480,6 +480,7 @@ void main(void)
 	int ret = 0;
 	int clock_status = carbox_system_overclock_early();
 	struct carbox_spic_overclock_report spic_clock_report;
+	carbox_pc_profiler_set_clock_boot_status(clock_status);
 
 	/* Initialize log uart and at command service */
 #if WINBOND_FLASH_UNPROTECT
