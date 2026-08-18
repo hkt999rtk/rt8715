@@ -21,6 +21,10 @@
 #define CONFIG_USB_TX_LIFETIME_PROFILE 0
 #endif
 
+#ifndef CONFIG_SCREEN_USB_PROBE
+#define CONFIG_SCREEN_USB_PROBE 0
+#endif
+
 #ifndef CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE
 #define CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE 0
 #endif
@@ -236,6 +240,109 @@ void usb_tx_lifetime_ncm_end(int result)
 void usb_tx_lifetime_source_release(void)
 {
 }
+
+#elif CONFIG_SCREEN_USB_PROBE
+
+#define SCREENUSB_CHANNELS 16U
+
+typedef struct screenusb_channel_s {
+	uint32_t start_cycles;
+	uint8_t active;
+} screenusb_channel_t;
+
+static screenusb_channel_t screenusb_channels[SCREENUSB_CHANNELS];
+static usb_screen_probe_stats_t screenusb_live;
+
+extern uint8_t __real_usbh_hcd_hc_submit_request(
+	void *hcd, uint8_t channel, uint8_t direction, uint8_t ep_type,
+	uint8_t token, uint8_t *buffer, uint16_t length);
+extern uint8_t __real_usbh_hcd_hc_get_urb_state(void *hcd, uint8_t channel);
+
+uint8_t __wrap_usbh_hcd_hc_submit_request(
+	void *hcd, uint8_t channel, uint8_t direction, uint8_t ep_type,
+	uint8_t token, uint8_t *buffer, uint16_t length)
+{
+	uint32_t start = DWT->CYCCNT;
+	uint8_t result = __real_usbh_hcd_hc_submit_request(
+		hcd, channel, direction, ep_type, token, buffer, length);
+
+	/* Only NCM bulk OUT can drain the screen TCP transmit path. */
+	if (direction == 0U && ep_type == 2U && channel < SCREENUSB_CHANNELS) {
+		taskENTER_CRITICAL();
+		screenusb_live.submits++;
+		if (result != 0U) {
+			screenusb_live.submit_errors++;
+		} else {
+			if (screenusb_channels[channel].active == 0U) {
+				screenusb_live.pending_now++;
+			}
+			screenusb_channels[channel].start_cycles = start;
+			screenusb_channels[channel].active = 1U;
+			if (screenusb_live.pending_now > screenusb_live.pending_max) {
+				screenusb_live.pending_max = screenusb_live.pending_now;
+			}
+		}
+		taskEXIT_CRITICAL();
+	}
+	return result;
+}
+
+uint8_t __wrap_usbh_hcd_hc_get_urb_state(void *hcd, uint8_t channel)
+{
+	uint8_t state = __real_usbh_hcd_hc_get_urb_state(hcd, channel);
+
+	if (channel < SCREENUSB_CHANNELS && state != 0U &&
+	    screenusb_channels[channel].active != 0U) {
+		taskENTER_CRITICAL();
+		if (screenusb_channels[channel].active != 0U) {
+			uint32_t elapsed = DWT->CYCCNT -
+				screenusb_channels[channel].start_cycles;
+
+			screenusb_channels[channel].active = 0U;
+			screenusb_live.completions++;
+			screenusb_live.completion_cycles += elapsed;
+			if (elapsed > screenusb_live.completion_cycles_max) {
+				screenusb_live.completion_cycles_max = elapsed;
+			}
+			if (screenusb_live.pending_now != 0U) {
+				screenusb_live.pending_now--;
+			}
+		}
+		taskEXIT_CRITICAL();
+	}
+	return state;
+}
+
+void usb_screen_probe_snapshot(usb_screen_probe_stats_t *stats)
+{
+	uint32_t pending;
+
+	if (stats == NULL) {
+		return;
+	}
+	taskENTER_CRITICAL();
+	*stats = screenusb_live;
+	pending = screenusb_live.pending_now;
+	memset(&screenusb_live, 0, sizeof(screenusb_live));
+	screenusb_live.pending_now = pending;
+	screenusb_live.pending_max = pending;
+	taskEXIT_CRITICAL();
+}
+
+void usb_hcd_profiler_isr_sema_give(int success, int task_woken)
+{
+	(void)success;
+	(void)task_woken;
+}
+
+void usb_hcd_profiler_report(uint32_t sequence) { (void)sequence; }
+void usb_tx_lifetime_ncm_begin(const void *source, uint32_t length)
+{
+	(void)source;
+	(void)length;
+}
+void usb_tx_lifetime_ncm_end(int result) { (void)result; }
+void usb_tx_lifetime_source_release(void) { }
 
 #elif CONFIG_USB_TX_LIFETIME_PROFILE
 
@@ -791,3 +898,12 @@ void usb_tx_lifetime_source_release(void)
 }
 
 #endif /* CONFIG_USB_HCD_PROFILE */
+
+#if !CONFIG_SCREEN_USB_PROBE
+void usb_screen_probe_snapshot(usb_screen_probe_stats_t *stats)
+{
+	if (stats != NULL) {
+		memset(stats, 0, sizeof(*stats));
+	}
+}
+#endif

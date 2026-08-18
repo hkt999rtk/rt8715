@@ -3,6 +3,7 @@
 #include "gcd_sync_profiler.h"
 #include "screen_queue_profiler.h"
 #include "screen_rx_rate_limit.h"
+#include "screen_rx_record_profiler.h"
 #include "usb_hcd_profiler.h"
 #include "ncm_wrap_profiler.h"
 #include "net_queue_profiler.h"
@@ -26,6 +27,7 @@
 #include "hal_timer.h"
 #include "lwip_intf.h"
 #include "lwip/sockets.h"
+#include "touch_path_profiler.h"
 
 #ifndef CONFIG_PC_PROFILER
 #define CONFIG_PC_PROFILER 0
@@ -1427,6 +1429,8 @@ static void pcprof_task(void *arg)
 			      caller_attributed);
 		pcprof_clock_report(sequence);
 		carbox_i2c_bitbang_pacing_report(sequence);
+		carbox_touch_path_profiler_report(sequence);
+		carbox_screen_rx_record_profiler_report(sequence);
 		pcprof_fw_slot_report(sequence);
 #if defined(CONFIG_IRQ_PROFILE_REPORT) && CONFIG_IRQ_PROFILE_REPORT
 		carbox_irq_profiler_report(sequence, PCPROF_REPORT_PERIOD_MS);

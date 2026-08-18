@@ -1,4 +1,5 @@
 #include "video_handover_zero_copy.h"
+#include "screen_rx_record_profiler.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -242,6 +243,7 @@ void *carbox_video_handover_source_malloc(size_t length)
 	TaskHandle_t task;
 	uint32_t i;
 
+	carbox_screen_rx_record_alloc(pointer, length);
 	if ((pointer == NULL) || (length < VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES)) {
 		return pointer;
 	}
@@ -602,6 +604,7 @@ static void video_handover_release(void *pointer, uint8_t reference,
 
 void carbox_video_handover_producer_free(void *pointer)
 {
+	carbox_screen_rx_record_free(pointer);
 	video_handover_release(pointer, VIDEO_HANDOVER_REF_PRODUCER,
 				 "duplicate-producer-release");
 }
@@ -722,6 +725,7 @@ typedef struct video_handover_frame_item_s {
 
 void __wrap_AirPlayScreen_SendVideo(const void *data, int bytes)
 {
+	carbox_screen_rx_record_send_video(data, bytes);
 	carbox_video_handover_gate(data, bytes);
 	carbox_video_handover_begin(data, bytes);
 	__real_AirPlayScreen_SendVideo(data, bytes);

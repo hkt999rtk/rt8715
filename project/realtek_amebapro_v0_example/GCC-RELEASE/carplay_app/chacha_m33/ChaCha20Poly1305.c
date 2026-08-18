@@ -1307,6 +1307,11 @@ static void chacha_announce_mode(void) {
       "[CHACHA] mode=HARDWARE_ONLY "
       "(in-place hardware; runtime HW failure is reported, not retried)\n"
     );
+#elif CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_SPLIT_RX_SW_TX_HW
+    printf(
+      "[CHACHA] mode=SPLIT_RX_SW_TX_HW "
+      "(decrypt/verify software; encrypt/final hardware)\n"
+    );
 #else
 #error "Unsupported CARBOX_CHACHA_MODE"
 #endif
@@ -1615,15 +1620,16 @@ static CHACHA_UNUSED void chacha_auth_software(
   CHACHA_CLEAR(&state, sizeof(state));
 }
 
-#if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+#if (CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY) || \
+    (CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_SPLIT_RX_SW_TX_HW)
 /*
- * Mode 2 defers payload processing so the final record length can select a HW
- * backend. Software is used only when hardware has not been submitted (for
+ * Hardware TX defers payload processing so the final record length can select
+ * a backend. Software is used only when hardware has not been submitted (for
  * example, below threshold or unsupported layout). Once an in-place hardware
  * transaction is submitted, a failure must not enter these helpers because
- * the original plaintext/ciphertext may already be partially overwritten.
+ * the original plaintext may already be partially overwritten.
  */
-static size_t chacha_mode2_finish_encrypt_software(
+static size_t chacha_deferred_finish_encrypt_software(
   chacha20_poly1305_state *state, uint8_t *buffer, size_t len,
   uint8_t tag[16]
 ) {
@@ -1640,7 +1646,8 @@ static size_t chacha_mode2_finish_encrypt_software(
   return written;
 }
 
-static size_t chacha_mode2_finish_decrypt_software(
+#if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+static size_t chacha_deferred_finish_decrypt_software(
   chacha20_poly1305_state *state, uint8_t *buffer, size_t len,
   const uint8_t tag[16], int32_t *out_error
 ) {
@@ -1656,6 +1663,7 @@ static size_t chacha_mode2_finish_decrypt_software(
   );
   return written;
 }
+#endif
 #endif
 
 static CHACHA_UNUSED int chacha_hardware_poly_key(
@@ -2113,7 +2121,8 @@ size_t chacha20_poly1305_encrypt(
   chacha_record_io_start(
     state, CHACHA_RTL_DIRECTION_ENCRYPT, direct_src, len, dst
   );
-#if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+#if (CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY) || \
+    (CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_SPLIT_RX_SW_TX_HW)
   if (direct) {
     /* The closed normal-frame sender immediately calls final(). Return the
      * complete logical write length without staging plaintext into dst; final
@@ -2194,7 +2203,8 @@ size_t chacha20_poly1305_final(
   (void)eligible;
 #endif
   chacha_export_key_nonce(state, key, nonce);
-#if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+#if (CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY) || \
+    (CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_SPLIT_RX_SW_TX_HW)
   total_len = (size_t)state->data_len;
   direct_tx = carbox_screen_tx_crypto_active(
     output_base, total_len, &direct_input
@@ -2252,7 +2262,7 @@ size_t chacha20_poly1305_final(
         chacha_copy_bytes(output_base, direct_input, total_len);
         carbox_screen_tx_crypto_materialized(output_base, total_len);
       }
-      (void)chacha_mode2_finish_encrypt_software(
+      (void)chacha_deferred_finish_encrypt_software(
         state, output_base, total_len, tag
       );
       chacha_stats_record_software(
@@ -2273,7 +2283,7 @@ size_t chacha20_poly1305_final(
       chacha_copy_bytes(output_base, direct_input, total_len);
       carbox_screen_tx_crypto_materialized(output_base, total_len);
     }
-    (void)chacha_mode2_finish_encrypt_software(
+    (void)chacha_deferred_finish_encrypt_software(
       state, output_base, total_len, tag
     );
     chacha_stats_record_software(
@@ -2351,7 +2361,8 @@ size_t chacha20_poly1305_verify(
 
   if (!eligible) aad_len = (size_t)state->aad_len;
 
-#if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_SOFTWARE_ONLY
+#if (CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_SOFTWARE_ONLY) || \
+    (CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_SPLIT_RX_SW_TX_HW)
   (void)aad;
   (void)aad_len;
   (void)input_snapshot;
@@ -2406,7 +2417,7 @@ size_t chacha20_poly1305_verify(
           g_chacha_hw_fallbacks
         );
       }
-      (void)chacha_mode2_finish_decrypt_software(
+      (void)chacha_deferred_finish_decrypt_software(
         state, output_base, total_len, tag, out_error
       );
       chacha_stats_record_software(
@@ -2423,7 +2434,7 @@ size_t chacha20_poly1305_verify(
         g_chacha_hw_fallbacks
       );
     }
-    (void)chacha_mode2_finish_decrypt_software(
+    (void)chacha_deferred_finish_decrypt_software(
       state, output_base, total_len, tag, out_error
     );
     chacha_stats_record_software(

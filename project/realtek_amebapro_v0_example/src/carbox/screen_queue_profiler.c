@@ -1,4 +1,5 @@
 #include "screen_queue_profiler.h"
+#include "screen_rx_record_profiler.h"
 #include "screen_rx_rate_limit.h"
 #include "screen_tx_direct_crypto.h"
 #include "video_handover_zero_copy.h"
@@ -1125,6 +1126,7 @@ static void screenprof_record_class_completion(uint32_t frame_class,
 void __wrap_AirPlayScreen_SendVideo(const void *data, int bytes)
 {
 	TaskHandle_t current = xTaskGetCurrentTaskHandle();
+	carbox_screen_rx_record_send_video(data, bytes);
 	screenprof_active_input_t input;
 	uint32_t now_us = hal_read_curtime_us();
 	int marked = screenprof_mark_active(current);
@@ -1562,6 +1564,7 @@ ssize_t __wrap_lwip_recv(int socket, void *buffer, size_t bytes, int flags)
 #endif
 	start_us = measured ? hal_read_curtime_us() : 0U;
 	ssize_t result = __real_lwip_recv(socket, buffer, bytes, flags);
+	carbox_screen_rx_record_recv(buffer, bytes, (int)result);
 	carbox_screen_rx_rate_limit_observe(socket, buffer, bytes, (int)result);
 
 #if CONFIG_SCREEN_TIMESTAMP_PROFILE
@@ -1656,6 +1659,7 @@ ssize_t __wrap_lwip_recv(int socket, void *buffer, size_t bytes, int flags)
 ssize_t __wrap_lwip_write(int socket, const void *buffer, size_t bytes)
 {
 	carbox_screen_tx_before_write(buffer, bytes);
+	size_t paced_bytes = carbox_screen_tx_pacer_allowance(bytes);
 	int measured = screenprof_is_task(&screenprof_sender_task, "ScreenThread");
 	uint32_t start_us = measured ? hal_read_curtime_us() : 0U;
 
@@ -1696,15 +1700,16 @@ ssize_t __wrap_lwip_write(int socket, const void *buffer, size_t bytes)
 	}
 	ssize_t result;
 #if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
-	if (carbox_screen_tx_owned_begin(buffer, bytes)) {
-		result = lwip_write_owned(socket, buffer, bytes,
+	if (carbox_screen_tx_owned_begin(buffer, paced_bytes)) {
+		result = lwip_write_owned(socket, buffer, paced_bytes,
 			carbox_screen_tx_owned_complete, (void *)(uintptr_t)buffer);
 	} else {
-		result = __real_lwip_write(socket, buffer, bytes);
+		result = __real_lwip_write(socket, buffer, paced_bytes);
 	}
 #else
-	result = __real_lwip_write(socket, buffer, bytes);
+	result = __real_lwip_write(socket, buffer, paced_bytes);
 #endif
+	carbox_screen_tx_pacer_complete(paced_bytes, (int)result);
 	carbox_screen_block_profile_write(socket, bytes, (int)result);
 
 	if (measured) {

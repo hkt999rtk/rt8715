@@ -1,4 +1,5 @@
 #include "screen_tx_direct_crypto.h"
+#include "usb_hcd_profiler.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -8,6 +9,7 @@
 #include "task.h"
 #include "diag.h"
 #include "hal_timer.h"
+#include "cmsis.h"
 #include "lwip_intf.h"
 #include "lwip/sockets.h"
 
@@ -23,6 +25,9 @@
 #endif
 #ifndef CONFIG_SCREEN_BLOCK_PROFILE
 #define CONFIG_SCREEN_BLOCK_PROFILE 0
+#endif
+#ifndef CONFIG_SCREEN_USB_PROBE
+#define CONFIG_SCREEN_USB_PROBE 0
 #endif
 #ifndef CONFIG_SCREEN_TX_PACER
 #define CONFIG_SCREEN_TX_PACER 0
@@ -170,7 +175,7 @@ static void screen_tx_pacer_refill_locked(uint32_t now_us)
 	}
 }
 
-static size_t screen_tx_pacer_allowance(size_t requested)
+size_t carbox_screen_tx_pacer_allowance(size_t requested)
 {
 	size_t chunk;
 	uint32_t wait_start_us;
@@ -211,7 +216,7 @@ static size_t screen_tx_pacer_allowance(size_t requested)
 	}
 }
 
-static void screen_tx_pacer_complete(size_t allowed, int result)
+void carbox_screen_tx_pacer_complete(size_t allowed, int result)
 {
 	uint32_t unused = result > 0 && (size_t)result < allowed ?
 		(uint32_t)(allowed - (size_t)result) :
@@ -232,9 +237,20 @@ static void screen_tx_pacer_complete(size_t allowed, int result)
 	}
 	taskEXIT_CRITICAL();
 }
+#else
+size_t carbox_screen_tx_pacer_allowance(size_t requested)
+{
+	return requested;
+}
+
+void carbox_screen_tx_pacer_complete(size_t allowed, int result)
+{
+	(void)allowed;
+	(void)result;
+}
 #endif
 
-#if CONFIG_SCREEN_BLOCK_PROFILE
+#if CONFIG_SCREEN_BLOCK_PROFILE || CONFIG_SCREEN_USB_PROBE
 typedef struct screen_block_stats_s {
 	uint32_t writes;
 	uint32_t successful;
@@ -733,7 +749,7 @@ void carbox_screen_tx_before_write(const void *buffer, size_t length)
 
 void carbox_screen_block_profile_write(int socket, size_t requested, int result)
 {
-#if CONFIG_SCREEN_BLOCK_PROFILE
+#if CONFIG_SCREEN_BLOCK_PROFILE || CONFIG_SCREEN_USB_PROBE
 	struct lwip_tcp_buffer_diag tcp;
 	rltk_ncm_tx_diag_t ncm;
 	/* sock_set_errno() updates the lwIP global errno.  Realtek's
@@ -867,7 +883,7 @@ void carbox_screen_block_profile_write(int socket, size_t requested, int result)
 
 void carbox_screen_block_profile_report(uint32_t sequence)
 {
-#if CONFIG_SCREEN_BLOCK_PROFILE
+#if CONFIG_SCREEN_BLOCK_PROFILE || CONFIG_SCREEN_USB_PROBE
 	screen_block_stats_t stats;
 	uint32_t pending;
 	uint32_t pending_retries;
@@ -886,6 +902,51 @@ void carbox_screen_block_profile_report(uint32_t sequence)
 		.congestion_window_min = UINT32_MAX,
 	};
 	taskEXIT_CRITICAL();
+#if CONFIG_SCREEN_USB_PROBE
+	{
+		usb_screen_probe_stats_t usb;
+		uint32_t cycles_per_us = SystemCoreClock / 1000000U;
+		uint32_t usb_avg_us;
+		uint32_t usb_max_us;
+
+		usb_screen_probe_snapshot(&usb);
+		if (stats.writes == 0U && usb.submits == 0U) {
+			return;
+		}
+		usb_avg_us = usb.completions != 0U && cycles_per_us != 0U ?
+			usb.completion_cycles / cycles_per_us / usb.completions : 0U;
+		usb_max_us = cycles_per_us != 0U ?
+			usb.completion_cycles_max / cycles_per_us : 0U;
+		rt_printf("[SCREENUSB][%lu] block eagain/episodes/recover/pending="
+			  "%lu/%lu/%lu/%lu tcp sndbuf_min/wnd_min="
+			  "%lu/%lu limited buf0/wnd=%lu/%lu ncm qmax/cap="
+			  "%lu/%lu inflight max/age_us=%lu/%lu usb submit/error/complete="
+			  "%lu/%lu/%lu pending now/max=%lu/%lu complete_us avg/max="
+			  "%lu/%lu\r\n",
+			  (unsigned long)sequence,
+			  (unsigned long)stats.eagain,
+			  (unsigned long)stats.block_episodes,
+			  (unsigned long)stats.block_recoveries,
+			  (unsigned long)pending,
+			  (unsigned long)(stats.tx_buffer_min == UINT32_MAX ? 0U :
+					  stats.tx_buffer_min),
+			  (unsigned long)(stats.send_window_available_min == UINT32_MAX ?
+					  0U : stats.send_window_available_min),
+			  (unsigned long)stats.buffer_empty,
+			  (unsigned long)stats.send_window_limited,
+			  (unsigned long)stats.ncm_queue_max,
+			  (unsigned long)stats.ncm_queue_capacity,
+			  (unsigned long)stats.ncm_inflight_max,
+			  (unsigned long)stats.ncm_inflight_age_max_us,
+			  (unsigned long)usb.submits,
+			  (unsigned long)usb.submit_errors,
+			  (unsigned long)usb.completions,
+			  (unsigned long)usb.pending_now,
+			  (unsigned long)usb.pending_max,
+			  (unsigned long)usb_avg_us,
+			  (unsigned long)usb_max_us);
+	}
+#else
 	if (stats.writes == 0U) {
 		return;
 	}
@@ -939,10 +1000,35 @@ void carbox_screen_block_profile_report(uint32_t sequence)
 		  (unsigned long)stats.ncm_queue_capacity,
 		  (unsigned long)stats.ncm_inflight_max,
 		  (unsigned long)stats.ncm_inflight_age_max_us);
+#endif
 #else
 	(void)sequence;
 #endif
 }
+
+#if CONFIG_SCREEN_USB_PROBE
+static void carbox_screen_usb_probe_task(void *argument)
+{
+	uint32_t sequence = 0U;
+
+	(void)argument;
+	for (;;) {
+		vTaskDelay(pdMS_TO_TICKS(10000U));
+		carbox_screen_block_profile_report(++sequence);
+	}
+}
+
+void carbox_screen_usb_probe_start(void)
+{
+	if (xTaskCreate(carbox_screen_usb_probe_task, "screenusb",
+			1024U / sizeof(StackType_t), NULL,
+			tskIDLE_PRIORITY + 1U, NULL) != pdPASS) {
+		rt_printf("[SCREENUSB] ERROR: reporter task creation failed\r\n");
+	}
+}
+#else
+void carbox_screen_usb_probe_start(void) { }
+#endif
 
 void carbox_screen_tx_direct_crypto_report(uint32_t sequence)
 {
@@ -1039,7 +1125,7 @@ int __wrap_lwip_write(int socket, const void *buffer, size_t bytes)
 
 	carbox_screen_tx_before_write(buffer, bytes);
 #if CONFIG_SCREEN_TX_PACER
-	paced_bytes = screen_tx_pacer_allowance(bytes);
+	paced_bytes = carbox_screen_tx_pacer_allowance(bytes);
 #endif
 #if CONFIG_TCP_OWNED_WRITE
 	if (carbox_screen_tx_owned_begin(buffer, paced_bytes)) {
@@ -1052,7 +1138,7 @@ int __wrap_lwip_write(int socket, const void *buffer, size_t bytes)
 	result = __real_lwip_write(socket, buffer, paced_bytes);
 #endif
 #if CONFIG_SCREEN_TX_PACER
-	screen_tx_pacer_complete(paced_bytes, result);
+	carbox_screen_tx_pacer_complete(paced_bytes, result);
 #endif
 	carbox_screen_block_profile_write(socket, bytes, result);
 	return result;
@@ -1125,6 +1211,15 @@ void carbox_screen_block_profile_write(int socket, size_t requested, int result)
 	(void)requested;
 	(void)result;
 }
+size_t carbox_screen_tx_pacer_allowance(size_t requested)
+{
+	return requested;
+}
+void carbox_screen_tx_pacer_complete(size_t allowed, int result)
+{
+	(void)allowed;
+	(void)result;
+}
 void carbox_screen_tx_direct_crypto_report(uint32_t sequence)
 {
 	(void)sequence;
@@ -1137,5 +1232,6 @@ void carbox_screen_block_profile_report(uint32_t sequence)
 {
 	(void)sequence;
 }
+void carbox_screen_usb_probe_start(void) { }
 
 #endif

@@ -757,6 +757,7 @@ SRC_C += ../src/carbox/aes_backend_select.c
 SRC_C += ../src/carbox/aes_ctr_periodic_selftest.c
 SRC_C += ../src/carbox/carbox_diag.c
 SRC_C += ../src/carbox/pc_profiler.c
+SRC_C += ../src/carbox/touch_path_profiler.c
 SRC_C += ../src/carbox/i2c_bitbang_pacing.c
 SRC_C += ../src/carbox/ota_local_upload_page.c
 SRC_C += ../src/carbox/ota/carplay_ota_compat.c
@@ -765,6 +766,7 @@ SRC_C += ../src/carbox/usb_hcd_profiler.c
 SRC_C += ../src/carbox/ncm_wrap_profiler.c
 SRC_C += ../src/carbox/gcd_sync_profiler.c
 SRC_C += ../src/carbox/screen_queue_profiler.c
+SRC_C += ../src/carbox/screen_rx_record_profiler.c
 SRC_C += ../src/carbox/screen_rx_rate_limit.c
 SRC_C += ../src/carbox/audio_decode_profiler.c
 SRC_C += ../src/carbox/memcheck.c
@@ -877,6 +879,9 @@ WLAN_RX_RING_SWAP ?= 0
 # Source-recovered rtl8195b_recv.o uses ordinary skb-backed DMA buffers.
 # This is independent of the retired rtw_memcpy/kfree symbol-hook path.
 WLAN_RX_DMA_SKB ?= 1
+# Periodic zero-copy counters are useful during bring-up but add UART/printf
+# disturbance. Keep the implementation available and default it off for soak.
+WLAN_RX_DMA_PROFILE ?= 0
 TCP_PHASE_PROFILE ?= 0
 # Detailed 10-second breakdown of tcp_input() processing. This is independent
 # of the compact 5-second TCP_PERF throughput/checksum summary above.
@@ -902,7 +907,7 @@ $(NCM_TX_PROFILE_STAMP):
 	@touch $@
 ../../../component/common/network/lwip/lwip_v2.1.2/port/realtek/freertos/ethernetif.o: $(NCM_TX_PROFILE_STAMP)
 # Keep the boot-time PLL/SPIC result visible in the recurring 10-second report.
-PC_PROFILER ?= 1
+PC_PROFILER ?= 0
 # Optional PC-level reports. Keep task utilization sampling enabled while
 # suppressing the verbose per-PC reports during IRQ-count investigation.
 PC_PROFILER_PC_DETAIL ?= 0
@@ -961,14 +966,14 @@ SCREEN_DATAPATH_PROFILE ?= 0
 # closed receiver is identified once by task plus its validated 128-byte frame
 # header; all other sockets retain the stock lwIP receive path.
 SCREEN_RX_RATE_LIMIT ?= 1
-SCREEN_RX_RATE_LIMIT_BPS ?= 9000000
+SCREEN_RX_RATE_LIMIT_BPS ?= 8000000
 SCREEN_RX_RATE_LIMIT_INTERVAL_MS ?= 10
 SCREEN_RX_RATE_LIMIT_BUCKET_BYTES ?= 32768
 SCREEN_RX_RATE_LIMIT_CONTROL_MS ?= 100
 SCREEN_RX_RATE_LIMIT_DEADBAND_PERCENT ?= 10
 SCREEN_RX_RATE_LIMIT_FILTER_SHIFT ?= 2
 SCREEN_RX_RATE_LIMIT_VALVE_MIN_BPS ?= 1000000
-SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS ?= 9000000
+SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS ?= 8000000
 SCREEN_RX_RATE_LIMIT_OPEN_STEP_BPS ?= 125000
 SCREEN_RX_RATE_LIMIT_CLOSE_STEP_BPS ?= 500000
 SCREEN_RX_RATE_LIMIT_OPEN_HOLD_MS ?= 100
@@ -976,9 +981,9 @@ SCREEN_RX_RATE_LIMIT_CLOSE_HOLD_MS ?= 150
 SCREEN_RX_RATE_LIMIT_TASK_PRIORITY ?= 5
 SCREEN_RX_RATE_LIMIT_TASK_STACK ?= 512
 # Smooth each ScreenThread TCP write without creating a second long-term
-# controller. RX owns the 9-Mbps long-term rate; TX retains a 10-Mbps ceiling
+# controller. RX owns the 8-Mbps long-term rate; TX retains a 10-Mbps ceiling
 # and can burst by no more than the peer's observed 23,040-byte window.
-SCREEN_TX_PACER ?= 1
+SCREEN_TX_PACER ?= 0
 SCREEN_TX_PACER_BPS ?= 10000000
 SCREEN_TX_PACER_BUCKET_BYTES ?= 23040
 SCREEN_TX_PACER_CHUNK_BYTES ?= 4096
@@ -990,6 +995,9 @@ SCREEN_TX_PRESSURE_CLEAN_MS ?= 500
 # retry.  It samples only failed ScreenThread writes and stays independent of
 # the older, verbose frame/queue profiler.
 SCREEN_BLOCK_PROFILE ?= 0
+# One-line, low-overhead TCP/NCM/USB backpressure probe for soak testing.
+# Unlike the full profiles, this does not enable PC sampling or histograms.
+SCREEN_USB_PROBE ?= 1
 # Once a screen write identifies the video TCP PCB, summarize the returning
 # ACK cadence and advertised-window behavior.  This distinguishes a slow peer
 # reader from local USB/NCM queueing without restoring the verbose TCP profile.
@@ -1078,6 +1086,21 @@ USB_HCD_CHANNEL_PROFILE ?= 0
 # Correlate customer NCM send, HCD bulk-OUT attempts, observed URB completion,
 # return, and the source pbuf release.  Counters only; customer flow is intact.
 USB_TX_LIFETIME_PROFILE ?= 0
+ifeq ($(SCREEN_USB_PROBE),1)
+ifneq ($(USB_HCD_PROFILE)$(USB_HCD_CHANNEL_PROFILE)$(USB_TX_LIFETIME_PROFILE),000)
+$(error SCREEN_USB_PROBE is the lightweight USB wrapper; disable the full USB profiles)
+endif
+endif
+TOUCH_PATH_PROFILE ?= 0
+SCREEN_RX_RECORD_PROFILE ?= 0
+ifeq ($(SCREEN_RX_RECORD_PROFILE),1)
+ifneq ($(CHACHA_KEY_ALIAS_FIX),1)
+$(error SCREEN_RX_RECORD_PROFILE requires CHACHA_KEY_ALIAS_FIX=1)
+endif
+ifneq ($(CHACHA_API_TRACE)$(CHACHA_VENDOR_TRACE)$(CHACHA_PRE_RX_VENDOR),000)
+$(error SCREEN_RX_RECORD_PROFILE requires the normal key-alias ChaCha route)
+endif
+endif
 # Hardware-gated NCM wrapper. It calls the customer builder exactly once and,
 # for validated chained pbufs, removes only the redundant second payload copy.
 NCM_WRAP_PROFILE ?= 1
@@ -1088,7 +1111,7 @@ ifneq ($(NCM_WRAP_PROFILE),1)
 $(error NCM_WRAP_COPY_ELIDE requires NCM_WRAP_PROFILE=1)
 endif
 endif
-USB_PROFILE_STAMP := $(OBJ_DIR)/.usb_profile_h$(USB_HCD_PROFILE)-c$(USB_HCD_CHANNEL_PROFILE)-life$(USB_TX_LIFETIME_PROFILE)-ncmwrap$(NCM_WRAP_PROFILE)-ncmelide$(NCM_WRAP_COPY_ELIDE)-ncmstats$(NCM_WRAP_STATS)
+USB_PROFILE_STAMP := $(OBJ_DIR)/.usb_profile_h$(USB_HCD_PROFILE)-c$(USB_HCD_CHANNEL_PROFILE)-life$(USB_TX_LIFETIME_PROFILE)-screenusb$(SCREEN_USB_PROBE)-ncmwrap$(NCM_WRAP_PROFILE)-ncmelide$(NCM_WRAP_COPY_ELIDE)-ncmstats$(NCM_WRAP_STATS)
 $(USB_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.usb_profile_*
@@ -1100,7 +1123,7 @@ NET_QUEUE_PROFILE ?= 0
 # Make the RX/queue/TX diagnostic switches safe for incremental builds. These
 # options affect both the wrappers and lwIP internals, so changing one must
 # recompile every consumer instead of silently retaining yesterday's objects.
-SCREEN_FLOW_PROFILE_STAMP := $(OBJ_DIR)/.screen_flow_profile_q$(SCREEN_QUEUE_PROFILE)-dp$(SCREEN_DATAPATH_PROFILE)-fmt$(SCREEN_FRAME_FORMAT_PROFILE)-buf$(SCREEN_TCP_BUFFER_PROFILE)-block$(SCREEN_BLOCK_PROFILE)-ack$(SCREEN_TCP_ACK_PROFILE)
+SCREEN_FLOW_PROFILE_STAMP := $(OBJ_DIR)/.screen_flow_profile_q$(SCREEN_QUEUE_PROFILE)-dp$(SCREEN_DATAPATH_PROFILE)-fmt$(SCREEN_FRAME_FORMAT_PROFILE)-buf$(SCREEN_TCP_BUFFER_PROFILE)-block$(SCREEN_BLOCK_PROFILE)-screenusb$(SCREEN_USB_PROBE)-ack$(SCREEN_TCP_ACK_PROFILE)
 $(SCREEN_FLOW_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.screen_flow_profile_*
@@ -1115,7 +1138,7 @@ $(SCREEN_FLOW_PROFILE_STAMP):
 	$(SCREEN_FLOW_PROFILE_STAMP)
 # These switches affect several standalone profiler/wrapper objects.  Track
 # them explicitly so a diagnostic override cannot reuse release-mode objects.
-DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)
+DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)-touch$(TOUCH_PATH_PROFILE)-rxrec$(SCREEN_RX_RECORD_PROFILE)
 $(DIAGNOSTIC_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.diagnostic_profile_*
@@ -1124,6 +1147,9 @@ $(DIAGNOSTIC_PROFILE_STAMP):
 	../src/carbox/irq_profiler.o \
 	../src/carbox/usb_hcd_profiler.o \
 	../src/carbox/audio_decode_profiler.o \
+	../src/carbox/touch_path_profiler.o \
+	../src/carbox/screen_rx_record_profiler.o \
+	../src/carbox/chacha_key_alias_fix.o \
 	../src/carbox/libusb_ref_compat/libusb_ref_compat_os.o: \
 	$(DIAGNOSTIC_PROFILE_STAMP)
 # Stage 1 validates the preallocated pbuf-pointer mailbox path without
@@ -1149,7 +1175,7 @@ CARBOX_CRYPTO_OWNER_BOOST_PRIORITY ?= 11
 # Supported release profiles:
 #   300: retain the ROM-established PLL_SYS/CPU 300 MHz path
 #   400: apply the qualified PLL_SYS/CPU 400 MHz preset during early boot
-SYSTEM_CLOCK_PROFILE ?= 300
+SYSTEM_CLOCK_PROFILE ?= 400
 ifeq ($(SYSTEM_CLOCK_PROFILE),300)
 SYS_PLL_OVERCLOCK ?= 0
 SYS_PLL_TARGET_HZ ?= 300000000
@@ -1320,6 +1346,7 @@ GCCFLAGS += -DCONFIG_SCREEN_TX_PRESSURE_FEEDBACK=$(SCREEN_TX_PRESSURE_FEEDBACK)
 GCCFLAGS += -DCONFIG_SCREEN_TX_PRESSURE_TRIGGER_MS=$(SCREEN_TX_PRESSURE_TRIGGER_MS)
 GCCFLAGS += -DCONFIG_SCREEN_TX_PRESSURE_CLEAN_MS=$(SCREEN_TX_PRESSURE_CLEAN_MS)
 GCCFLAGS += -DCONFIG_SCREEN_BLOCK_PROFILE=$(SCREEN_BLOCK_PROFILE)
+GCCFLAGS += -DCONFIG_SCREEN_USB_PROBE=$(SCREEN_USB_PROBE)
 GCCFLAGS += -DCONFIG_SCREEN_TCP_ACK_PROFILE=$(SCREEN_TCP_ACK_PROFILE)
 GCCFLAGS += -DCONFIG_AUDIO_DECODE_PROFILE=$(AUDIO_DECODE_PROFILE)
 GCCFLAGS += -DAUDIO_DECODE_PROFILE_WINDOW_MS=$(AUDIO_DECODE_PROFILE_WINDOW_MS)
@@ -1350,6 +1377,8 @@ GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_PROFILE=$(SCREEN_TIMESTAMP_PROFILE)
 GCCFLAGS += -DCONFIG_USB_HCD_PROFILE=$(USB_HCD_PROFILE)
 GCCFLAGS += -DCONFIG_USB_HCD_CHANNEL_PROFILE=$(USB_HCD_CHANNEL_PROFILE)
 GCCFLAGS += -DCONFIG_USB_TX_LIFETIME_PROFILE=$(USB_TX_LIFETIME_PROFILE)
+GCCFLAGS += -DCONFIG_TOUCH_PATH_PROFILE=$(TOUCH_PATH_PROFILE)
+GCCFLAGS += -DCONFIG_SCREEN_RX_RECORD_PROFILE=$(SCREEN_RX_RECORD_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_WRAP_PROFILE=$(NCM_WRAP_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_WRAP_COPY_ELIDE=$(NCM_WRAP_COPY_ELIDE)
 GCCFLAGS += -DCONFIG_NCM_WRAP_STATS=$(NCM_WRAP_STATS)
@@ -1467,6 +1496,10 @@ endif
 ifeq ($(CHACHA_KEY_ALIAS_FIX),1)
 ifeq ($(CHACHA_API_TRACE)$(CHACHA_VENDOR_TRACE)$(CHACHA_PRE_RX_VENDOR),000)
 LFLAGS += -Wl,--wrap=chacha20_poly1305_init_64x64
+ifeq ($(SCREEN_RX_RECORD_PROFILE),1)
+LFLAGS += -Wl,--wrap=chacha20_poly1305_add_aad
+LFLAGS += -Wl,--wrap=chacha20_poly1305_decrypt
+endif
 LFLAGS += -Wl,--wrap=chacha20_poly1305_final
 LFLAGS += -Wl,--wrap=chacha20_poly1305_verify
 endif
@@ -1503,6 +1536,18 @@ ifneq ($(USB_HCD_PROFILE),1)
 LFLAGS += -Wl,--wrap=usbh_hcd_hc_submit_request
 LFLAGS += -Wl,--wrap=usbh_hcd_hc_get_urb_state
 endif
+endif
+ifeq ($(SCREEN_USB_PROBE),1)
+ifneq ($(USB_HCD_PROFILE),1)
+ifneq ($(USB_TX_LIFETIME_PROFILE),1)
+LFLAGS += -Wl,--wrap=usbh_hcd_hc_submit_request
+LFLAGS += -Wl,--wrap=usbh_hcd_hc_get_urb_state
+endif
+endif
+endif
+ifeq ($(TOUCH_PATH_PROFILE),1)
+LFLAGS += -Wl,--wrap=lib_carplay_touch
+LFLAGS += -Wl,--wrap=AirPlayReceiverSessionSendHIDReport
 endif
 ifeq ($(NCM_WRAP_PROFILE),1)
 LFLAGS += -Wl,--wrap=ncm_wrap_ntb
@@ -1639,8 +1684,12 @@ CARBOX_CARPLAY_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_chacha_
 CARBOX_CHACHA_VENDOR_PRE_RX_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/libchacha_vendor_pre_rx.a
 CARBOX_CHACHA_VENDOR_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_vendor_private_mem.a
 CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_vendor_private_sw.a
-# Same mode numbering as AES_MODE above.
-CHACHA_MODE ?= 2
+# ChaCha backend policy:
+#   0 = software only
+#   1 = software authoritative plus hardware verification
+#   2 = hardware only for RX and TX
+#   3 = screen RX software, TX hardware (reliability isolation build)
+CHACHA_MODE ?= 3
 CHACHA_HW_MIN_LEN ?= 4096
 CHACHA_STATS_INTERVAL_MS ?= 0
 CHACHA_HW_SELFTEST ?= 0
@@ -1865,6 +1914,7 @@ ifeq ($(WLAN_RX_DMA_SKB),1)
 wlan_rx_hook:
 	@$(MAKE) -C $(WLAN_RX_HOOK_DIR) \
 		CROSS_COMPILE=$(abspath $(CROSS_COMPILE)) \
+		WLAN_RX_DMA_PROFILE=$(WLAN_RX_DMA_PROFILE) \
 		ORIGINAL_ARCHIVE=$(abspath $(WLAN_RX_HOOK_ORIGINAL)) zero-copy
 application: wlan_rx_hook
 endif

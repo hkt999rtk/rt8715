@@ -204,7 +204,8 @@ static int run_case(size_t len, size_t aad_len) {
             CARBOX_CHACHA_MODE, len, aad_len, (int)error);
     return 0;
   }
-#if CARBOX_CHACHA_MODE != CARBOX_CHACHA_MODE_SOFTWARE_ONLY
+#if (CARBOX_CHACHA_MODE != CARBOX_CHACHA_MODE_SOFTWARE_ONLY) && \
+    (CARBOX_CHACHA_MODE != CARBOX_CHACHA_MODE_SPLIT_RX_SW_TX_HW)
   {
     unsigned int combined = mock_rtl_decrypt_successes();
     unsigned int failures = mock_rtl_decrypt_failures();
@@ -437,7 +438,7 @@ static int run_failure_fallbacks(void) {
   uint8_t *actual = malloc(large_len);
   size_t i;
   int32_t error;
-#if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+#if CARBOX_CHACHA_TX_USES_HARDWARE
   static const uint8_t zero_tag[16] = {0};
 #endif
 
@@ -457,7 +458,7 @@ static int run_failure_fallbacks(void) {
   chacha20_poly1305_encrypt_all_64x64(
     key, nonce, aad, sizeof(aad), plain, large_len, actual, actual_tag
   );
-#if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+#if CARBOX_CHACHA_TX_USES_HARDWARE
   if (memcmp(actual_tag, zero_tag, sizeof(actual_tag)) != 0) {
     fprintf(stderr, "chunked encrypt HW failure did not clear tag\n");
     return 0;
@@ -477,7 +478,7 @@ static int run_failure_fallbacks(void) {
     key, nonce, aad, sizeof(aad), expected, large_len,
     actual, expected_tag
   );
-#if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+#if CARBOX_CHACHA_RX_USES_HARDWARE
   if (error != CHACHA_RTL_ERROR_OPERATION) {
     fprintf(stderr,
             "chunked decrypt HW failure was not returned: err=%d\n",
@@ -502,7 +503,7 @@ static int run_failure_fallbacks(void) {
     key, nonce, aad, sizeof(aad), plain, standalone_len,
     actual, actual_tag
   );
-#if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+#if CARBOX_CHACHA_TX_USES_HARDWARE
 #if CARBOX_CHACHA_NONALIGNED_SW_POLY
   if (memcmp(actual, expected, standalone_len) ||
       memcmp(actual_tag, expected_tag, sizeof(actual_tag))) {

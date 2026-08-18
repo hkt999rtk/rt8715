@@ -70,6 +70,8 @@ CFLAGS += -I$(SDK_ROOT)/component/os/freertos/freertos_v10.0.0/include
 CFLAGS += -I$(SDK_ROOT)/component/os/freertos/freertos_v10.0.0/portable/GCC/ARM_RTL8195B
 CFLAGS += -I$(RECOVERED_DIR)
 RX_EXTRA_CFLAGS ?=
+WLAN_RX_DMA_PROFILE ?= 0
+DMA_PROFILE_STAMP := $(BUILD_DIR)/.wlan_rx_dma_profile_$(WLAN_RX_DMA_PROFILE)
 
 .NOTPARALLEL:
 .PHONY: all check-input verify zero-copy copy-parity skbuff-parity clean
@@ -144,9 +146,14 @@ $(VENDOR_PARITY_SKBUFF_OBJECT): $(RECOVERED_SKBUFF_SOURCE) | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	@$(CC) $(CFLAGS) -DCONFIG_RECOVERED_SKBUFF_VENDOR_PARITY=1 $< -o $@
 
-$(DMA_MANAGER_OBJECT): $(DMA_MANAGER_SOURCE) $(DMA_MANAGER_HEADER) | $(BUILD_DIR)
+$(DMA_PROFILE_STAMP): | $(BUILD_DIR)
+	@rm -f $(BUILD_DIR)/.wlan_rx_dma_profile_*
+	@touch $@
+
+$(DMA_MANAGER_OBJECT): $(DMA_MANAGER_SOURCE) $(DMA_MANAGER_HEADER) \
+		$(DMA_PROFILE_STAMP) | $(BUILD_DIR)
 	@echo "  CC    WLAN RX DMA buffer manager"
-	@$(CC) $(CFLAGS) $< -o $@
+	@$(CC) $(CFLAGS) -DCONFIG_WLAN_RX_DMA_PROFILE=$(WLAN_RX_DMA_PROFILE) $< -o $@
 
 # Build a complete object staging tree from the vendor archive, then replace
 # only the two source-recovered members and append the source-built DMA manager.

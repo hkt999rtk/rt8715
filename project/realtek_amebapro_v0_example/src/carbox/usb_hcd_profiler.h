@@ -13,6 +13,18 @@ void usb_tx_lifetime_ncm_begin(const void *source, uint32_t length);
 void usb_tx_lifetime_ncm_end(int result);
 void usb_tx_lifetime_source_release(void);
 
+typedef struct usb_screen_probe_stats_s {
+	uint32_t submits;
+	uint32_t submit_errors;
+	uint32_t completions;
+	uint32_t completion_cycles;
+	uint32_t completion_cycles_max;
+	uint32_t pending_now;
+	uint32_t pending_max;
+} usb_screen_probe_stats_t;
+
+void usb_screen_probe_snapshot(usb_screen_probe_stats_t *stats);
+
 #ifdef __cplusplus
 }
 #endif

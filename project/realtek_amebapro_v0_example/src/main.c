@@ -14,6 +14,7 @@
 #include "carbox/large_memcpy_gdma.h"
 #include "carbox/ota_local_upload_page.h"
 #include "carbox/pc_profiler.h"
+#include "carbox/screen_tx_direct_crypto.h"
 #include "carbox/spic_overclock.h"
 #include "carbox/system_overclock.h"
 #if defined(CONFIG_MEMCHECK)
@@ -553,6 +554,7 @@ void main(void)
 	carbox_aes_ctr_periodic_selftest_start();
 	carbox_diag_trace_enter("main");
 	carbox_pc_profiler_start();
+	carbox_screen_usb_probe_start();
 
 #if defined(CONFIG_NET_GDMA_BENCH) && CONFIG_NET_GDMA_BENCH
 	carbox_gdma_bench_start();

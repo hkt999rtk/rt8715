@@ -14,6 +14,10 @@
 
 #include "wlan_rx_dma_mgr.h"
 
+#ifndef CONFIG_WLAN_RX_DMA_PROFILE
+#define CONFIG_WLAN_RX_DMA_PROFILE 0
+#endif
+
 #define WLAN_RX_DMA_CONTEXTS       2U
 #define WLAN_RX_DMA_MAX_SLOTS     32U
 #define WLAN_RX_DMA_ALIGNMENT     32U
@@ -239,11 +243,13 @@ int wlan_rx_dma_rotate(void *adapter, unsigned int slot_index,
 	slot->shadow_entry = shadow_entry;
 	if (completed != NULL) {
 		context->stats.zero_copy++;
+#if CONFIG_WLAN_RX_DMA_PROFILE
 		if (context->stats.zero_copy >= context->next_report) {
 			context->next_report += 1024U;
 			snapshot = context->stats;
 			report = 1;
 		}
+#endif
 	}
 	restore_flags();
 
@@ -253,7 +259,7 @@ int wlan_rx_dma_rotate(void *adapter, unsigned int slot_index,
 		printf("[WLAN_RX_DMA] active adapter=%p ring=%u first=%p replacement=%p\n",
 		       adapter, ring_size, observed_base, replacement_base);
 	}
-	if (report) {
+	if (CONFIG_WLAN_RX_DMA_PROFILE && report) {
 		printf("[WLAN_RX_DMA] zero_copy=%u adopted=%u live=%u fallback=%u/%u\n",
 		       (unsigned int)snapshot.zero_copy,
 		       (unsigned int)snapshot.adopted,

@@ -26,9 +26,12 @@ void carbox_screen_tx_crypto_complete(void *destination, size_t length,
 void carbox_screen_tx_before_write(const void *buffer, size_t length);
 void carbox_screen_block_profile_write(int socket, size_t requested,
 				       int result);
+size_t carbox_screen_tx_pacer_allowance(size_t requested);
+void carbox_screen_tx_pacer_complete(size_t allowed, int result);
 void carbox_screen_tx_direct_crypto_report(uint32_t sequence);
 void carbox_screen_block_profile_report(uint32_t sequence);
 void carbox_screen_tx_pacer_report(uint32_t sequence);
+void carbox_screen_usb_probe_start(void);
 
 #define CARBOX_SCREEN_TX_CRYPTO_AES     1U
 #define CARBOX_SCREEN_TX_CRYPTO_CHACHA  2U

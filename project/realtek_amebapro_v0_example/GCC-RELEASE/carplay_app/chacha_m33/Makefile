@@ -307,7 +307,7 @@ HOST_TEST_FLAGS := -O2 -Wall -Wextra -I.
 host-check: | $(OUTPUT_DIR)
 	@set -e; \
 	for swpoly in 0 1; do \
-	  for mode in 0 1 2; do \
+	  for mode in 0 1 2 3; do \
 		echo "HOST TEST CHACHA_MODE=$$mode NONALIGNED_SW_POLY=$$swpoly"; \
 		$(HOST_CC) $(HOST_TEST_FLAGS) -DCARBOX_CHACHA_MODE=$$mode \
 			-DCARBOX_SCREEN_TX_DIRECT_CRYPTO=0 \

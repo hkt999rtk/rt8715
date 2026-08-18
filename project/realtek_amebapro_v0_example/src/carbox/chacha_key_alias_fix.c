@@ -2,6 +2,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "screen_rx_record_profiler.h"
+
 /*
  * AirPlayScreen's closed-object ABI places the persistent 32-byte key and
  * 8-byte nonce inside the 0x118-byte region now used by the replacement
@@ -99,6 +101,12 @@ static carbox_chacha_alias_slot *allocate_slot(void *state) {
 extern void __real_chacha20_poly1305_init_64x64(
   void *state, const uint8_t key[32], const uint8_t nonce[8]
 );
+extern void __real_chacha20_poly1305_add_aad(
+  void *state, const void *src, size_t len
+);
+extern size_t __real_chacha20_poly1305_decrypt(
+  void *state, const void *src, size_t len, void *dst
+);
 extern size_t __real_chacha20_poly1305_final(
   void *state, void *dst, uint8_t tag[16]
 );
@@ -144,12 +152,29 @@ void __wrap_chacha20_poly1305_init_64x64(
     }
   }
   __real_chacha20_poly1305_init_64x64(state, safe_key, safe_nonce);
+  carbox_screen_rx_crypto_init();
+}
+
+void __wrap_chacha20_poly1305_add_aad(
+  void *state, const void *src, size_t len
+) {
+  __real_chacha20_poly1305_add_aad(state, src, len);
+  carbox_screen_rx_crypto_aad(len);
+}
+
+size_t __wrap_chacha20_poly1305_decrypt(
+  void *state, const void *src, size_t len, void *dst
+) {
+  size_t written = __real_chacha20_poly1305_decrypt(state, src, len, dst);
+  carbox_screen_rx_crypto_decrypt(len, written);
+  return written;
 }
 
 size_t __wrap_chacha20_poly1305_final(
   void *state, void *dst, uint8_t tag[16]
 ) {
   size_t written = __real_chacha20_poly1305_final(state, dst, tag);
+  carbox_screen_rx_crypto_final(written);
   restore_slot(find_slot(state));
   return written;
 }
@@ -159,6 +184,7 @@ size_t __wrap_chacha20_poly1305_verify(
 ) {
   size_t written =
     __real_chacha20_poly1305_verify(state, dst, tag, out_error);
+  carbox_screen_rx_crypto_verify(written, out_error);
   restore_slot(find_slot(state));
   return written;
 }
