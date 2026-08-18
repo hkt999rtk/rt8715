@@ -361,18 +361,23 @@ extern unsigned int sys_now(void);
 #define IP_REASS_MAX_PBUFS 40
 
 /*
- * Keep one head-unit receive window plus modest write/ACK headroom queued
- * locally.  This preserves the downstream pipeline without hiding another
- * large portion of a video frame in TCP.
+ * Absorb short head-unit ACK stalls without forcing the screen writer to
+ * retry in the middle of a frame.  This is send credit only: zero-copy
+ * payloads remain referenced by TCP until ACKed.
  */
 #undef TCP_SND_BUF
-#define TCP_SND_BUF (32 * 1024)
+#define TCP_SND_BUF (128 * 1024)
 
-/* Keep writable readiness proportional to the reduced send buffer. */
-#define TCP_SNDLOWAT (TCP_SND_BUF / 2)
+/* Preserve the previous 32 KiB configuration's writable threshold. */
+#define TCP_SNDLOWAT (16 * 1024)
 
+/*
+ * Do not double the metadata pools with TCP_SND_BUF.  The existing capacity
+ * was 12 * 32 KiB / MSS (269 entries at MSS 1460), while profiling observed
+ * a much lower high-water mark.
+ */
 #undef TCP_SND_QUEUELEN
-#define TCP_SND_QUEUELEN (12*TCP_SND_BUF/TCP_MSS)
+#define TCP_SND_QUEUELEN (12*(32 * 1024)/TCP_MSS)
 
 #undef MEMP_NUM_TCP_SEG
 #define MEMP_NUM_TCP_SEG TCP_SND_QUEUELEN

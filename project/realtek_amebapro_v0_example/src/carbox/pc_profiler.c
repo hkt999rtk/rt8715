@@ -1448,7 +1448,8 @@ static void pcprof_task(void *arg)
 #endif
 #if defined(CONFIG_SCREEN_DATAPATH_PROFILE) && \
 	CONFIG_SCREEN_DATAPATH_PROFILE && \
-	defined(CONFIG_SCREEN_TX_PACER) && CONFIG_SCREEN_TX_PACER
+	defined(CONFIG_SCREEN_TX_PACER) && CONFIG_SCREEN_TX_PACER && \
+	defined(CONFIG_SCREEN_TX_PACER_BPS) && (CONFIG_SCREEN_TX_PACER_BPS != 0)
 		carbox_screen_tx_pacer_report(sequence);
 #endif
 #if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE

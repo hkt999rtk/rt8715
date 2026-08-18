@@ -980,11 +980,10 @@ SCREEN_RX_RATE_LIMIT_OPEN_HOLD_MS ?= 100
 SCREEN_RX_RATE_LIMIT_CLOSE_HOLD_MS ?= 150
 SCREEN_RX_RATE_LIMIT_TASK_PRIORITY ?= 5
 SCREEN_RX_RATE_LIMIT_TASK_STACK ?= 512
-# Smooth each ScreenThread TCP write without creating a second long-term
-# controller. RX owns the 8-Mbps long-term rate; TX retains a 10-Mbps ceiling
-# and can burst by no more than the peer's observed 23,040-byte window.
-SCREEN_TX_PACER ?= 0
-SCREEN_TX_PACER_BPS ?= 10000000
+# Optional ScreenThread-to-USB TX ceiling. A bitrate of zero explicitly means
+# unlimited and compiles the pacing path out; a nonzero value enables pacing.
+SCREEN_TX_PACER ?= 1
+SCREEN_TX_PACER_BPS ?= 0
 SCREEN_TX_PACER_BUCKET_BYTES ?= 23040
 SCREEN_TX_PACER_CHUNK_BYTES ?= 4096
 SCREEN_TX_PACER_WAIT_MS ?= 1
@@ -1175,7 +1174,7 @@ CARBOX_CRYPTO_OWNER_BOOST_PRIORITY ?= 11
 # Supported release profiles:
 #   300: retain the ROM-established PLL_SYS/CPU 300 MHz path
 #   400: apply the qualified PLL_SYS/CPU 400 MHz preset during early boot
-SYSTEM_CLOCK_PROFILE ?= 400
+SYSTEM_CLOCK_PROFILE ?= 300
 ifeq ($(SYSTEM_CLOCK_PROFILE),300)
 SYS_PLL_OVERCLOCK ?= 0
 SYS_PLL_TARGET_HZ ?= 300000000

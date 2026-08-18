@@ -33,7 +33,7 @@
 #define CONFIG_SCREEN_TX_PACER 0
 #endif
 #ifndef CONFIG_SCREEN_TX_PACER_BPS
-#define CONFIG_SCREEN_TX_PACER_BPS 8000000U
+#define CONFIG_SCREEN_TX_PACER_BPS 0U
 #endif
 #ifndef CONFIG_SCREEN_TX_PACER_BUCKET_BYTES
 #define CONFIG_SCREEN_TX_PACER_BUCKET_BYTES 23040U
@@ -54,9 +54,14 @@
 #define CONFIG_SCREEN_TX_PRESSURE_TRIGGER_MS 75U
 #endif
 
-#if CONFIG_SCREEN_TX_PACER && \
-	((CONFIG_SCREEN_TX_PACER_BPS == 0) || \
-	 (CONFIG_SCREEN_TX_PACER_BUCKET_BYTES == 0) || \
+#if CONFIG_SCREEN_TX_PACER && (CONFIG_SCREEN_TX_PACER_BPS != 0)
+#define CONFIG_SCREEN_TX_PACER_ACTIVE 1
+#else
+#define CONFIG_SCREEN_TX_PACER_ACTIVE 0
+#endif
+
+#if CONFIG_SCREEN_TX_PACER_ACTIVE && \
+	((CONFIG_SCREEN_TX_PACER_BUCKET_BYTES == 0) || \
 	 (CONFIG_SCREEN_TX_PACER_CHUNK_BYTES == 0) || \
 	 (CONFIG_SCREEN_TX_PACER_CHUNK_BYTES > \
 	  CONFIG_SCREEN_TX_PACER_BUCKET_BYTES) || \
@@ -121,7 +126,7 @@ static screen_tx_direct_slot_t screen_tx_slots[SCREEN_TX_DIRECT_SLOTS];
 static screen_tx_direct_stats_t screen_tx_stats;
 static uint8_t screen_tx_enabled = 1U;
 
-#if CONFIG_SCREEN_TX_PACER
+#if CONFIG_SCREEN_TX_PACER_ACTIVE
 typedef struct screen_tx_pacer_stats_s {
 	uint32_t calls;
 	uint32_t partials;
@@ -1076,7 +1081,7 @@ void carbox_screen_tx_direct_crypto_report(uint32_t sequence)
 
 void carbox_screen_tx_pacer_report(uint32_t sequence)
 {
-#if CONFIG_SCREEN_TX_PACER
+#if CONFIG_SCREEN_TX_PACER_ACTIVE
 	screen_tx_pacer_stats_t stats;
 	uint32_t tokens;
 
@@ -1124,7 +1129,7 @@ int __wrap_lwip_write(int socket, const void *buffer, size_t bytes)
 	size_t paced_bytes = bytes;
 
 	carbox_screen_tx_before_write(buffer, bytes);
-#if CONFIG_SCREEN_TX_PACER
+#if CONFIG_SCREEN_TX_PACER_ACTIVE
 	paced_bytes = carbox_screen_tx_pacer_allowance(bytes);
 #endif
 #if CONFIG_TCP_OWNED_WRITE
@@ -1137,7 +1142,7 @@ int __wrap_lwip_write(int socket, const void *buffer, size_t bytes)
 #else
 	result = __real_lwip_write(socket, buffer, paced_bytes);
 #endif
-#if CONFIG_SCREEN_TX_PACER
+#if CONFIG_SCREEN_TX_PACER_ACTIVE
 	carbox_screen_tx_pacer_complete(paced_bytes, result);
 #endif
 	carbox_screen_block_profile_write(socket, bytes, result);
