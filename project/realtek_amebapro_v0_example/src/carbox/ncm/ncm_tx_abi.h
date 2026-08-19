@@ -41,8 +41,15 @@ typedef void *usb_os_sema_t;
 
 #define USB_OS_SEMA_TIMEOUT 0xFFFFFFFFUL
 
-/* GTimer (mbed, USE_TIMER) — resolved from component/common/mbed targets/hal dirs */
-#ifdef USE_TIMER
+/*
+ * The customer archive was built with these timer members in cdc_ncm_ctx.
+ * Preserve that binary layout even when the firmware-side legacy aggregation
+ * timer is compiled out.  This is ABI padding, not a request to start GTimer.
+ */
+#ifndef NCM_TX_ABI_TIMER_LAYOUT
+#define NCM_TX_ABI_TIMER_LAYOUT 1
+#endif
+#if NCM_TX_ABI_TIMER_LAYOUT
 #include "objects.h"
 #include "timer_api.h"
 #endif
@@ -138,7 +145,7 @@ struct cdc_ncm_ctx {
 
 	struct usb_interface *control;
 	struct usb_interface *data;
-#ifdef USE_TIMER
+#if NCM_TX_ABI_TIMER_LAYOUT
 	gtimer_t send_timer;
 	usb_os_sema_t bh_sema;		/* wake tx_bh thread */
 	u8    bh_need_wake;		/* set by ISR, consumed at ISR tail for portEND_SWITCHING_ISR */
@@ -202,7 +209,7 @@ struct cdc_ncm_ctx {
 	u8    stat_started;
 #endif
 
-#ifdef USE_TIMER
+#if NCM_TX_ABI_TIMER_LAYOUT
 	u32 tx_timer_call_cnt;
 	u64 tx_timer_last;
 	u32 tx_timer_interval_sum;

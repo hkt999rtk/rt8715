@@ -8,6 +8,7 @@
  *   ncm_timer_init(), ncm_stat_send_latency()
  */
 #include "ncm_tx_abi.h"
+#include "ncm_tx_batch.h"
 
 #ifndef NCM_TX_COMPAT_SINGLE_DATAGRAM
 #define NCM_TX_COMPAT_SINGLE_DATAGRAM 0
@@ -39,10 +40,12 @@ static const char *TAG = "NCM";
 #define __here__
 #endif
 
-#if defined(USE_TIMER) || defined(USE_STAT)
+#if !NCM_TX_COMPAT_SINGLE_DATAGRAM && \
+	(defined(USE_TIMER) || defined(USE_STAT))
 extern u64 usbh_get_timestamp(struct usb_host *host);
 #endif
 
+#if !NCM_TX_COMPAT_SINGLE_DATAGRAM
 /* hal.c: flush a pending NTB (deferred flush path, USE_TIMER) */
 extern int usbh_cdc_ncm_send_data(u8 *buf, u32 len);
 
@@ -57,7 +60,9 @@ static void ncm_tx_bh_thread(void *param);
 #ifdef USE_STAT
 static void ncm_stat_thread(void *param);
 #endif
+#endif
 
+#if !NCM_TX_COMPAT_SINGLE_DATAGRAM
 static size_t cdc_ncm_align_tail(void *data, size_t len, size_t modulus, size_t remainder, size_t max)
 {
 	size_t align = ALIGN(len, modulus) - len + remainder;
@@ -406,10 +411,257 @@ exit_no_data:
 #endif	
     return NULL;
 }
+#endif
 
 
 
 #if NCM_TX_COMPAT_SINGLE_DATAGRAM
+_Static_assert(sizeof(struct usb_cdc_ncm_nth16) == 12U,
+	       "NCM NTH16 wire layout changed");
+_Static_assert(sizeof(struct usb_cdc_ncm_ndp16) == 8U,
+	       "NCM NDP16 wire layout changed");
+_Static_assert(sizeof(struct usb_cdc_ncm_dpe16) == 4U,
+	       "NCM DPE16 wire layout changed");
+_Static_assert(offsetof(struct cdc_ncm_ctx, mtx) == 172U,
+	       "customer cdc_ncm_ctx ABI changed before mtx");
+_Static_assert(offsetof(struct cdc_ncm_ctx, tx_max) == 208U,
+	       "customer cdc_ncm_ctx ABI changed before tx_max");
+_Static_assert(offsetof(struct cdc_ncm_ctx, tx_seq) == 228U,
+	       "customer cdc_ncm_ctx ABI changed before tx_seq");
+
+struct ncm_single_profile {
+	volatile u32 ok;
+	volatile u32 payload_bytes;
+	volatile u32 ntb_bytes;
+	volatile u32 clear_bytes;
+	volatile u32 batch_ntbs;
+	volatile u32 batch_datagrams;
+	volatile u32 batch_payload_bytes;
+	volatile u32 batch_reject;
+	volatile u32 reject_dev;
+	volatile u32 reject_arg;
+	volatile u32 reject_size;
+	volatile u32 timer_init;
+	volatile u32 timer_start;
+	volatile u32 lock_fail;
+	volatile u32 cfg_tx_max;
+	volatile u32 cfg_max_datagram;
+	volatile u32 cfg_max_ndp;
+	volatile u32 cfg_max_datagrams;
+	volatile u32 cfg_modulus;
+	volatile u32 cfg_remainder;
+};
+
+static struct ncm_single_profile ncm_single_profile;
+static const struct carbox_ncm_tx_batch *ncm_active_batch;
+static u8 ncm_batch_built;
+static u16 ncm_batch_sent_frames;
+
+#define NCM_BATCH_LENGTH_TAG 0x80000000U
+
+extern int usbh_cdc_ncm_send_data(u8 *buf, u32 len);
+
+static size_t ncm_batch_align(size_t len, u16 modulus, u16 remainder)
+{
+	return ALIGN(len, (size_t)modulus) + remainder;
+}
+
+static void *cdc_ncm_tx_fixup_batch(usbh_cdc_ncm_host_hal_t *dev,
+				    const struct carbox_ncm_tx_batch *batch,
+				    size_t *out_len)
+{
+	struct cdc_ncm_ctx *ctx;
+	struct usb_cdc_ncm_nth16 *nth16;
+	struct usb_cdc_ncm_ndp16 *ndp16;
+	size_t offsets[CARBOX_NCM_TX_BATCH_MAX_DATAGRAMS];
+	size_t header_len;
+	size_t ndp_len;
+	size_t ntb_len;
+	size_t payload_bytes = 0U;
+	u16 modulus;
+	u16 remainder;
+	u32 frame_index;
+	u32 selected_count;
+	int candidate_valid;
+
+	if (out_len == NULL) {
+		ncm_single_profile.batch_reject++;
+		return NULL;
+	}
+	*out_len = 0U;
+	if (dev == NULL || batch == NULL ||
+	    batch->magic != CARBOX_NCM_TX_BATCH_MAGIC ||
+	    batch->frame_count < 2U ||
+	    batch->frame_count > CARBOX_NCM_TX_BATCH_MAX_DATAGRAMS ||
+	    batch->segment_count > CARBOX_NCM_TX_BATCH_MAX_SEGMENTS) {
+		ncm_single_profile.batch_reject++;
+		return NULL;
+	}
+	ctx = (struct cdc_ncm_ctx *)dev->data[0];
+	if (ctx == NULL || dev->out_buf == NULL) {
+		ncm_single_profile.batch_reject++;
+		return NULL;
+	}
+	modulus = ctx->tx_modulus != 0U ? ctx->tx_modulus : 1U;
+	remainder = ctx->tx_remainder;
+	if ((modulus & (modulus - 1U)) != 0U || remainder >= modulus) {
+		ncm_single_profile.batch_reject++;
+		return NULL;
+	}
+
+	selected_count = batch->frame_count;
+	if (ctx->tx_max_datagrams != 0U &&
+	    selected_count > ctx->tx_max_datagrams)
+		selected_count = ctx->tx_max_datagrams;
+
+	/* Select the largest FIFO prefix that fits the negotiated NTB capacity. */
+	for (; selected_count >= 2U; --selected_count) {
+		ndp_len = sizeof(*ndp16) +
+			sizeof(struct usb_cdc_ncm_dpe16) *
+			((size_t)selected_count + 1U);
+		header_len = sizeof(*nth16) + ndp_len;
+		if ((ctx->max_ndp_size != 0U && ndp_len > ctx->max_ndp_size) ||
+		    header_len > ctx->tx_max || header_len > 0xffffU)
+			continue;
+
+		ntb_len = header_len;
+		payload_bytes = 0U;
+		candidate_valid = 1;
+		for (frame_index = 0U; frame_index < selected_count; ++frame_index) {
+			const struct carbox_ncm_tx_frame *frame =
+				&batch->frame[frame_index];
+			size_t segment_bytes = 0U;
+			u32 segment_index;
+
+			if (frame->segment_count == 0U ||
+			    frame->first_segment >= batch->segment_count ||
+			    frame->segment_count >
+				batch->segment_count - frame->first_segment ||
+			    frame->len == 0U || frame->len > 0xffffU ||
+			    (ctx->max_datagram_size != 0U &&
+			     frame->len > ctx->max_datagram_size)) {
+				ncm_single_profile.batch_reject++;
+				return NULL;
+			}
+			for (segment_index = 0U;
+			     segment_index < frame->segment_count; ++segment_index) {
+				const struct carbox_ncm_tx_segment *segment =
+					&batch->segment[frame->first_segment + segment_index];
+				if (segment->data == NULL ||
+				    segment->len > frame->len - segment_bytes) {
+					ncm_single_profile.batch_reject++;
+					return NULL;
+				}
+				segment_bytes += segment->len;
+			}
+			if (segment_bytes != frame->len) {
+				ncm_single_profile.batch_reject++;
+				return NULL;
+			}
+
+			offsets[frame_index] = ncm_batch_align(ntb_len, modulus,
+							 remainder);
+			if (offsets[frame_index] < ntb_len ||
+			    offsets[frame_index] > ctx->tx_max ||
+			    frame->len > ctx->tx_max - offsets[frame_index] ||
+			    frame->len > 0xffffU - offsets[frame_index]) {
+				candidate_valid = 0;
+				break;
+			}
+			ntb_len = offsets[frame_index] + frame->len;
+			payload_bytes += frame->len;
+		}
+		if (candidate_valid != 0)
+			break;
+	}
+	if (selected_count < 2U) {
+		ncm_single_profile.batch_reject++;
+		return NULL;
+	}
+
+	usb_os_lock(ctx->mtx);
+	memset(dev->out_buf, 0, header_len);
+	nth16 = (struct usb_cdc_ncm_nth16 *)dev->out_buf;
+	nth16->dwSignature = cpu_to_le32(USB_CDC_NCM_NTH16_SIGN);
+	nth16->wHeaderLength = cpu_to_le16(sizeof(*nth16));
+	nth16->wSequence = cpu_to_le16(ctx->tx_seq++);
+	nth16->wBlockLength = cpu_to_le16(ntb_len);
+	nth16->wNdpIndex = cpu_to_le16(sizeof(*nth16));
+
+	ndp16 = (struct usb_cdc_ncm_ndp16 *)(dev->out_buf + sizeof(*nth16));
+	ndp16->dwSignature = cpu_to_le32(USB_CDC_NCM_NDP16_NOCRC_SIGN);
+	ndp16->wLength = cpu_to_le16(ndp_len);
+	for (frame_index = 0U; frame_index < selected_count; ++frame_index) {
+		const struct carbox_ncm_tx_frame *frame = &batch->frame[frame_index];
+		u32 segment_index;
+		u8 *destination = dev->out_buf + offsets[frame_index];
+
+		ndp16->dpe16[frame_index].wDatagramIndex =
+			cpu_to_le16(offsets[frame_index]);
+		ndp16->dpe16[frame_index].wDatagramLength =
+			cpu_to_le16(frame->len);
+		if (offsets[frame_index] > header_len && frame_index == 0U) {
+			memset(dev->out_buf + header_len, 0,
+			       offsets[frame_index] - header_len);
+		} else if (frame_index != 0U) {
+			size_t previous_end = offsets[frame_index - 1U] +
+				batch->frame[frame_index - 1U].len;
+			if (offsets[frame_index] > previous_end) {
+				memset(dev->out_buf + previous_end, 0,
+				       offsets[frame_index] - previous_end);
+			}
+		}
+		for (segment_index = 0U; segment_index < frame->segment_count;
+		     ++segment_index) {
+			const struct carbox_ncm_tx_segment *segment =
+				&batch->segment[frame->first_segment + segment_index];
+			memcpy(destination, segment->data, segment->len);
+			destination += segment->len;
+		}
+	}
+
+	ctx->tx_overhead += ntb_len - payload_bytes;
+	ctx->tx_ntbs++;
+	ncm_single_profile.ok++;
+	ncm_single_profile.payload_bytes += (u32)payload_bytes;
+	ncm_single_profile.ntb_bytes += (u32)ntb_len;
+	ncm_single_profile.clear_bytes += (u32)(ntb_len - payload_bytes);
+	ncm_single_profile.batch_ntbs++;
+	ncm_single_profile.batch_datagrams += selected_count;
+	ncm_single_profile.batch_payload_bytes += (u32)payload_bytes;
+	*out_len = ntb_len;
+	ncm_batch_built = 1U;
+	ncm_batch_sent_frames = (u16)selected_count;
+	usb_os_unlock(ctx->mtx);
+	return dev->out_buf;
+}
+
+int carbox_ncm_tx_send_batch(const struct carbox_ncm_tx_batch *batch,
+			     uint16_t *sent_frames)
+{
+	int status;
+
+	if (sent_frames == NULL || batch == NULL ||
+	    batch->magic != CARBOX_NCM_TX_BATCH_MAGIC ||
+	    batch->frame_count < 2U ||
+	    batch->frame_count > CARBOX_NCM_TX_BATCH_MAX_DATAGRAMS ||
+	    ncm_active_batch != NULL) {
+		ncm_single_profile.batch_reject++;
+		return -1;
+	}
+	*sent_frames = 0U;
+	ncm_active_batch = batch;
+	ncm_batch_built = 0U;
+	ncm_batch_sent_frames = 0U;
+	status = usbh_cdc_ncm_send_data((u8 *)batch,
+			NCM_BATCH_LENGTH_TAG | batch->frame_count);
+	ncm_active_batch = NULL;
+	if (ncm_batch_built == 0U)
+		return CARBOX_NCM_TX_BATCH_RETRY_SINGLE;
+	*sent_frames = ncm_batch_sent_frames;
+	return status;
+}
+
 /*
  * Hardware-validated compatibility format used with the customer USB archive.
  * Each Ethernet frame is sent immediately as one NCM NTB16:
@@ -424,21 +676,44 @@ static void *cdc_ncm_tx_fixup_single(usbh_cdc_ncm_host_hal_t *dev,
 				     const void *data, size_t len,
 				     size_t *out_len)
 {
-	struct cdc_ncm_ctx *ctx = (struct cdc_ncm_ctx *)dev->data[0];
+	struct cdc_ncm_ctx *ctx;
 	struct usb_cdc_ncm_nth16 *nth16;
 	struct usb_cdc_ncm_ndp16 *ndp16;
 	const size_t ndp_len = sizeof(*ndp16) +
 			       sizeof(struct usb_cdc_ncm_dpe16) * 2U;
 	const size_t payload_offset = sizeof(*nth16) + ndp_len;
-	const size_t ntb_len = payload_offset + len;
+	size_t ntb_len;
 
-	if (ctx == NULL || dev->out_buf == NULL || data == NULL ||
-	    out_len == NULL || ntb_len > ctx->tx_max || ntb_len > 0xffffU) {
+	if (out_len == NULL) {
+		ncm_single_profile.reject_arg++;
 		return NULL;
 	}
+	*out_len = 0U;
+	if (dev == NULL) {
+		ncm_single_profile.reject_dev++;
+		return NULL;
+	}
+	ctx = (struct cdc_ncm_ctx *)dev->data[0];
+	if (ctx == NULL || dev->out_buf == NULL) {
+		ncm_single_profile.reject_dev++;
+		return NULL;
+	}
+	if (data == NULL) {
+		ncm_single_profile.reject_arg++;
+		return NULL;
+	}
+	/* Subtraction form avoids size_t overflow before validating the NTB. */
+	if (ctx->tx_max < payload_offset ||
+	    len > ctx->tx_max - payload_offset ||
+	    len > 0xffffU - payload_offset) {
+		ncm_single_profile.reject_size++;
+		return NULL;
+	}
+	ntb_len = payload_offset + len;
 
 	usb_os_lock(ctx->mtx);
-	memset(dev->out_buf, 0, ntb_len);
+	/* Only the 28-byte NTH/NDP area needs clearing for the terminator DPE. */
+	memset(dev->out_buf, 0, payload_offset);
 
 	nth16 = (struct usb_cdc_ncm_nth16 *)dev->out_buf;
 	nth16->dwSignature = cpu_to_le32(USB_CDC_NCM_NTH16_SIGN);
@@ -456,6 +731,10 @@ static void *cdc_ncm_tx_fixup_single(usbh_cdc_ncm_host_hal_t *dev,
 	memcpy(dev->out_buf + payload_offset, data, len);
 	ctx->tx_overhead += payload_offset;
 	ctx->tx_ntbs++;
+	ncm_single_profile.ok++;
+	ncm_single_profile.payload_bytes += (u32)len;
+	ncm_single_profile.ntb_bytes += (u32)ntb_len;
+	ncm_single_profile.clear_bytes += (u32)payload_offset;
 	*out_len = ntb_len;
 	usb_os_unlock(ctx->mtx);
 	return dev->out_buf;
@@ -464,14 +743,22 @@ static void *cdc_ncm_tx_fixup_single(usbh_cdc_ncm_host_hal_t *dev,
 
 void *cdc_ncm_tx_fixup(usbh_cdc_ncm_host_hal_t *dev, void *data, size_t len, gfp_t flags, size_t *out_len)
 {
-    void *out_data = NULL;
-    struct cdc_ncm_ctx *ctx = (struct cdc_ncm_ctx *)dev->data[0];
-    __MSG("%s\n", __func__);
-
 #if NCM_TX_COMPAT_SINGLE_DATAGRAM
 	(void)flags;
+	if (ncm_active_batch != NULL && data == (void *)ncm_active_batch &&
+	    len == (NCM_BATCH_LENGTH_TAG | ncm_active_batch->frame_count)) {
+		return cdc_ncm_tx_fixup_batch(dev, ncm_active_batch, out_len);
+	}
 	return cdc_ncm_tx_fixup_single(dev, data, len, out_len);
-#endif
+#else
+    void *out_data = NULL;
+    struct cdc_ncm_ctx *ctx;
+    __MSG("%s\n", __func__);
+
+	(void)flags;
+	if (dev == NULL || out_len == NULL)
+		goto error;
+	ctx = (struct cdc_ncm_ctx *)dev->data[0];
 
     if (ctx == NULL)
         goto error;
@@ -504,18 +791,24 @@ void *cdc_ncm_tx_fixup(usbh_cdc_ncm_host_hal_t *dev, void *data, size_t len, gfp
 
 error:
     return NULL;
+#endif
 }
 
 /* exported lock helpers for hal.c — both callers hold ctx->mtx across bulk+sema */
 void cdc_ncm_tx_lock(usbh_cdc_ncm_host_hal_t *dev) {
-    struct cdc_ncm_ctx *ctx = (struct cdc_ncm_ctx *)dev->data[0];
+    struct cdc_ncm_ctx *ctx;
+    if (!dev) return;
+    ctx = (struct cdc_ncm_ctx *)dev->data[0];
     if (ctx) usb_os_lock(ctx->net);
 }
 void cdc_ncm_tx_unlock(usbh_cdc_ncm_host_hal_t *dev) {
-    struct cdc_ncm_ctx *ctx = (struct cdc_ncm_ctx *)dev->data[0];
+    struct cdc_ncm_ctx *ctx;
+    if (!dev) return;
+    ctx = (struct cdc_ncm_ctx *)dev->data[0];
     if (ctx) usb_os_unlock(ctx->net);
 }
 
+#if !NCM_TX_COMPAT_SINGLE_DATAGRAM
 #ifdef USE_TIMER
 
 
@@ -673,13 +966,45 @@ static void ncm_stat_thread(void *param)
 }
 
 #endif
+#endif
 
 void ncm_timer_init(usbh_cdc_ncm_host_hal_t *dev)
 {
-    struct cdc_ncm_ctx *ctx = (struct cdc_ncm_ctx *)dev->data[0];
+	struct cdc_ncm_ctx *ctx;
 	int ret;
+
+	if (dev == NULL)
+		return;
+	ctx = (struct cdc_ncm_ctx *)dev->data[0];
+	if (ctx == NULL)
+		return;
+#if NCM_TX_COMPAT_SINGLE_DATAGRAM && NCM_TX_ABI_TIMER_LAYOUT
+	/* Preserve the archive ABI while explicitly disabling legacy timer use. */
+	ctx->timer_ok = 0U;
+	ctx->bh_need_wake = 0U;
+	ctx->tx_timer_call_cnt = 0U;
+	ctx->tx_timer_last = 0U;
+	ctx->tx_timer_interval_sum = 0U;
+	ctx->tx_timer_interval_max = 0U;
+	ctx->t_timer_send = 0U;
+#endif
 	ret = usb_os_lock_create(&ctx->mtx);
+#if NCM_TX_COMPAT_SINGLE_DATAGRAM
+	if (ret != 0)
+		ncm_single_profile.lock_fail++;
+	ncm_single_profile.cfg_tx_max = ctx->tx_max;
+	ncm_single_profile.cfg_max_datagram = ctx->max_datagram_size;
+	ncm_single_profile.cfg_max_ndp = ctx->max_ndp_size;
+	ncm_single_profile.cfg_max_datagrams = ctx->tx_max_datagrams;
+	ncm_single_profile.cfg_modulus = ctx->tx_modulus;
+	ncm_single_profile.cfg_remainder = ctx->tx_remainder;
+#endif
 	ret = usb_os_lock_create(&ctx->net);
+#if NCM_TX_COMPAT_SINGLE_DATAGRAM
+	if (ret != 0)
+		ncm_single_profile.lock_fail++;
+#endif
+	(void)ret;
 	// usb_os_lock_delete(ctx->mtx);
 	ctx->tx_exit = 0;
     RTK_LOGS(TAG, "[NCM] -------------------------------------------\n");
@@ -688,6 +1013,11 @@ void ncm_timer_init(usbh_cdc_ncm_host_hal_t *dev)
 	ctx->tx_reason_timeout = 0;
 	ctx->bh_need_wake = 0;
 	memset(&ctx->send_timer, 0, sizeof(ctx->send_timer));
+#if NCM_TX_COMPAT_SINGLE_DATAGRAM
+	/* Single-datagram mode has no buffered NTB, so no flush timer is needed. */
+	ctx->timer_ok = 0;
+	ncm_single_profile.timer_init++;
+#else
 	gtimer_init(&ctx->send_timer, 0xFF);
 	if (ctx->send_timer.timer_adp.tmr_ba == NULL ||
 	    ctx->send_timer.timer_adp.tg_ba == NULL) {
@@ -698,6 +1028,7 @@ void ncm_timer_init(usbh_cdc_ncm_host_hal_t *dev)
 		gtimer_start_one_shout(&ctx->send_timer, ctx->timer_interval,
 		     (void *)cdc_ncm_tx_timer_cb, (uint32_t)dev);
 	}
+#endif
 
 
 	
@@ -741,5 +1072,47 @@ void ncm_stat_send_latency(usbh_cdc_ncm_host_hal_t *dev, u32 elapsed_us)
 	if (!ctx) return;
 	ctx->tx_send_sum += elapsed_us;
 	if (elapsed_us > ctx->tx_send_max) ctx->tx_send_max = elapsed_us;
-#endif	
+#endif
+}
+
+void carbox_ncm_tx_single_profile_report(unsigned long sequence)
+{
+#if NCM_TX_COMPAT_SINGLE_DATAGRAM
+	u32 ok = ncm_single_profile.ok;
+	u32 payload = ncm_single_profile.payload_bytes;
+	u32 datagrams = ok - ncm_single_profile.batch_ntbs +
+		ncm_single_profile.batch_datagrams;
+
+	rt_printf("[NCMTXOPT][%lu] mode=batch%lu ntb/datagrams=%lu/%lu "
+		  "reject dev/arg/size=%lu/%lu/%lu payload/ntb/meta_clear/clear_saved="
+		  "%lu/%lu/%lu/%luB batch ntb/datagrams/payload/reject="
+		  "%lu/%lu/%lu/%lu timer compiled/hw_start=%lu/%lu lock_fail=%lu\r\n",
+		  sequence, (unsigned long)CARBOX_NCM_TX_BATCH_MAX_DATAGRAMS,
+		  (unsigned long)ok, (unsigned long)datagrams,
+		  (unsigned long)ncm_single_profile.reject_dev,
+		  (unsigned long)ncm_single_profile.reject_arg,
+		  (unsigned long)ncm_single_profile.reject_size,
+		  (unsigned long)payload,
+		  (unsigned long)ncm_single_profile.ntb_bytes,
+		  (unsigned long)ncm_single_profile.clear_bytes,
+		  (unsigned long)payload,
+		  (unsigned long)ncm_single_profile.batch_ntbs,
+		  (unsigned long)ncm_single_profile.batch_datagrams,
+		  (unsigned long)ncm_single_profile.batch_payload_bytes,
+		  (unsigned long)ncm_single_profile.batch_reject,
+		  (unsigned long)ncm_single_profile.timer_init,
+		  (unsigned long)ncm_single_profile.timer_start,
+		  (unsigned long)ncm_single_profile.lock_fail);
+	rt_printf("[NCMTXCFG][%lu] tx_max/max_datagram/max_ndp/max_datagrams="
+		  "%lu/%lu/%lu/%lu modulus/remainder=%lu/%lu\r\n",
+		  sequence,
+		  (unsigned long)ncm_single_profile.cfg_tx_max,
+		  (unsigned long)ncm_single_profile.cfg_max_datagram,
+		  (unsigned long)ncm_single_profile.cfg_max_ndp,
+		  (unsigned long)ncm_single_profile.cfg_max_datagrams,
+		  (unsigned long)ncm_single_profile.cfg_modulus,
+		  (unsigned long)ncm_single_profile.cfg_remainder);
+#else
+	(void)sequence;
+#endif
 }

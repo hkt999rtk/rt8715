@@ -76,6 +76,7 @@
 #include "hal_timer.h"
 #if defined(CONFIG_USBH_CDC_NCM)
 #include "usb_hcd_profiler.h"
+#include "ncm/ncm_tx_batch.h"
 #endif
 #endif
 
@@ -504,6 +505,10 @@ static u8 RX_BUFFER[MAX_BUFFER_SIZE];
 
 #ifndef CONFIG_NCM_TX_ASYNC_PROFILE
 #define CONFIG_NCM_TX_ASYNC_PROFILE 0
+#endif
+
+#ifndef CONFIG_NCM_TX_BATCH_MAX
+#define CONFIG_NCM_TX_BATCH_MAX 1
 #endif
 
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
@@ -1246,43 +1251,109 @@ static void ncm_tx_async_report(u32_t now)
 
 static void ncm_tx_async_worker(void *arg)
 {
-	struct ncm_tx_async_item item;
+	struct ncm_tx_async_item items[CARBOX_NCM_TX_BATCH_MAX_DATAGRAMS];
+	struct carbox_ncm_tx_batch batch;
 
 	(void)arg;
 	for (;;) {
-		if (xQueueReceive(g_ncm_tx_async_queue, &item, portMAX_DELAY) == pdTRUE) {
+		if (xQueueReceive(g_ncm_tx_async_queue, &items[0],
+				  portMAX_DELAY) == pdTRUE) {
 			u32_t now = hal_read_curtime_us();
-			u32_t wait_us = now - item.enqueue_us;
-			err_t result;
+			u32_t item_count = 1U;
+			u32_t item_index;
+			u32_t send_index = 0U;
+			err_t result = ERR_OK;
+
+			/* Drain only frames already queued; never add a batching delay. */
+#if CONFIG_NCM_TX_BATCH_MAX > 1
+			while (item_count < CARBOX_NCM_TX_BATCH_MAX_DATAGRAMS &&
+			       xQueueReceive(g_ncm_tx_async_queue, &items[item_count],
+					     0) == pdTRUE) {
+				item_count++;
+			}
+#endif
 
 			taskENTER_CRITICAL();
-			g_ncm_tx_inflight_packets = 1U;
+			g_ncm_tx_inflight_packets = item_count;
 			g_ncm_tx_inflight_start_us = now;
 			taskEXIT_CRITICAL();
-			result = ncm_send_pbuf_sync(item.p);
+
+			while (send_index < item_count) {
+				u32_t build_index;
+				u32_t built_frames = 0U;
+				uint16_t sent_frames = 0U;
+				int batch_status = CARBOX_NCM_TX_BATCH_RETRY_SINGLE;
+
+				memset(&batch, 0, sizeof(batch));
+				batch.magic = CARBOX_NCM_TX_BATCH_MAGIC;
+				for (build_index = send_index; build_index < item_count;
+				     ++build_index) {
+					struct pbuf *q;
+					uint16_t segment_start = batch.segment_count;
+					struct carbox_ncm_tx_frame *frame =
+						&batch.frame[built_frames];
+
+					frame->len = items[build_index].p->tot_len;
+					frame->first_segment = segment_start;
+					for (q = items[build_index].p; q != NULL; q = q->next) {
+						if (batch.segment_count >=
+						    CARBOX_NCM_TX_BATCH_MAX_SEGMENTS)
+							break;
+						batch.segment[batch.segment_count].data = q->payload;
+						batch.segment[batch.segment_count].len = q->len;
+						batch.segment_count++;
+						frame->segment_count++;
+					}
+					if (q != NULL) {
+						batch.segment_count = segment_start;
+						memset(frame, 0, sizeof(*frame));
+						break;
+					}
+					built_frames++;
+				}
+				batch.frame_count = (uint16_t)built_frames;
+
+				if (built_frames > 1U)
+					batch_status = carbox_ncm_tx_send_batch(&batch,
+									 &sent_frames);
+				if (sent_frames != 0U) {
+					if (batch_status != 0)
+						result = ERR_BUF;
+					send_index += sent_frames;
+					continue;
+				}
+
+				/* No legal two-frame prefix: preserve FIFO with one NTB. */
+				if (ncm_send_pbuf_sync(items[send_index].p) != ERR_OK)
+					result = ERR_BUF;
+				send_index++;
+			}
 			taskENTER_CRITICAL();
 			g_ncm_tx_inflight_packets = 0U;
 			g_ncm_tx_inflight_start_us = 0U;
 			taskEXIT_CRITICAL();
 
 #if CONFIG_NCM_TX_ASYNC_PROFILE
-			taskENTER_CRITICAL();
-			g_ncm_tx_async_stats.sent++;
-			g_ncm_tx_async_stats.queue_wait_total_us += wait_us;
-			if (wait_us > g_ncm_tx_async_stats.queue_wait_max_us) {
-				g_ncm_tx_async_stats.queue_wait_max_us = wait_us;
+			for (item_index = 0U; item_index < item_count; ++item_index) {
+				u32_t wait_us = now - items[item_index].enqueue_us;
+				taskENTER_CRITICAL();
+				g_ncm_tx_async_stats.sent++;
+				g_ncm_tx_async_stats.queue_wait_total_us += wait_us;
+				if (wait_us > g_ncm_tx_async_stats.queue_wait_max_us) {
+					g_ncm_tx_async_stats.queue_wait_max_us = wait_us;
+				}
+				if (result != ERR_OK) {
+					g_ncm_tx_async_stats.send_errors++;
+				}
+				taskEXIT_CRITICAL();
 			}
-			if (result != ERR_OK) {
-				g_ncm_tx_async_stats.send_errors++;
-			}
-			taskEXIT_CRITICAL();
-#else
-			(void)wait_us;
-			(void)result;
 #endif
-			/* linkoutput() retained one reference before returning to lwIP. */
-			usb_tx_lifetime_source_release();
-			pbuf_free(item.p);
+			(void)result;
+			for (item_index = 0U; item_index < item_count; ++item_index) {
+				/* linkoutput() retained one reference before returning to lwIP. */
+				usb_tx_lifetime_source_release();
+				pbuf_free(items[item_index].p);
+			}
 			ncm_tx_async_report(hal_read_curtime_us());
 		}
 	}
@@ -1309,8 +1380,14 @@ static int ncm_tx_async_init(void)
 		g_ncm_tx_async_task = NULL;
 		return 0;
 	}
+#if CONFIG_NCM_TX_BATCH_MAX > 1
+	printf("[NCMTXASYNC] enabled mode=task-batch%u queue=%u priority=%u; "
+	       "no-wait pbuf-reference batching, customer HAL\n",
+	       (unsigned int)CONFIG_NCM_TX_BATCH_MAX,
+#else
 	printf("[NCMTXASYNC] enabled mode=single-immediate queue=%u priority=%u; "
-	       "pbuf-reference queue, customer NTB builder\n",
+	       "pbuf-reference queue, customer HAL\n",
+#endif
 	       (unsigned int)NCM_TX_ASYNC_QUEUE_LEN,
 	       (unsigned int)NCM_TX_ASYNC_TASK_PRIORITY);
 	return 1;

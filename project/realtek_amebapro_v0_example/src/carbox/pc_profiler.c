@@ -16,6 +16,7 @@
 #include "spic_overclock.h"
 #include "system_overclock.h"
 #include "ncm/usb_boot_profiler.h"
+#include "ncm/ncm_tx_profile.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -1540,6 +1541,7 @@ static void pcprof_task(void *arg)
 		carbox_touch_path_profiler_report(sequence);
 		carbox_screen_rx_record_profiler_report(sequence);
 		carbox_usb_boot_profiler_report(sequence);
+		carbox_ncm_tx_single_profile_report(sequence);
 		pcprof_fw_slot_report(sequence);
 #if defined(CONFIG_IRQ_PROFILE_REPORT) && CONFIG_IRQ_PROFILE_REPORT
 		carbox_irq_profiler_report(sequence, PCPROF_REPORT_PERIOD_MS);

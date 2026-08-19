@@ -812,11 +812,12 @@ SRAM_C += ../src/carbox/large_memcpy_gdma.c
 SRAM_C += ../src/carbox/video_handover_zero_copy.c
 SRAM_C += ../src/carbox/screen_tx_direct_crypto.c
 # The customer archive leaves the NCM TX builder unresolved.  Keep the source
-# ABI, but use the hardware-validated single-datagram NTH16/NDP16 wire format:
-# 12-byte NTH + 16-byte NDP, payload at offset 28, one NTB per Ethernet packet.
+# ABI, but use the hardware-validated immediate NTH16/NDP16 wire format.  The
+# customer archive's timer fields remain as ABI padding; legacy GTimer-based
+# aggregation is deliberately not compiled.
 SRAM_C += ../src/carbox/ncm/ncm_tx.c
-../src/carbox/ncm/ncm_tx.o: CFLAGS += -DUSE_TIMER \
-	-DNCM_TX_COMPAT_SINGLE_DATAGRAM=1
+../src/carbox/ncm/ncm_tx.o: CFLAGS += -DNCM_TX_COMPAT_SINGLE_DATAGRAM=1 \
+	-DNCM_TX_ABI_TIMER_LAYOUT=1
 SRAM_C += ../src/carbox/ncm/ncm_ctrl_status_compat.c
 SRAM_C += ../src/carbox/ncm/ncm_hal_ready_compat.c
 # The derived archive globalizes its otherwise-local host state for this
@@ -904,11 +905,16 @@ TCP_OUTPUT_PROFILE ?= 0
 NCM_TX_PROFILE ?= 0
 # Move the closed synchronous NCM send/wait out of TCP_IP.
 NCM_TX_ASYNC ?= 1
+# Combine at most this many already-queued Ethernet frames into one NCM NTB in
+# the owner task. No batching delay is added. Set to 1 for validated
+# single-immediate behavior; 2 selects the first hardware-validated batching
+# milestone. The negotiated device limit is reported by NCMTXCFG.
+NCM_TX_BATCH_MAX ?= 16
 # Compact 10-second asynchronous NCM transmit health report.
 NCM_TX_ASYNC_PROFILE ?= 0
 # Compiler command-line changes are not tracked by ordinary source timestamps.
 # Force the sole consumer to rebuild whenever the observation mode changes.
-NCM_TX_PROFILE_STAMP := $(OBJ_DIR)/.ncm_tx_profile_$(NCM_TX_PROFILE)-async$(NCM_TX_ASYNC_PROFILE)
+NCM_TX_PROFILE_STAMP := $(OBJ_DIR)/.ncm_tx_profile_$(NCM_TX_PROFILE)-async$(NCM_TX_ASYNC_PROFILE)-batch$(NCM_TX_BATCH_MAX)
 $(NCM_TX_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.ncm_tx_profile_*
@@ -1323,6 +1329,7 @@ GCCFLAGS += -DCONFIG_TCP_OUTPUT_PROFILE=$(TCP_OUTPUT_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_TX_PROFILE=$(NCM_TX_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_TX_ASYNC=$(NCM_TX_ASYNC)
 GCCFLAGS += -DCONFIG_NCM_TX_ASYNC_PROFILE=$(NCM_TX_ASYNC_PROFILE)
+GCCFLAGS += -DCONFIG_NCM_TX_BATCH_MAX=$(NCM_TX_BATCH_MAX)
 GCCFLAGS += -DCONFIG_PC_PROFILER=$(PC_PROFILER)
 GCCFLAGS += -DCONFIG_PC_PROFILER_PC_DETAIL=$(PC_PROFILER_PC_DETAIL)
 GCCFLAGS += -DCONFIG_PC_PROFILER_RTW_RECV_DETAIL=$(PC_PROFILER_RTW_RECV_DETAIL)
