@@ -910,16 +910,21 @@ NCM_TX_ASYNC ?= 1
 # single-immediate behavior; 2 selects the first hardware-validated batching
 # milestone. The negotiated device limit is reported by NCMTXCFG.
 NCM_TX_BATCH_MAX ?= 16
+# Assemble the selected pbuf segments into the contiguous USB NTB with the
+# existing cache-safe linked-GDMA copyv helper.  The NCM builder falls back to
+# a complete CPU copy whenever GDMA is unavailable, busy, or reports an error.
+NCM_TX_LINKED_GDMA ?= 1
 # Compact 10-second asynchronous NCM transmit health report.
 NCM_TX_ASYNC_PROFILE ?= 0
 # Compiler command-line changes are not tracked by ordinary source timestamps.
 # Force the sole consumer to rebuild whenever the observation mode changes.
-NCM_TX_PROFILE_STAMP := $(OBJ_DIR)/.ncm_tx_profile_$(NCM_TX_PROFILE)-async$(NCM_TX_ASYNC_PROFILE)-batch$(NCM_TX_BATCH_MAX)
+NCM_TX_PROFILE_STAMP := $(OBJ_DIR)/.ncm_tx_profile_$(NCM_TX_PROFILE)-async$(NCM_TX_ASYNC_PROFILE)-batch$(NCM_TX_BATCH_MAX)-gdma$(NCM_TX_LINKED_GDMA)
 $(NCM_TX_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.ncm_tx_profile_*
 	@touch $@
 ../../../component/common/network/lwip/lwip_v2.1.2/port/realtek/freertos/ethernetif.o: $(NCM_TX_PROFILE_STAMP)
+../src/carbox/ncm/ncm_tx.o: $(NCM_TX_PROFILE_STAMP)
 # Keep the boot-time PLL/SPIC result visible in the recurring 10-second report.
 PC_PROFILER ?= 1
 # Optional PC-level reports. Keep task utilization sampling enabled while
@@ -935,7 +940,11 @@ PC_PROFILER_RTW_DUMP_PROFILE ?= 0
 # init; the recurring LPDDRRE report verifies raw and decoded register values.
 LPDDR_RE_OBSERVE ?= 1
 LPDDR_RE_CLOCK_HZ ?= 240000000
-LPDDR_MARGIN_TEST ?= 1
+# Keep the 240 MHz initialization wrapper active, but suppress the temporary
+# margin test and recurring LPDDR register dump for normal performance runs.
+# Set both switches to 1 when LPDDR validation is needed again.
+LPDDR_PROFILE_REPORT ?= 0
+LPDDR_MARGIN_TEST ?= 0
 LPDDR_RE_PHASE_OVERRIDE ?= 1
 # LPDDR phase reference (x16, DQ0/DQ1 kept equal):
 #   - Vendor 200 MHz setting: CK/DQS/DQ = 14/16/36.
@@ -952,13 +961,14 @@ LPDDR_RE_PHASE_DQS := 16
 LPDDR_RE_PHASE_DQ := 35
 LPDDR_RE_PHASE_WDQS := 16
 LPDDR_RE_PHASE_WDQ := 35
-LPDDR_RE_OBSERVE_STAMP := $(OBJ_DIR)/.lpddr_re_observe_$(LPDDR_RE_OBSERVE)_clock_$(LPDDR_RE_CLOCK_HZ)_margin_$(LPDDR_MARGIN_TEST)_phase_$(LPDDR_RE_PHASE_OVERRIDE)_$(LPDDR_RE_PHASE_CK)_$(LPDDR_RE_PHASE_DQS)_$(LPDDR_RE_PHASE_DQ)_$(LPDDR_RE_PHASE_WDQS)_$(LPDDR_RE_PHASE_WDQ)
+LPDDR_RE_OBSERVE_STAMP := $(OBJ_DIR)/.lpddr_re_observe_$(LPDDR_RE_OBSERVE)_clock_$(LPDDR_RE_CLOCK_HZ)_report_$(LPDDR_PROFILE_REPORT)_margin_$(LPDDR_MARGIN_TEST)_phase_$(LPDDR_RE_PHASE_OVERRIDE)_$(LPDDR_RE_PHASE_CK)_$(LPDDR_RE_PHASE_DQS)_$(LPDDR_RE_PHASE_DQ)_$(LPDDR_RE_PHASE_WDQS)_$(LPDDR_RE_PHASE_WDQ)
 $(LPDDR_RE_OBSERVE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.lpddr_re_observe_*
 	@touch $@
 ../src/carbox/lpddr_re_wrap.o: $(LPDDR_RE_OBSERVE_STAMP)
 ../src/carbox/lpddr_margin_test.o: $(LPDDR_RE_OBSERVE_STAMP)
+../src/carbox/pc_profiler.o: $(LPDDR_RE_OBSERVE_STAMP)
 ROM_CLOCK_DUMP ?= 0
 IRQ_PROFILE ?= 0
 IRQ_PROFILE_REPORT ?= 0
@@ -1043,7 +1053,7 @@ SCREEN_TX_PRESSURE_CLEAN_MS ?= 500
 SCREEN_BLOCK_PROFILE ?= 0
 # One-line, low-overhead TCP/NCM/USB backpressure probe for soak testing.
 # Unlike the full profiles, this does not enable PC sampling or histograms.
-SCREEN_USB_PROBE ?= 1
+SCREEN_USB_PROBE ?= 0
 # Once a screen write identifies the video TCP PCB, summarize the returning
 # ACK cadence and advertised-window behavior.  This distinguishes a slow peer
 # reader from local USB/NCM queueing without restoring the verbose TCP profile.
@@ -1132,6 +1142,10 @@ USB_HCD_CHANNEL_PROFILE ?= 0
 # Correlate customer NCM send, HCD bulk-OUT attempts, observed URB completion,
 # return, and the source pbuf release.  Counters only; customer flow is intact.
 USB_TX_LIFETIME_PROFILE ?= 0
+# Master switch for recurring USBBOOT, NCMTX and optional HCD report output.
+# Instrumentation and the validated NCM TX data path remain compiled so this
+# can be restored without changing USB behaviour.
+USB_PROFILE_REPORT ?= 0
 ifeq ($(SCREEN_USB_PROBE),1)
 ifneq ($(USB_HCD_PROFILE)$(USB_HCD_CHANNEL_PROFILE)$(USB_TX_LIFETIME_PROFILE),000)
 $(error SCREEN_USB_PROBE is the lightweight USB wrapper; disable the full USB profiles)
@@ -1147,7 +1161,7 @@ ifneq ($(CHACHA_API_TRACE)$(CHACHA_VENDOR_TRACE)$(CHACHA_PRE_RX_VENDOR),000)
 $(error SCREEN_RX_RECORD_PROFILE requires the normal key-alias ChaCha route)
 endif
 endif
-USB_PROFILE_STAMP := $(OBJ_DIR)/.usb_profile_h$(USB_HCD_PROFILE)-c$(USB_HCD_CHANNEL_PROFILE)-life$(USB_TX_LIFETIME_PROFILE)-screenusb$(SCREEN_USB_PROBE)
+USB_PROFILE_STAMP := $(OBJ_DIR)/.usb_profile_h$(USB_HCD_PROFILE)-c$(USB_HCD_CHANNEL_PROFILE)-life$(USB_TX_LIFETIME_PROFILE)-screenusb$(SCREEN_USB_PROBE)-report$(USB_PROFILE_REPORT)
 $(USB_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.usb_profile_*
@@ -1330,12 +1344,14 @@ GCCFLAGS += -DCONFIG_NCM_TX_PROFILE=$(NCM_TX_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_TX_ASYNC=$(NCM_TX_ASYNC)
 GCCFLAGS += -DCONFIG_NCM_TX_ASYNC_PROFILE=$(NCM_TX_ASYNC_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_TX_BATCH_MAX=$(NCM_TX_BATCH_MAX)
+GCCFLAGS += -DCONFIG_NCM_TX_LINKED_GDMA=$(NCM_TX_LINKED_GDMA)
 GCCFLAGS += -DCONFIG_PC_PROFILER=$(PC_PROFILER)
 GCCFLAGS += -DCONFIG_PC_PROFILER_PC_DETAIL=$(PC_PROFILER_PC_DETAIL)
 GCCFLAGS += -DCONFIG_PC_PROFILER_RTW_RECV_DETAIL=$(PC_PROFILER_RTW_RECV_DETAIL)
 GCCFLAGS += -DCONFIG_PC_PROFILER_RTW_DUMP_PROFILE=$(PC_PROFILER_RTW_DUMP_PROFILE)
 GCCFLAGS += -DCONFIG_LPDDR_RE_OBSERVE=$(LPDDR_RE_OBSERVE)
 GCCFLAGS += -DCONFIG_LPDDR_RE_CLOCK_HZ=$(LPDDR_RE_CLOCK_HZ)U
+GCCFLAGS += -DCONFIG_LPDDR_PROFILE_REPORT=$(LPDDR_PROFILE_REPORT)
 GCCFLAGS += -DCONFIG_LPDDR_MARGIN_TEST=$(LPDDR_MARGIN_TEST)
 GCCFLAGS += -DCONFIG_LPDDR_RE_PHASE_OVERRIDE=$(LPDDR_RE_PHASE_OVERRIDE)
 GCCFLAGS += -DCONFIG_LPDDR_RE_PHASE_CK=$(LPDDR_RE_PHASE_CK)
@@ -1422,6 +1438,7 @@ GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_PROFILE=$(SCREEN_TIMESTAMP_PROFILE)
 GCCFLAGS += -DCONFIG_USB_HCD_PROFILE=$(USB_HCD_PROFILE)
 GCCFLAGS += -DCONFIG_USB_HCD_CHANNEL_PROFILE=$(USB_HCD_CHANNEL_PROFILE)
 GCCFLAGS += -DCONFIG_USB_TX_LIFETIME_PROFILE=$(USB_TX_LIFETIME_PROFILE)
+GCCFLAGS += -DCONFIG_USB_PROFILE_REPORT=$(USB_PROFILE_REPORT)
 GCCFLAGS += -DCONFIG_TOUCH_PATH_PROFILE=$(TOUCH_PATH_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_RX_RECORD_PROFILE=$(SCREEN_RX_RECORD_PROFILE)
 GCCFLAGS += -DCONFIG_NET_QUEUE_PROFILE=$(NET_QUEUE_PROFILE)

@@ -21,6 +21,14 @@
 #include <stdint.h>
 #include <string.h>
 
+#ifndef CONFIG_LPDDR_PROFILE_REPORT
+#define CONFIG_LPDDR_PROFILE_REPORT 0
+#endif
+
+#ifndef CONFIG_USB_PROFILE_REPORT
+#define CONFIG_USB_PROFILE_REPORT 0
+#endif
+
 #include "FreeRTOS.h"
 #include "task.h"
 #include "cmsis.h"
@@ -517,6 +525,7 @@ static void pcprof_clock_report(uint32_t sequence)
 #endif
 }
 
+#if CONFIG_LPDDR_PROFILE_REPORT
 static void pcprof_lpddr_re_report(uint32_t sequence)
 {
 	const volatile struct carbox_lpddr_re_record *record =
@@ -619,6 +628,7 @@ static void pcprof_lpddr_re_report(uint32_t sequence)
 		  (unsigned long)record->ctrl_after[10],
 		  (unsigned long)record->ctrl_after[11]);
 }
+#endif
 
 static void pcprof_fw_slot_report(uint32_t sequence)
 {
@@ -1534,14 +1544,18 @@ static void pcprof_task(void *arg)
 			      interval_count, late_10us, late_100us,
 			      caller_attributed);
 		pcprof_clock_report(sequence);
+#if CONFIG_LPDDR_PROFILE_REPORT
 		pcprof_lpddr_re_report(sequence);
 		carbox_lpddr_margin_test_run_once();
 		carbox_lpddr_margin_test_report(sequence);
+#endif
 		carbox_i2c_bitbang_pacing_report(sequence);
 		carbox_touch_path_profiler_report(sequence);
 		carbox_screen_rx_record_profiler_report(sequence);
+#if CONFIG_USB_PROFILE_REPORT
 		carbox_usb_boot_profiler_report(sequence);
 		carbox_ncm_tx_single_profile_report(sequence);
+#endif
 		pcprof_fw_slot_report(sequence);
 #if defined(CONFIG_IRQ_PROFILE_REPORT) && CONFIG_IRQ_PROFILE_REPORT
 		carbox_irq_profiler_report(sequence, PCPROF_REPORT_PERIOD_MS);
@@ -1590,9 +1604,10 @@ static void pcprof_task(void *arg)
 		lwip_tcp_owned_report(sequence);
 #endif
 #endif
-#if (defined(CONFIG_USB_HCD_PROFILE) && CONFIG_USB_HCD_PROFILE) || \
+#if CONFIG_USB_PROFILE_REPORT && \
+	((defined(CONFIG_USB_HCD_PROFILE) && CONFIG_USB_HCD_PROFILE) || \
 	(defined(CONFIG_USB_HCD_CHANNEL_PROFILE) && CONFIG_USB_HCD_CHANNEL_PROFILE) || \
-	(defined(CONFIG_USB_TX_LIFETIME_PROFILE) && CONFIG_USB_TX_LIFETIME_PROFILE)
+	(defined(CONFIG_USB_TX_LIFETIME_PROFILE) && CONFIG_USB_TX_LIFETIME_PROFILE))
 		usb_hcd_profiler_report(sequence);
 #endif
 #if defined(CONFIG_NET_QUEUE_PROFILE) && CONFIG_NET_QUEUE_PROFILE

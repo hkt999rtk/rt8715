@@ -9,9 +9,14 @@
  */
 #include "ncm_tx_abi.h"
 #include "ncm_tx_batch.h"
+#include "../large_memcpy_gdma.h"
 
 #ifndef NCM_TX_COMPAT_SINGLE_DATAGRAM
 #define NCM_TX_COMPAT_SINGLE_DATAGRAM 0
+#endif
+
+#ifndef CONFIG_NCM_TX_LINKED_GDMA
+#define CONFIG_NCM_TX_LINKED_GDMA 0
 #endif
 
 /* 固件侧日志映射：库侧由 stub smart_log.h 提供 RTK_LOGS 宏，固件 SDK 没有，
@@ -450,6 +455,14 @@ struct ncm_single_profile {
 	volatile u32 cfg_max_datagrams;
 	volatile u32 cfg_modulus;
 	volatile u32 cfg_remainder;
+	volatile u32 gdma_attempts;
+	volatile u32 gdma_success;
+	volatile u32 gdma_fallback;
+	volatile u32 gdma_bytes;
+	volatile u32 gdma_cpu_edge_bytes;
+	volatile u32 gdma_blocks;
+	volatile u32 gdma_batches;
+	volatile u32 gdma_cpu_fallback_bytes;
 };
 
 static struct ncm_single_profile ncm_single_profile;
@@ -483,6 +496,10 @@ static void *cdc_ncm_tx_fixup_batch(usbh_cdc_ncm_host_hal_t *dev,
 	u32 frame_index;
 	u32 selected_count;
 	int candidate_valid;
+#if CONFIG_NCM_TX_LINKED_GDMA
+	carbox_gdma_copy_block_t copy_blocks[CARBOX_NCM_TX_BATCH_MAX_SEGMENTS];
+	size_t copy_block_count = 0U;
+#endif
 
 	if (out_len == NULL) {
 		ncm_single_profile.batch_reject++;
@@ -615,10 +632,51 @@ static void *cdc_ncm_tx_fixup_batch(usbh_cdc_ncm_host_hal_t *dev,
 		     ++segment_index) {
 			const struct carbox_ncm_tx_segment *segment =
 				&batch->segment[frame->first_segment + segment_index];
+#if CONFIG_NCM_TX_LINKED_GDMA
+			copy_blocks[copy_block_count].dst = destination;
+			copy_blocks[copy_block_count].src = segment->data;
+			copy_blocks[copy_block_count].len = (uint32_t)segment->len;
+			copy_block_count++;
+#else
 			memcpy(destination, segment->data, segment->len);
+#endif
 			destination += segment->len;
 		}
 	}
+
+#if CONFIG_NCM_TX_LINKED_GDMA
+	/* The USB HAL requires one contiguous NTB, so this is a gather copy rather
+	 * than USB zero-copy.  Sources remain referenced by the async owner until
+	 * this synchronous builder returns.  The helper commits the whole copy or
+	 * returns zero after quiescing GDMA, making a complete CPU recopy safe. */
+	{
+		carbox_gdma_copyv_result_t gdma_result;
+
+		ncm_single_profile.gdma_attempts++;
+		if (carbox_linked_gdma_copyv_bytes_try(copy_blocks,
+						 copy_block_count,
+						 &gdma_result)) {
+			ncm_single_profile.gdma_success++;
+			ncm_single_profile.gdma_bytes += gdma_result.dma_bytes;
+			ncm_single_profile.gdma_cpu_edge_bytes +=
+				gdma_result.cpu_edge_bytes;
+			ncm_single_profile.gdma_blocks += gdma_result.dma_blocks;
+			ncm_single_profile.gdma_batches += gdma_result.dma_batches;
+		} else {
+			size_t block_index;
+
+			ncm_single_profile.gdma_fallback++;
+			ncm_single_profile.gdma_cpu_fallback_bytes +=
+				(u32)payload_bytes;
+			for (block_index = 0U; block_index < copy_block_count;
+			     ++block_index) {
+				memcpy(copy_blocks[block_index].dst,
+				       copy_blocks[block_index].src,
+				       copy_blocks[block_index].len);
+			}
+		}
+	}
+#endif
 
 	ctx->tx_overhead += ntb_len - payload_bytes;
 	ctx->tx_ntbs++;
@@ -1112,6 +1170,18 @@ void carbox_ncm_tx_single_profile_report(unsigned long sequence)
 		  (unsigned long)ncm_single_profile.cfg_max_datagrams,
 		  (unsigned long)ncm_single_profile.cfg_modulus,
 		  (unsigned long)ncm_single_profile.cfg_remainder);
+	rt_printf("[NCMTXGDMA][%lu] enabled=%u attempt/success/fallback=%lu/%lu/%lu "
+		  "bytes dma/cpu_edge/cpu_fallback=%lu/%lu/%lu "
+		  "descriptors/batches=%lu/%lu\r\n",
+		  sequence, (unsigned int)CONFIG_NCM_TX_LINKED_GDMA,
+		  (unsigned long)ncm_single_profile.gdma_attempts,
+		  (unsigned long)ncm_single_profile.gdma_success,
+		  (unsigned long)ncm_single_profile.gdma_fallback,
+		  (unsigned long)ncm_single_profile.gdma_bytes,
+		  (unsigned long)ncm_single_profile.gdma_cpu_edge_bytes,
+		  (unsigned long)ncm_single_profile.gdma_cpu_fallback_bytes,
+		  (unsigned long)ncm_single_profile.gdma_blocks,
+		  (unsigned long)ncm_single_profile.gdma_batches);
 #else
 	(void)sequence;
 #endif
