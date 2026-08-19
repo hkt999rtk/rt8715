@@ -757,6 +757,7 @@ SRC_C += ../src/carbox/aes_backend_select.c
 SRC_C += ../src/carbox/aes_ctr_periodic_selftest.c
 SRC_C += ../src/carbox/carbox_diag.c
 SRC_C += ../src/carbox/pc_profiler.c
+SRC_C += ../src/carbox/lpddr_margin_test.c
 SRC_C += ../src/carbox/touch_path_profiler.c
 SRC_C += ../src/carbox/i2c_bitbang_pacing.c
 SRC_C += ../src/carbox/ota_local_upload_page.c
@@ -791,6 +792,7 @@ SRC_C += ../../../component/common/file_system/littlefs/r2.41/lfs_util.c
 #@CINIT
 CINIT_C += ../../../component/soc/realtek/8195b/fwlib/hal-rtl8195b-hp/source/ram/hal_timer.c
 CINIT_C += ../src/carbox/atss_runtime_counter.c
+CINIT_C += ../src/carbox/lpddr_re_wrap.c
 CINIT_C += ../../../component/os/freertos/freertos_v10.0.0/portable/MemMang/heap_4_2.c
 CINIT_C += ../../../component/soc/realtek/8195b/misc/utilities/source/ram/libc_wrap.c
 
@@ -907,12 +909,44 @@ $(NCM_TX_PROFILE_STAMP):
 	@touch $@
 ../../../component/common/network/lwip/lwip_v2.1.2/port/realtek/freertos/ethernetif.o: $(NCM_TX_PROFILE_STAMP)
 # Keep the boot-time PLL/SPIC result visible in the recurring 10-second report.
-PC_PROFILER ?= 0
+PC_PROFILER ?= 1
 # Optional PC-level reports. Keep task utilization sampling enabled while
 # suppressing the verbose per-PC reports during IRQ-count investigation.
 PC_PROFILER_PC_DETAIL ?= 0
 PC_PROFILER_RTW_RECV_DETAIL ?= 0
 PC_PROFILER_RTW_DUMP_PROFILE ?= 0
+# Reverse-engineering hooks around the closed LPDDR cold-boot path.
+# LPDDR_RE_CLOCK_HZ=0 preserves the vendor clock.  A non-zero value updates
+# lpddr_device_info.ddr_period_ps before the vendor LPDDR initialization so
+# both the PLL and controller timings use the same period.  A phase override
+# rewrites the active x16 PI fields after vendor PHY init and before controller
+# init; the recurring LPDDRRE report verifies raw and decoded register values.
+LPDDR_RE_OBSERVE ?= 1
+LPDDR_RE_CLOCK_HZ ?= 240000000
+LPDDR_MARGIN_TEST ?= 1
+LPDDR_RE_PHASE_OVERRIDE ?= 1
+# LPDDR phase reference (x16, DQ0/DQ1 kept equal):
+#   - Vendor 200 MHz setting: CK/DQS/DQ = 14/16/36.
+#   - 240 MHz board test (2026-08-19): operational DQ window = 17..52.
+#     DQ=16 boots but cannot connect/render; DQ=53 does not boot.
+#   - Window midpoint is 34.5.  The fixed 240 MHz setting is DQ=35.  Its
+#     distances to passing edges 17/52 are 18/17 steps; its distances to
+#     observed failing values 16/53 are 19/18 steps.
+# A passing boot or zero-error 64 KiB LPDDRMARGIN run alone is insufficient;
+# an edge is considered usable only after CarPlay connects and renders video.
+# These are deliberate profile values, not frequency-derived phase formulas.
+LPDDR_RE_PHASE_CK := 14
+LPDDR_RE_PHASE_DQS := 16
+LPDDR_RE_PHASE_DQ := 35
+LPDDR_RE_PHASE_WDQS := 16
+LPDDR_RE_PHASE_WDQ := 35
+LPDDR_RE_OBSERVE_STAMP := $(OBJ_DIR)/.lpddr_re_observe_$(LPDDR_RE_OBSERVE)_clock_$(LPDDR_RE_CLOCK_HZ)_margin_$(LPDDR_MARGIN_TEST)_phase_$(LPDDR_RE_PHASE_OVERRIDE)_$(LPDDR_RE_PHASE_CK)_$(LPDDR_RE_PHASE_DQS)_$(LPDDR_RE_PHASE_DQ)_$(LPDDR_RE_PHASE_WDQS)_$(LPDDR_RE_PHASE_WDQ)
+$(LPDDR_RE_OBSERVE_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.lpddr_re_observe_*
+	@touch $@
+../src/carbox/lpddr_re_wrap.o: $(LPDDR_RE_OBSERVE_STAMP)
+../src/carbox/lpddr_margin_test.o: $(LPDDR_RE_OBSERVE_STAMP)
 ROM_CLOCK_DUMP ?= 0
 IRQ_PROFILE ?= 0
 IRQ_PROFILE_REPORT ?= 0
@@ -1298,6 +1332,15 @@ GCCFLAGS += -DCONFIG_PC_PROFILER=$(PC_PROFILER)
 GCCFLAGS += -DCONFIG_PC_PROFILER_PC_DETAIL=$(PC_PROFILER_PC_DETAIL)
 GCCFLAGS += -DCONFIG_PC_PROFILER_RTW_RECV_DETAIL=$(PC_PROFILER_RTW_RECV_DETAIL)
 GCCFLAGS += -DCONFIG_PC_PROFILER_RTW_DUMP_PROFILE=$(PC_PROFILER_RTW_DUMP_PROFILE)
+GCCFLAGS += -DCONFIG_LPDDR_RE_OBSERVE=$(LPDDR_RE_OBSERVE)
+GCCFLAGS += -DCONFIG_LPDDR_RE_CLOCK_HZ=$(LPDDR_RE_CLOCK_HZ)U
+GCCFLAGS += -DCONFIG_LPDDR_MARGIN_TEST=$(LPDDR_MARGIN_TEST)
+GCCFLAGS += -DCONFIG_LPDDR_RE_PHASE_OVERRIDE=$(LPDDR_RE_PHASE_OVERRIDE)
+GCCFLAGS += -DCONFIG_LPDDR_RE_PHASE_CK=$(LPDDR_RE_PHASE_CK)
+GCCFLAGS += -DCONFIG_LPDDR_RE_PHASE_DQS=$(LPDDR_RE_PHASE_DQS)
+GCCFLAGS += -DCONFIG_LPDDR_RE_PHASE_DQ=$(LPDDR_RE_PHASE_DQ)
+GCCFLAGS += -DCONFIG_LPDDR_RE_PHASE_WDQS=$(LPDDR_RE_PHASE_WDQS)
+GCCFLAGS += -DCONFIG_LPDDR_RE_PHASE_WDQ=$(LPDDR_RE_PHASE_WDQ)
 GCCFLAGS += -DCONFIG_IRQ_PROFILE=$(IRQ_PROFILE)
 GCCFLAGS += -DCONFIG_IRQ_PROFILE_REPORT=$(IRQ_PROFILE_REPORT)
 GCCFLAGS += -DCONFIG_IRQ_PROFILE_USB_CAUSE=$(IRQ_PROFILE_USB_CAUSE)
@@ -1440,6 +1483,13 @@ CPPFLAGS += -Wall -Wpointer-arith -Wundef -Wno-write-strings -Wno-maybe-uninitia
 LFLAGS = 
 LFLAGS += -march=armv8-m.main+dsp -mthumb -mcmse -mfloat-abi=softfp -mfpu=fpv5-sp-d16 -Os -nostartfiles -specs=nosys.specs -nodefaultlibs -nostdlib
 LFLAGS += -Wl,--gc-sections -Wl,-Map=$(BIN_DIR)/$(TARGET).map -Wl,--cref -Wl,--build-id=none -Wl,--use-blx 
+ifeq ($(LPDDR_RE_OBSERVE),1)
+LFLAGS += -Wl,--wrap=hal_lpddr_init \
+	-Wl,--wrap=dram_init_clk_frequency \
+	-Wl,--wrap=dram_set_oesync_ck -Wl,--wrap=dram_set_oesync_dqs \
+	-Wl,--wrap=dram_set_oesync_dq -Wl,--wrap=dram_set_wrlvl_dqs \
+	-Wl,--wrap=dram_set_wrlvl_dq
+endif
 ifeq ($(I2C_BITBANG_PACING),1)
 LFLAGS += -Wl,--wrap=gpio_init -Wl,--wrap=gpio_write
 endif

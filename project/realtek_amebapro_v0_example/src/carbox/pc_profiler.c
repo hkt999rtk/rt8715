@@ -1,5 +1,7 @@
 #include "pc_profiler.h"
 #include "i2c_bitbang_pacing.h"
+#include "lpddr_re_wrap.h"
+#include "lpddr_margin_test.h"
 #include "gcd_sync_profiler.h"
 #include "screen_queue_profiler.h"
 #include "screen_rx_rate_limit.h"
@@ -512,6 +514,109 @@ static void pcprof_clock_report(uint32_t sequence)
 #if CONFIG_ROM_CLOCK_DUMP
 	pcprof_rom_clock_dump_once();
 #endif
+}
+
+static void pcprof_lpddr_re_report(uint32_t sequence)
+{
+	const volatile struct carbox_lpddr_re_record *record =
+		carbox_lpddr_re_get_record();
+
+	if (record == NULL || record->magic != CARBOX_LPDDR_RE_MAGIC) {
+		return;
+	}
+
+	rt_printf("[LPDDRRE][%lu] version/complete/init_calls=%lu/%lu/%lu "
+		  "order=%08lx period_ps vendor/applied=%lu/%lu "
+		  "clock_override=%luHz config=%08lx/%08lx/%08lx "
+		  "phy/reapply/phase_override/applied=%lu/%lu/%lu/%lu "
+		  "phase calls/ck/dqs/dq/wdqs/wdq=%lu/%ld/%ld/%ld/%ld/%ld "
+		  "actual_phase=1\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)record->version,
+		  (unsigned long)record->complete,
+		  (unsigned long)record->init_calls,
+		  (unsigned long)record->call_order,
+		  (unsigned long)record->vendor_period_ps,
+		  (unsigned long)record->dram_period_ps,
+		  (unsigned long)record->clock_override_hz,
+		  (unsigned long)record->device,
+		  (unsigned long)record->mode,
+		  (unsigned long)record->timing,
+		  (unsigned long)record->phy_init_calls,
+		  (unsigned long)record->pll_reapply_calls,
+		  (unsigned long)record->phase_override,
+		  (unsigned long)record->phase_reapply_calls,
+		  (unsigned long)record->phase_calls,
+		  (long)record->oesync_ck,
+		  (long)record->oesync_dqs,
+		  (long)record->oesync_dq,
+		  (long)record->wrlvl_dqs,
+		  (long)record->wrlvl_dq);
+	rt_printf("[LPDDRRE][%lu] dpi crt/ctl0/ctl1/ctl3/ssc0/ssc1/ssc2 "
+		  "vendor=%08lx/%08lx/%08lx/%08lx/%08lx/%08lx/%08lx "
+		  "reapplied=%08lx/%08lx/%08lx/%08lx/%08lx/%08lx/%08lx\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)record->dpi_before[0],
+		  (unsigned long)record->dpi_before[1],
+		  (unsigned long)record->dpi_before[2],
+		  (unsigned long)record->dpi_before[3],
+		  (unsigned long)record->dpi_before[4],
+		  (unsigned long)record->dpi_before[5],
+		  (unsigned long)record->dpi_before[6],
+		  (unsigned long)record->dpi_after[0],
+		  (unsigned long)record->dpi_after[1],
+		  (unsigned long)record->dpi_after[2],
+		  (unsigned long)record->dpi_after[3],
+		  (unsigned long)record->dpi_after[4],
+		  (unsigned long)record->dpi_after[5],
+		  (unsigned long)record->dpi_after[6]);
+	rt_printf("[LPDDRRE][%lu] phase pi0/pi1/pi2/wrlvl "
+		  "vendor=%08lx/%08lx/%08lx/%08lx "
+		  "applied=%08lx/%08lx/%08lx/%08lx "
+		  "decoded vendor ck/dqs0/dqs1/dq0/dq1=%lu/%lu/%lu/%lu/%lu "
+		  "applied=%lu/%lu/%lu/%lu/%lu\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)record->phase_before[0],
+		  (unsigned long)record->phase_before[1],
+		  (unsigned long)record->phase_before[2],
+		  (unsigned long)record->phase_before[3],
+		  (unsigned long)record->phase_after[0],
+		  (unsigned long)record->phase_after[1],
+		  (unsigned long)record->phase_after[2],
+		  (unsigned long)record->phase_after[3],
+		  (unsigned long)(record->phase_before[0] & 0x3fU),
+		  (unsigned long)((record->phase_before[0] >> 16) & 0x3fU),
+		  (unsigned long)((record->phase_before[0] >> 24) & 0x3fU),
+		  (unsigned long)((record->phase_before[1] >> 16) & 0x3fU),
+		  (unsigned long)(record->phase_before[2] & 0x3fU),
+		  (unsigned long)(record->phase_after[0] & 0x3fU),
+		  (unsigned long)((record->phase_after[0] >> 16) & 0x3fU),
+		  (unsigned long)((record->phase_after[0] >> 24) & 0x3fU),
+		  (unsigned long)((record->phase_after[1] >> 16) & 0x3fU),
+		  (unsigned long)(record->phase_after[2] & 0x3fU));
+	rt_printf("[LPDDRRE][%lu] phase_gate ctl0/ctl1 "
+		  "off=%08lx/%08lx restored=%08lx/%08lx\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)record->phase_gate_off[0],
+		  (unsigned long)record->phase_gate_off[1],
+		  (unsigned long)record->phase_gate_restored[0],
+		  (unsigned long)record->phase_gate_restored[1]);
+	rt_printf("[LPDDRRE][%lu] ctrl ccr/dcr/iocr/csr/drr/tpr0/tpr1/tpr2/"
+		  "tpr3/mri/mr0/mr1=%08lx/%08lx/%08lx/%08lx/%08lx/%08lx/"
+		  "%08lx/%08lx/%08lx/%08lx/%08lx/%08lx\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)record->ctrl_after[0],
+		  (unsigned long)record->ctrl_after[1],
+		  (unsigned long)record->ctrl_after[2],
+		  (unsigned long)record->ctrl_after[3],
+		  (unsigned long)record->ctrl_after[4],
+		  (unsigned long)record->ctrl_after[5],
+		  (unsigned long)record->ctrl_after[6],
+		  (unsigned long)record->ctrl_after[7],
+		  (unsigned long)record->ctrl_after[8],
+		  (unsigned long)record->ctrl_after[9],
+		  (unsigned long)record->ctrl_after[10],
+		  (unsigned long)record->ctrl_after[11]);
 }
 
 static void pcprof_fw_slot_report(uint32_t sequence)
@@ -1428,6 +1533,9 @@ static void pcprof_task(void *arg)
 			      interval_count, late_10us, late_100us,
 			      caller_attributed);
 		pcprof_clock_report(sequence);
+		pcprof_lpddr_re_report(sequence);
+		carbox_lpddr_margin_test_run_once();
+		carbox_lpddr_margin_test_report(sequence);
 		carbox_i2c_bitbang_pacing_report(sequence);
 		carbox_touch_path_profiler_report(sequence);
 		carbox_screen_rx_record_profiler_report(sequence);
