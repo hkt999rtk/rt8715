@@ -962,11 +962,12 @@ SCREEN_QUEUE_PROFILE ?= 0
 # Production switch for the temporary RX/TX investigation reports. Keep the
 # limiter, pacer, handover gate, and pressure feedback active when this is off.
 SCREEN_DATAPATH_PROFILE ?= 0
-# Pace receive-window credit only for the iPhone screen TCP connection.  The
-# closed receiver is identified once by task plus its validated 128-byte frame
-# header; all other sockets retain the stock lwIP receive path.
+# Optional receive-window pacing for the iPhone screen TCP connection. A
+# bitrate of zero means unlimited and compiles the limiter, task, wrappers,
+# token accounting, and TX-pressure feedback out of the build.
 SCREEN_RX_RATE_LIMIT ?= 1
-SCREEN_RX_RATE_LIMIT_BPS ?= 8000000
+SCREEN_RX_RATE_LIMIT_BPS ?= 0
+SCREEN_RX_RATE_LIMIT_ACTIVE := $(if $(filter 0,$(SCREEN_RX_RATE_LIMIT_BPS)),0,$(SCREEN_RX_RATE_LIMIT))
 SCREEN_RX_RATE_LIMIT_INTERVAL_MS ?= 10
 SCREEN_RX_RATE_LIMIT_BUCKET_BYTES ?= 32768
 SCREEN_RX_RATE_LIMIT_CONTROL_MS ?= 100
@@ -1321,7 +1322,7 @@ GCCFLAGS += -DCONFIG_USBH_ISR_TASK_PRIORITY=$(USBH_ISR_TASK_PRIORITY)
 GCCFLAGS += -DCONFIG_USBH_MAIN_TASK_PRIORITY=$(USBH_MAIN_TASK_PRIORITY)
 GCCFLAGS += -DCONFIG_SCREEN_QUEUE_PROFILE=$(SCREEN_QUEUE_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_DATAPATH_PROFILE=$(SCREEN_DATAPATH_PROFILE)
-GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT=$(SCREEN_RX_RATE_LIMIT)
+GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT=$(SCREEN_RX_RATE_LIMIT_ACTIVE)
 GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_BPS=$(SCREEN_RX_RATE_LIMIT_BPS)
 GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_INTERVAL_MS=$(SCREEN_RX_RATE_LIMIT_INTERVAL_MS)
 GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_BUCKET_BYTES=$(SCREEN_RX_RATE_LIMIT_BUCKET_BYTES)
@@ -1468,7 +1469,7 @@ ifeq ($(SCREEN_TIMESTAMP_PROFILE),1)
 LFLAGS += -Wl,--wrap=UpTicksToNTP
 endif
 endif
-ifeq ($(SCREEN_RX_RATE_LIMIT),1)
+ifeq ($(SCREEN_RX_RATE_LIMIT_ACTIVE),1)
 ifeq ($(SCREEN_QUEUE_PROFILE),0)
 LFLAGS += -Wl,--wrap=lwip_recv
 endif
