@@ -9,16 +9,9 @@
  */
 #include "ncm_tx_abi.h"
 
-/*
- * Stability mode for the first source-integrated release.
- *
- * The supplied timer callback only records bh_need_wake; no ISR tail or task
- * consumes that flag, so a partially filled NTB can remain queued forever.
- * Finalize it synchronously in the caller task for now.  This deliberately
- * trades multi-datagram aggregation for a functional, ISR-safe TX path.  The
- * timer worker can be restored later after its ISR-to-task handoff is wired.
- */
-#define NCM_TX_STABILITY_IMMEDIATE_FLUSH 1
+#ifndef NCM_TX_COMPAT_SINGLE_DATAGRAM
+#define NCM_TX_COMPAT_SINGLE_DATAGRAM 0
+#endif
 
 /* 固件侧日志映射：库侧由 stub smart_log.h 提供 RTK_LOGS 宏，固件 SDK 没有，
  * 这里映射到 rt_printf，避免链接 undefined reference。 */
@@ -416,12 +409,69 @@ exit_no_data:
 
 
 
+#if NCM_TX_COMPAT_SINGLE_DATAGRAM
+/*
+ * Hardware-validated compatibility format used with the customer USB archive.
+ * Each Ethernet frame is sent immediately as one NCM NTB16:
+ *
+ *   NTH16 (12 bytes) + NDP16/two DPE16 entries (16 bytes) + payload
+ *
+ * The second DPE is the required all-zero terminator.  Keeping this format
+ * avoids the incomplete deferred-flush path while preserving the new
+ * archive's cdc_ncm_ctx ABI.
+ */
+static void *cdc_ncm_tx_fixup_single(usbh_cdc_ncm_host_hal_t *dev,
+				     const void *data, size_t len,
+				     size_t *out_len)
+{
+	struct cdc_ncm_ctx *ctx = (struct cdc_ncm_ctx *)dev->data[0];
+	struct usb_cdc_ncm_nth16 *nth16;
+	struct usb_cdc_ncm_ndp16 *ndp16;
+	const size_t ndp_len = sizeof(*ndp16) +
+			       sizeof(struct usb_cdc_ncm_dpe16) * 2U;
+	const size_t payload_offset = sizeof(*nth16) + ndp_len;
+	const size_t ntb_len = payload_offset + len;
+
+	if (ctx == NULL || dev->out_buf == NULL || data == NULL ||
+	    out_len == NULL || ntb_len > ctx->tx_max || ntb_len > 0xffffU) {
+		return NULL;
+	}
+
+	usb_os_lock(ctx->mtx);
+	memset(dev->out_buf, 0, ntb_len);
+
+	nth16 = (struct usb_cdc_ncm_nth16 *)dev->out_buf;
+	nth16->dwSignature = cpu_to_le32(USB_CDC_NCM_NTH16_SIGN);
+	nth16->wHeaderLength = cpu_to_le16(sizeof(*nth16));
+	nth16->wSequence = cpu_to_le16(ctx->tx_seq++);
+	nth16->wBlockLength = cpu_to_le16(ntb_len);
+	nth16->wNdpIndex = cpu_to_le16(sizeof(*nth16));
+
+	ndp16 = (struct usb_cdc_ncm_ndp16 *)(dev->out_buf + sizeof(*nth16));
+	ndp16->dwSignature = cpu_to_le32(USB_CDC_NCM_NDP16_NOCRC_SIGN);
+	ndp16->wLength = cpu_to_le16(ndp_len);
+	ndp16->dpe16[0].wDatagramIndex = cpu_to_le16(payload_offset);
+	ndp16->dpe16[0].wDatagramLength = cpu_to_le16(len);
+
+	memcpy(dev->out_buf + payload_offset, data, len);
+	ctx->tx_overhead += payload_offset;
+	ctx->tx_ntbs++;
+	*out_len = ntb_len;
+	usb_os_unlock(ctx->mtx);
+	return dev->out_buf;
+}
+#endif
+
 void *cdc_ncm_tx_fixup(usbh_cdc_ncm_host_hal_t *dev, void *data, size_t len, gfp_t flags, size_t *out_len)
 {
-	__u8 err;
     void *out_data = NULL;
     struct cdc_ncm_ctx *ctx = (struct cdc_ncm_ctx *)dev->data[0];
     __MSG("%s\n", __func__);
+
+#if NCM_TX_COMPAT_SINGLE_DATAGRAM
+	(void)flags;
+	return cdc_ncm_tx_fixup_single(dev, data, len, out_len);
+#endif
 
     if (ctx == NULL)
         goto error;
@@ -440,26 +490,6 @@ void *cdc_ncm_tx_fixup(usbh_cdc_ncm_host_hal_t *dev, void *data, size_t len, gfp
 	__MSG("%s start len=%d\n", __func__,len);
 
     out_data = cdc_ncm_fill_tx_frame(dev, data, len, cpu_to_le32(USB_CDC_NCM_NDP16_NOCRC_SIGN), out_len);
-
-#if NCM_TX_STABILITY_IMMEDIATE_FLUSH
-    /*
-     * A NULL result with a non-empty current frame means the datagram was
-     * copied into the aggregate and is waiting for the incomplete timer BH.
-     * Stop that timer and ask the builder to finalize the current NTB now,
-     * while still in task context and under ctx->mtx.
-     */
-    if (out_data == NULL && ctx->tx_curr_data != NULL &&
-        ctx->tx_curr_frame_num != 0U) {
-#ifdef USE_TIMER
-        if (ctx->timer_ok) {
-            gtimer_stop(&ctx->send_timer);
-        }
-        ctx->tx_timer_pending = 0;
-#endif
-        out_data = cdc_ncm_fill_tx_frame(dev, NULL, 0,
-            cpu_to_le32(USB_CDC_NCM_NDP16_NOCRC_SIGN), out_len);
-    }
-#endif
 
 #ifdef USE_STAT
     u64 t1 = usbh_get_timestamp(dev->host);

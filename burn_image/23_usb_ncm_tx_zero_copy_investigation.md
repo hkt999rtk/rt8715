@@ -484,3 +484,24 @@ zero-copy。若 HCD 確認要求 alignment，下一個高價值工作會是找�
 出現 accessory state regression、畫面消失、double free、live owner 不下降、queue 持續
 增長或 USB completion 不回時，應立即回到最後一個已驗證 hash，而不是在同一 build tree
 反覆切 define 做增量比較。
+
+## 2026-08-19 客戶新版 USB/NCM baseline
+
+客戶提供新版 `lib_usbsmart.a` 與可編譯的 NCM source 後，以實機配對及出圖做了逐層 A/B。
+最後確認下列組合可正常運作，並固定為正式 build path：
+
+- CDC、HAL 與 `cdc_ncm_ctx` 全部使用新版 archive/source ABI；
+- `ncm_tx.c` 保留 `USE_TIMER`，確保結構 ABI 與新版 archive 一致；
+- TX 使用 `NCM_TX_COMPAT_SINGLE_DATAGRAM=1`；
+- 每個 Ethernet frame 立即形成一個 NCM NTB16：12-byte NTH16、16-byte
+  NDP16（含資料 DPE 與 zero terminator）、payload offset 28；
+- 不使用尚未完成 ISR-to-task consumer 的 deferred aggregation flush。
+
+不可把舊版 `ncm.o` 或舊 HAL 與新版 context 混用。實測該組合會因私有
+`struct cdc_ncm_ctx` layout 不一致而在 `cdc_ncm_fill_tx_frame()` fault；這不是單純的
+link symbol 問題。Makefile 因此不再保留舊 archive、跨版本 CDC/HAL 或 timer-flush 的
+A/B 選項，避免之後誤建出 ABI 不相容映像。
+
+這個 baseline 的時脈設定為 CPU 300 MHz、LPDDR 240 MHz，LPDDR DQ/WDQ phase 固定 35。
+後續若要恢復多 datagram aggregation，應另開實驗分支完成 timer ISR-to-task handoff，
+不能直接改動此基準路徑。

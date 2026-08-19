@@ -811,12 +811,16 @@ SRAM_C += ../src/carbox/memcpy_task_profiler.c
 SRAM_C += ../src/carbox/large_memcpy_gdma.c
 SRAM_C += ../src/carbox/video_handover_zero_copy.c
 SRAM_C += ../src/carbox/screen_tx_direct_crypto.c
-# The customer archive deliberately leaves the NCM TX builder unresolved so
-# firmware can tune aggregation and the GTimer flush path from source.
+# The customer archive leaves the NCM TX builder unresolved.  Keep the source
+# ABI, but use the hardware-validated single-datagram NTH16/NDP16 wire format:
+# 12-byte NTH + 16-byte NDP, payload at offset 28, one NTB per Ethernet packet.
 SRAM_C += ../src/carbox/ncm/ncm_tx.c
-../src/carbox/ncm/ncm_tx.o: CFLAGS += -DUSE_TIMER
+../src/carbox/ncm/ncm_tx.o: CFLAGS += -DUSE_TIMER \
+	-DNCM_TX_COMPAT_SINGLE_DATAGRAM=1
 SRAM_C += ../src/carbox/ncm/ncm_ctrl_status_compat.c
 SRAM_C += ../src/carbox/ncm/ncm_hal_ready_compat.c
+# The derived archive globalizes its otherwise-local host state for this
+# periodic observer.
 SRAM_C += ../src/carbox/ncm/usb_boot_profiler.c
 
 #ERAM
@@ -1697,6 +1701,8 @@ $(CARBOX_USB_ARCHIVE): $(CARBOX_USB_VENDOR_ARCHIVE) application.is.mk
 	@chmod u+w $@
 	@$(AR) d $@ carplay_ota_compat.o
 	@mkdir -p $(OBJ_DIR)/usbsmart_compat
+	@rm -f $(OBJ_DIR)/usbsmart_compat/cdc_ncm.o \
+		$(OBJ_DIR)/usbsmart_compat/usbh_cdc_ncm_hal.o
 	@cd $(OBJ_DIR)/usbsmart_compat && $(AR) x $(abspath $@) cdc_ncm.o
 	@$(OBJCOPY) --redefine-sym usbh_ctrl_request=carbox_ncm_ctrl_request \
 		$(OBJ_DIR)/usbsmart_compat/cdc_ncm.o
@@ -1706,7 +1712,7 @@ $(CARBOX_USB_ARCHIVE): $(CARBOX_USB_VENDOR_ARCHIVE) application.is.mk
 		--redefine-sym usbh_cdc_ncm_send_data=carbox_vendor_usbh_cdc_ncm_send_data \
 		$(OBJ_DIR)/usbsmart_compat/usbh_cdc_ncm_hal.o
 	@$(AR) r $@ $(OBJ_DIR)/usbsmart_compat/usbh_cdc_ncm_hal.o
-	@echo "  AR   $@ (source OTA + cdc_ncm host-status compatibility)"
+	@echo "  AR   $@ (customer NCM source + status/ready compatibility)"
 
 application: $(CARBOX_USB_ARCHIVE)
 LIBFLAGS += -Wl,--whole-archive $(CARBOX_USB_ARCHIVE) -Wl,--no-whole-archive
