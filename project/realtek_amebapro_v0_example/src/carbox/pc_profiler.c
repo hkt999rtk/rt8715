@@ -7,7 +7,6 @@
 #include "screen_rx_rate_limit.h"
 #include "screen_rx_record_profiler.h"
 #include "usb_hcd_profiler.h"
-#include "ncm_wrap_profiler.h"
 #include "net_queue_profiler.h"
 #include "crypto_engine_profiler.h"
 #include "memcpy_task_profiler.h"
@@ -16,6 +15,7 @@
 #include "screen_tx_direct_crypto.h"
 #include "spic_overclock.h"
 #include "system_overclock.h"
+#include "ncm/usb_boot_profiler.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -1539,6 +1539,7 @@ static void pcprof_task(void *arg)
 		carbox_i2c_bitbang_pacing_report(sequence);
 		carbox_touch_path_profiler_report(sequence);
 		carbox_screen_rx_record_profiler_report(sequence);
+		carbox_usb_boot_profiler_report(sequence);
 		pcprof_fw_slot_report(sequence);
 #if defined(CONFIG_IRQ_PROFILE_REPORT) && CONFIG_IRQ_PROFILE_REPORT
 		carbox_irq_profiler_report(sequence, PCPROF_REPORT_PERIOD_MS);
@@ -1591,9 +1592,6 @@ static void pcprof_task(void *arg)
 	(defined(CONFIG_USB_HCD_CHANNEL_PROFILE) && CONFIG_USB_HCD_CHANNEL_PROFILE) || \
 	(defined(CONFIG_USB_TX_LIFETIME_PROFILE) && CONFIG_USB_TX_LIFETIME_PROFILE)
 		usb_hcd_profiler_report(sequence);
-#endif
-#if defined(CONFIG_NCM_WRAP_PROFILE) && CONFIG_NCM_WRAP_PROFILE
-		ncm_wrap_profiler_report(sequence);
 #endif
 #if defined(CONFIG_NET_QUEUE_PROFILE) && CONFIG_NET_QUEUE_PROFILE
 		net_queue_profiler_report(sequence);

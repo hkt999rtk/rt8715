@@ -215,10 +215,6 @@ ifeq ($(CARBOX_USB_LIB),1)
 # identical to the latest supplied archive.
 CARBOX_USB_VENDOR_ARCHIVE := usb_lib/build/lib_usbsmart.a
 CARBOX_USB_ARCHIVE := usb_lib/build/lib_usbsmart_link.a
-# Stage-2A copy-elision is tied to the exact customer builder that passed the
-# single-datagram hardware gate.  A replacement archive must be disassembled
-# and re-qualified instead of silently inheriting this ABI assumption.
-CARBOX_USB_NCM_ELIDE_VENDOR_SHA256 := 5c732996b89e6af1a93000ecf970abcce76adfc3a642b1903f8d989fc0d521ac
 endif
 
 CARBOX_USB_BUILD ?= 1
@@ -764,7 +760,6 @@ SRC_C += ../src/carbox/ota_local_upload_page.c
 SRC_C += ../src/carbox/ota/carplay_ota_compat.c
 SRC_C += ../src/carbox/irq_profiler.c
 SRC_C += ../src/carbox/usb_hcd_profiler.c
-SRC_C += ../src/carbox/ncm_wrap_profiler.c
 SRC_C += ../src/carbox/gcd_sync_profiler.c
 SRC_C += ../src/carbox/screen_queue_profiler.c
 SRC_C += ../src/carbox/screen_rx_record_profiler.c
@@ -816,6 +811,13 @@ SRAM_C += ../src/carbox/memcpy_task_profiler.c
 SRAM_C += ../src/carbox/large_memcpy_gdma.c
 SRAM_C += ../src/carbox/video_handover_zero_copy.c
 SRAM_C += ../src/carbox/screen_tx_direct_crypto.c
+# The customer archive deliberately leaves the NCM TX builder unresolved so
+# firmware can tune aggregation and the GTimer flush path from source.
+SRAM_C += ../src/carbox/ncm/ncm_tx.c
+../src/carbox/ncm/ncm_tx.o: CFLAGS += -DUSE_TIMER
+SRAM_C += ../src/carbox/ncm/ncm_ctrl_status_compat.c
+SRAM_C += ../src/carbox/ncm/ncm_hal_ready_compat.c
+SRAM_C += ../src/carbox/ncm/usb_boot_profiler.c
 
 #ERAM
 # -------------------------------------------------------------------
@@ -1135,23 +1137,12 @@ ifneq ($(CHACHA_API_TRACE)$(CHACHA_VENDOR_TRACE)$(CHACHA_PRE_RX_VENDOR),000)
 $(error SCREEN_RX_RECORD_PROFILE requires the normal key-alias ChaCha route)
 endif
 endif
-# Hardware-gated NCM wrapper. It calls the customer builder exactly once and,
-# for validated chained pbufs, removes only the redundant second payload copy.
-NCM_WRAP_PROFILE ?= 1
-NCM_WRAP_COPY_ELIDE ?= 1
-NCM_WRAP_STATS ?= 0
-ifneq ($(NCM_WRAP_COPY_ELIDE),0)
-ifneq ($(NCM_WRAP_PROFILE),1)
-$(error NCM_WRAP_COPY_ELIDE requires NCM_WRAP_PROFILE=1)
-endif
-endif
-USB_PROFILE_STAMP := $(OBJ_DIR)/.usb_profile_h$(USB_HCD_PROFILE)-c$(USB_HCD_CHANNEL_PROFILE)-life$(USB_TX_LIFETIME_PROFILE)-screenusb$(SCREEN_USB_PROBE)-ncmwrap$(NCM_WRAP_PROFILE)-ncmelide$(NCM_WRAP_COPY_ELIDE)-ncmstats$(NCM_WRAP_STATS)
+USB_PROFILE_STAMP := $(OBJ_DIR)/.usb_profile_h$(USB_HCD_PROFILE)-c$(USB_HCD_CHANNEL_PROFILE)-life$(USB_TX_LIFETIME_PROFILE)-screenusb$(SCREEN_USB_PROBE)
 $(USB_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.usb_profile_*
 	@touch $@
 ../src/carbox/usb_hcd_profiler.o \
-	../src/carbox/ncm_wrap_profiler.o \
 	../src/carbox/pc_profiler.o: $(USB_PROFILE_STAMP)
 NET_QUEUE_PROFILE ?= 0
 # Make the RX/queue/TX diagnostic switches safe for incremental builds. These
@@ -1422,9 +1413,6 @@ GCCFLAGS += -DCONFIG_USB_HCD_CHANNEL_PROFILE=$(USB_HCD_CHANNEL_PROFILE)
 GCCFLAGS += -DCONFIG_USB_TX_LIFETIME_PROFILE=$(USB_TX_LIFETIME_PROFILE)
 GCCFLAGS += -DCONFIG_TOUCH_PATH_PROFILE=$(TOUCH_PATH_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_RX_RECORD_PROFILE=$(SCREEN_RX_RECORD_PROFILE)
-GCCFLAGS += -DCONFIG_NCM_WRAP_PROFILE=$(NCM_WRAP_PROFILE)
-GCCFLAGS += -DCONFIG_NCM_WRAP_COPY_ELIDE=$(NCM_WRAP_COPY_ELIDE)
-GCCFLAGS += -DCONFIG_NCM_WRAP_STATS=$(NCM_WRAP_STATS)
 GCCFLAGS += -DCONFIG_NET_QUEUE_PROFILE=$(NET_QUEUE_PROFILE)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_STAGE1=$(TCPIP_RX_BATCH_STAGE1)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_TIMER_PROBE=$(TCPIP_RX_BATCH_TIMER_PROBE)
@@ -1599,9 +1587,6 @@ ifeq ($(TOUCH_PATH_PROFILE),1)
 LFLAGS += -Wl,--wrap=lib_carplay_touch
 LFLAGS += -Wl,--wrap=AirPlayReceiverSessionSendHIDReport
 endif
-ifeq ($(NCM_WRAP_PROFILE),1)
-LFLAGS += -Wl,--wrap=ncm_wrap_ntb
-endif
 ifeq ($(CRYPTO_ENGINE_PROFILE),1)
 LFLAGS += -Wl,--wrap=device_mutex_lock -Wl,--wrap=device_mutex_unlock
 LFLAGS += -Wl,--wrap=rtw_down_timeout_sema -Wl,--wrap=rtw_up_sema_from_isr
@@ -1703,24 +1688,25 @@ endif
 all: LIBFLAGS += -lrtstream -lrtscamkit -lrtsv4l2
 LIBFLAGS += -Wl,-u,ram_start -Wl,-u,cinit_start
 ifeq ($(CARBOX_USB_LIB),1)
-ifeq ($(NCM_WRAP_COPY_ELIDE),1)
-.PHONY: ncm_copy_elide_vendor_guard
-ncm_copy_elide_vendor_guard:
-	@actual=`sha256sum "$(CARBOX_USB_VENDOR_ARCHIVE)" | awk '{print $$1}'`; \
-	if [ "$$actual" != "$(CARBOX_USB_NCM_ELIDE_VENDOR_SHA256)" ]; then \
-		echo "ERROR: NCM copy-elision is not qualified for this lib_usbsmart.a"; \
-		echo "       expected $(CARBOX_USB_NCM_ELIDE_VENDOR_SHA256)"; \
-		echo "       actual   $$actual"; \
-		exit 1; \
-	fi
-application: ncm_copy_elide_vendor_guard
-endif
+LFLAGS += -Wl,--wrap=usbh_core_connect -Wl,--wrap=usbh_core_disconnect \
+	-Wl,--wrap=cdc_ncm_connect -Wl,--wrap=cdc_ncm_set_is_ready \
+	-Wl,--wrap=usbh_ctrl_request
 $(CARBOX_USB_ARCHIVE): $(CARBOX_USB_VENDOR_ARCHIVE) application.is.mk
 	@mkdir -p $(dir $@)
 	@cp -f $< $@
 	@chmod u+w $@
 	@$(AR) d $@ carplay_ota_compat.o
-	@echo "  AR   $@ (customer archive minus source-replaced carplay_ota_compat.o)"
+	@mkdir -p $(OBJ_DIR)/usbsmart_compat
+	@cd $(OBJ_DIR)/usbsmart_compat && $(AR) x $(abspath $@) cdc_ncm.o
+	@$(OBJCOPY) --redefine-sym usbh_ctrl_request=carbox_ncm_ctrl_request \
+		$(OBJ_DIR)/usbsmart_compat/cdc_ncm.o
+	@$(AR) r $@ $(OBJ_DIR)/usbsmart_compat/cdc_ncm.o
+	@cd $(OBJ_DIR)/usbsmart_compat && $(AR) x $(abspath $@) usbh_cdc_ncm_hal.o
+	@$(OBJCOPY) --globalize-symbol usbh_cdc_ncm_host_user \
+		--redefine-sym usbh_cdc_ncm_send_data=carbox_vendor_usbh_cdc_ncm_send_data \
+		$(OBJ_DIR)/usbsmart_compat/usbh_cdc_ncm_hal.o
+	@$(AR) r $@ $(OBJ_DIR)/usbsmart_compat/usbh_cdc_ncm_hal.o
+	@echo "  AR   $@ (source OTA + cdc_ncm host-status compatibility)"
 
 application: $(CARBOX_USB_ARCHIVE)
 LIBFLAGS += -Wl,--whole-archive $(CARBOX_USB_ARCHIVE) -Wl,--no-whole-archive

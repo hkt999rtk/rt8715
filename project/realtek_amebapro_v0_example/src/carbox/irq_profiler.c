@@ -1,4 +1,5 @@
 #include "irq_profiler.h"
+#include "ncm/usb_boot_profiler.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -837,6 +838,7 @@ int __wrap_usbh_ctrl_request(void *host, const void *setup, uint8_t *data)
 	}
 
 	result = __real_usbh_ctrl_request(host, setup, data);
+	carbox_usb_boot_profiler_record_ctrl(setup, result);
 
 	if (request_type == 0xA1U && request_code == 0x80U) {
 		irqprof_usb_ch4_ncm.get_calls++;
