@@ -17,6 +17,7 @@
 #include "system_overclock.h"
 #include "ncm/usb_boot_profiler.h"
 #include "ncm/ncm_tx_profile.h"
+#include "ethernetif.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -45,6 +46,10 @@
 #endif
 #ifndef CONFIG_PC_PROFILER_PC_DETAIL
 #define CONFIG_PC_PROFILER_PC_DETAIL 0
+#endif
+
+#ifndef CONFIG_PC_PROFILER_PLATFORM_REPORT
+#define CONFIG_PC_PROFILER_PLATFORM_REPORT 0
 #endif
 #ifndef CONFIG_PC_PROFILER_RTW_RECV_DETAIL
 #define CONFIG_PC_PROFILER_RTW_RECV_DETAIL 0
@@ -1543,20 +1548,29 @@ static void pcprof_task(void *arg)
 			      interval_cycles_sum, interval_cycles_max,
 			      interval_count, late_10us, late_100us,
 			      caller_attributed);
+#if CONFIG_PC_PROFILER_PLATFORM_REPORT
 		pcprof_clock_report(sequence);
+#endif
 #if CONFIG_LPDDR_PROFILE_REPORT
 		pcprof_lpddr_re_report(sequence);
 		carbox_lpddr_margin_test_run_once();
 		carbox_lpddr_margin_test_report(sequence);
 #endif
+#if CONFIG_PC_PROFILER_PLATFORM_REPORT
 		carbox_i2c_bitbang_pacing_report(sequence);
+#endif
+#if defined(CONFIG_NCM_TX_PIPELINE) && CONFIG_NCM_TX_PIPELINE
+		rltk_ncm_tx_pipeline_report(sequence);
+#endif
 		carbox_touch_path_profiler_report(sequence);
 		carbox_screen_rx_record_profiler_report(sequence);
 #if CONFIG_USB_PROFILE_REPORT
 		carbox_usb_boot_profiler_report(sequence);
 		carbox_ncm_tx_single_profile_report(sequence);
 #endif
+#if CONFIG_PC_PROFILER_PLATFORM_REPORT
 		pcprof_fw_slot_report(sequence);
+#endif
 #if defined(CONFIG_IRQ_PROFILE_REPORT) && CONFIG_IRQ_PROFILE_REPORT
 		carbox_irq_profiler_report(sequence, PCPROF_REPORT_PERIOD_MS);
 #endif

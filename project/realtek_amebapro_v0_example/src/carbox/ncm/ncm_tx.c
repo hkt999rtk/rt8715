@@ -467,10 +467,16 @@ struct ncm_single_profile {
 
 static struct ncm_single_profile ncm_single_profile;
 static const struct carbox_ncm_tx_batch *ncm_active_batch;
+struct ncm_prebuilt_tx {
+	void *buffer;
+	size_t len;
+};
+static const struct ncm_prebuilt_tx *ncm_active_prebuilt;
 static u8 ncm_batch_built;
 static u16 ncm_batch_sent_frames;
 
 #define NCM_BATCH_LENGTH_TAG 0x80000000U
+#define NCM_PREBUILT_LENGTH_TAG 0x40000000U
 
 extern int usbh_cdc_ncm_send_data(u8 *buf, u32 len);
 
@@ -479,9 +485,10 @@ static size_t ncm_batch_align(size_t len, u16 modulus, u16 remainder)
 	return ALIGN(len, (size_t)modulus) + remainder;
 }
 
-static void *cdc_ncm_tx_fixup_batch(usbh_cdc_ncm_host_hal_t *dev,
+static void *cdc_ncm_tx_build_batch(usbh_cdc_ncm_host_hal_t *dev,
 				    const struct carbox_ncm_tx_batch *batch,
-				    size_t *out_len)
+				    u8 *target, size_t target_capacity,
+				    size_t *out_len, u16 *built_frames)
 {
 	struct cdc_ncm_ctx *ctx;
 	struct usb_cdc_ncm_nth16 *nth16;
@@ -501,21 +508,22 @@ static void *cdc_ncm_tx_fixup_batch(usbh_cdc_ncm_host_hal_t *dev,
 	size_t copy_block_count = 0U;
 #endif
 
-	if (out_len == NULL) {
+	if (out_len == NULL || built_frames == NULL) {
 		ncm_single_profile.batch_reject++;
 		return NULL;
 	}
 	*out_len = 0U;
+	*built_frames = 0U;
 	if (dev == NULL || batch == NULL ||
 	    batch->magic != CARBOX_NCM_TX_BATCH_MAGIC ||
-	    batch->frame_count < 2U ||
+	    batch->frame_count < 1U ||
 	    batch->frame_count > CARBOX_NCM_TX_BATCH_MAX_DATAGRAMS ||
 	    batch->segment_count > CARBOX_NCM_TX_BATCH_MAX_SEGMENTS) {
 		ncm_single_profile.batch_reject++;
 		return NULL;
 	}
 	ctx = (struct cdc_ncm_ctx *)dev->data[0];
-	if (ctx == NULL || dev->out_buf == NULL) {
+	if (ctx == NULL || target == NULL || target_capacity == 0U) {
 		ncm_single_profile.batch_reject++;
 		return NULL;
 	}
@@ -532,13 +540,14 @@ static void *cdc_ncm_tx_fixup_batch(usbh_cdc_ncm_host_hal_t *dev,
 		selected_count = ctx->tx_max_datagrams;
 
 	/* Select the largest FIFO prefix that fits the negotiated NTB capacity. */
-	for (; selected_count >= 2U; --selected_count) {
+	for (; selected_count >= 1U; --selected_count) {
 		ndp_len = sizeof(*ndp16) +
 			sizeof(struct usb_cdc_ncm_dpe16) *
 			((size_t)selected_count + 1U);
 		header_len = sizeof(*nth16) + ndp_len;
 		if ((ctx->max_ndp_size != 0U && ndp_len > ctx->max_ndp_size) ||
-		    header_len > ctx->tx_max || header_len > 0xffffU)
+		    header_len > ctx->tx_max || header_len > target_capacity ||
+		    header_len > 0xffffU)
 			continue;
 
 		ntb_len = header_len;
@@ -580,7 +589,9 @@ static void *cdc_ncm_tx_fixup_batch(usbh_cdc_ncm_host_hal_t *dev,
 							 remainder);
 			if (offsets[frame_index] < ntb_len ||
 			    offsets[frame_index] > ctx->tx_max ||
+			    offsets[frame_index] > target_capacity ||
 			    frame->len > ctx->tx_max - offsets[frame_index] ||
+			    frame->len > target_capacity - offsets[frame_index] ||
 			    frame->len > 0xffffU - offsets[frame_index]) {
 				candidate_valid = 0;
 				break;
@@ -591,40 +602,40 @@ static void *cdc_ncm_tx_fixup_batch(usbh_cdc_ncm_host_hal_t *dev,
 		if (candidate_valid != 0)
 			break;
 	}
-	if (selected_count < 2U) {
+	if (selected_count < 1U) {
 		ncm_single_profile.batch_reject++;
 		return NULL;
 	}
 
 	usb_os_lock(ctx->mtx);
-	memset(dev->out_buf, 0, header_len);
-	nth16 = (struct usb_cdc_ncm_nth16 *)dev->out_buf;
+	memset(target, 0, header_len);
+	nth16 = (struct usb_cdc_ncm_nth16 *)target;
 	nth16->dwSignature = cpu_to_le32(USB_CDC_NCM_NTH16_SIGN);
 	nth16->wHeaderLength = cpu_to_le16(sizeof(*nth16));
 	nth16->wSequence = cpu_to_le16(ctx->tx_seq++);
 	nth16->wBlockLength = cpu_to_le16(ntb_len);
 	nth16->wNdpIndex = cpu_to_le16(sizeof(*nth16));
 
-	ndp16 = (struct usb_cdc_ncm_ndp16 *)(dev->out_buf + sizeof(*nth16));
+	ndp16 = (struct usb_cdc_ncm_ndp16 *)(target + sizeof(*nth16));
 	ndp16->dwSignature = cpu_to_le32(USB_CDC_NCM_NDP16_NOCRC_SIGN);
 	ndp16->wLength = cpu_to_le16(ndp_len);
 	for (frame_index = 0U; frame_index < selected_count; ++frame_index) {
 		const struct carbox_ncm_tx_frame *frame = &batch->frame[frame_index];
 		u32 segment_index;
-		u8 *destination = dev->out_buf + offsets[frame_index];
+		u8 *destination = target + offsets[frame_index];
 
 		ndp16->dpe16[frame_index].wDatagramIndex =
 			cpu_to_le16(offsets[frame_index]);
 		ndp16->dpe16[frame_index].wDatagramLength =
 			cpu_to_le16(frame->len);
 		if (offsets[frame_index] > header_len && frame_index == 0U) {
-			memset(dev->out_buf + header_len, 0,
+			memset(target + header_len, 0,
 			       offsets[frame_index] - header_len);
 		} else if (frame_index != 0U) {
 			size_t previous_end = offsets[frame_index - 1U] +
 				batch->frame[frame_index - 1U].len;
 			if (offsets[frame_index] > previous_end) {
-				memset(dev->out_buf + previous_end, 0,
+				memset(target + previous_end, 0,
 				       offsets[frame_index] - previous_end);
 			}
 		}
@@ -688,10 +699,65 @@ static void *cdc_ncm_tx_fixup_batch(usbh_cdc_ncm_host_hal_t *dev,
 	ncm_single_profile.batch_datagrams += selected_count;
 	ncm_single_profile.batch_payload_bytes += (u32)payload_bytes;
 	*out_len = ntb_len;
-	ncm_batch_built = 1U;
-	ncm_batch_sent_frames = (u16)selected_count;
+	*built_frames = (u16)selected_count;
 	usb_os_unlock(ctx->mtx);
-	return dev->out_buf;
+	return target;
+}
+
+static void *cdc_ncm_tx_fixup_batch(usbh_cdc_ncm_host_hal_t *dev,
+				    const struct carbox_ncm_tx_batch *batch,
+				    size_t *out_len)
+{
+	return cdc_ncm_tx_build_batch(dev, batch, dev->out_buf,
+				      ((struct cdc_ncm_ctx *)dev->data[0])->tx_max,
+				      out_len, &ncm_batch_sent_frames);
+}
+
+int carbox_ncm_tx_build_batch(const struct carbox_ncm_tx_batch *batch,
+			      void *ntb_buffer, size_t ntb_capacity,
+			      size_t *ntb_len, uint16_t *built_frames)
+{
+	extern usbh_cdc_ncm_host_hal_t usbh_cdc_ncm_host_user;
+	void *result;
+	struct cdc_ncm_ctx *ctx;
+
+	if (ntb_len == NULL || built_frames == NULL) return -1;
+	*ntb_len = 0U;
+	*built_frames = 0U;
+	if (batch == NULL || batch->magic != CARBOX_NCM_TX_BATCH_MAGIC ||
+	    batch->frame_count < 1U) return -1;
+	/* Match the compatibility wrapper's safe entry condition.  lwIP may emit
+	 * startup traffic before NCM is ready, and disconnect can clear the context
+	 * while queued frames still exist. */
+	if (usbh_cdc_ncm_host_user.ncm_hw_connect == 0U ||
+	    usbh_cdc_ncm_host_user.data[0] == 0UL) return -1;
+	ctx = (struct cdc_ncm_ctx *)usbh_cdc_ncm_host_user.data[0];
+	if (ctx == NULL || ntb_capacity > 0xffffU) return -1;
+	/* Use the same outer lock order as the customer synchronous TX path:
+	 * ctx->net, then the builder's ctx->mtx. */
+	cdc_ncm_tx_lock(&usbh_cdc_ncm_host_user);
+	result = cdc_ncm_tx_build_batch(&usbh_cdc_ncm_host_user, batch,
+					(u8 *)ntb_buffer, ntb_capacity, ntb_len,
+					built_frames);
+	cdc_ncm_tx_unlock(&usbh_cdc_ncm_host_user);
+	if (result == NULL) return -1;
+	return 0;
+}
+
+int carbox_ncm_tx_send_prebuilt(void *ntb_buffer, size_t ntb_len)
+{
+	struct ncm_prebuilt_tx request;
+	int status;
+
+	if (ntb_buffer == NULL || ntb_len == 0U || ntb_len > 0xffffU ||
+	    ncm_active_prebuilt != NULL) return -1;
+	request.buffer = ntb_buffer;
+	request.len = ntb_len;
+	ncm_active_prebuilt = &request;
+	status = usbh_cdc_ncm_send_data((u8 *)&request,
+			NCM_PREBUILT_LENGTH_TAG | (u32)ntb_len);
+	ncm_active_prebuilt = NULL;
+	return status;
 }
 
 int carbox_ncm_tx_send_batch(const struct carbox_ncm_tx_batch *batch,
@@ -805,7 +871,14 @@ void *cdc_ncm_tx_fixup(usbh_cdc_ncm_host_hal_t *dev, void *data, size_t len, gfp
 	(void)flags;
 	if (ncm_active_batch != NULL && data == (void *)ncm_active_batch &&
 	    len == (NCM_BATCH_LENGTH_TAG | ncm_active_batch->frame_count)) {
-		return cdc_ncm_tx_fixup_batch(dev, ncm_active_batch, out_len);
+		void *result = cdc_ncm_tx_fixup_batch(dev, ncm_active_batch, out_len);
+		ncm_batch_built = result != NULL;
+		return result;
+	}
+	if (ncm_active_prebuilt != NULL && data == (void *)ncm_active_prebuilt &&
+	    len == (NCM_PREBUILT_LENGTH_TAG | ncm_active_prebuilt->len)) {
+		*out_len = ncm_active_prebuilt->len;
+		return ncm_active_prebuilt->buffer;
 	}
 	return cdc_ncm_tx_fixup_single(dev, data, len, out_len);
 #else

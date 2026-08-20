@@ -510,6 +510,9 @@ static u8 RX_BUFFER[MAX_BUFFER_SIZE];
 #ifndef CONFIG_NCM_TX_BATCH_MAX
 #define CONFIG_NCM_TX_BATCH_MAX 1
 #endif
+#ifndef CONFIG_NCM_TX_PIPELINE
+#define CONFIG_NCM_TX_PIPELINE 0
+#endif
 
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
 #define NCM_TX_PROFILE_WINDOW_US 10000000U
@@ -1165,6 +1168,9 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 #define NCM_TX_ASYNC_TASK_STACK      2048U
 #define NCM_TX_ASYNC_REPORT_US       10000000U
 #define NCM_TX_ASYNC_TASK_PRIORITY   TCPIP_THREAD_PRIO
+#define NCM_TX_USB_TASK_PRIORITY     (NCM_TX_ASYNC_TASK_PRIORITY + 1U)
+#define NCM_TX_PIPELINE_SLOTS         3U
+#define NCM_TX_PIPELINE_NTB_CAPACITY  16384U
 
 struct ncm_tx_async_item {
 	struct pbuf *p;
@@ -1184,6 +1190,37 @@ struct ncm_tx_async_stats {
 
 static QueueHandle_t g_ncm_tx_async_queue;
 static TaskHandle_t g_ncm_tx_async_task;
+#if CONFIG_NCM_TX_PIPELINE
+struct ncm_tx_pipeline_slot {
+	u8_t buffer[NCM_TX_PIPELINE_NTB_CAPACITY] __attribute__((aligned(32)));
+	size_t len;
+	u16_t frames;
+};
+struct ncm_tx_pipeline_stats {
+	u32_t built_ntbs;
+	u32_t built_frames;
+	u32_t built_bytes;
+	u32_t build_us_total;
+	u32_t build_us_max;
+	u32_t usb_completions;
+	u32_t usb_errors;
+	u32_t usb_us_total;
+	u32_t usb_us_max;
+	u32_t completion_ready;
+	u32_t completion_underrun;
+	u32_t completion_idle;
+	u32_t ready_depth_max;
+	u32_t free_waits;
+	u32_t handoff_us_total;
+	u32_t handoff_us_max;
+	u32_t handoff_samples;
+};
+static struct ncm_tx_pipeline_slot g_ncm_tx_pipeline_slots[NCM_TX_PIPELINE_SLOTS];
+static struct ncm_tx_pipeline_stats g_ncm_tx_pipeline_stats;
+static QueueHandle_t g_ncm_tx_free_queue;
+static QueueHandle_t g_ncm_tx_ready_queue;
+static TaskHandle_t g_ncm_tx_usb_task;
+#endif
 static struct ncm_tx_async_stats g_ncm_tx_async_stats;
 static volatile u32_t g_ncm_tx_inflight_packets;
 static volatile u32_t g_ncm_tx_inflight_start_us;
@@ -1205,6 +1242,54 @@ int rltk_ncm_tx_diag_snapshot(rltk_ncm_tx_diag_t *diag)
 	diag->inflight_age_us = diag->inflight_packets != 0U ?
 		hal_read_curtime_us() - start_us : 0U;
 	return g_ncm_tx_async_task != NULL ? 0 : -1;
+}
+
+void rltk_ncm_tx_pipeline_report(u32 sequence)
+{
+#if CONFIG_NCM_TX_PIPELINE
+	struct ncm_tx_pipeline_stats stats;
+	u32_t ready_now;
+	u32_t free_now;
+	u32_t input_now;
+
+	taskENTER_CRITICAL();
+	stats = g_ncm_tx_pipeline_stats;
+	memset(&g_ncm_tx_pipeline_stats, 0, sizeof(g_ncm_tx_pipeline_stats));
+	taskEXIT_CRITICAL();
+	ready_now = g_ncm_tx_ready_queue != NULL ?
+		(u32_t)uxQueueMessagesWaiting(g_ncm_tx_ready_queue) : 0U;
+	free_now = g_ncm_tx_free_queue != NULL ?
+		(u32_t)uxQueueMessagesWaiting(g_ncm_tx_free_queue) : 0U;
+	input_now = g_ncm_tx_async_queue != NULL ?
+		(u32_t)uxQueueMessagesWaiting(g_ncm_tx_async_queue) : 0U;
+	printf("[NCMTXPIPE][%u] slots=%u build ntb/frames/bytes=%u/%u/%u "
+	       "us avg/max=%u/%u usb complete/error=%u/%u us avg/max=%u/%u "
+	       "completion ready/underrun/idle=%u/%u/%u handoff_us avg/max=%u/%u "
+	       "depth input/ready/free/max_ready=%u/%u/%u/%u free_wait=%u\n",
+	       (unsigned int)sequence, (unsigned int)NCM_TX_PIPELINE_SLOTS,
+	       (unsigned int)stats.built_ntbs,
+	       (unsigned int)stats.built_frames,
+	       (unsigned int)stats.built_bytes,
+	       stats.built_ntbs ? (unsigned int)(stats.build_us_total /
+		stats.built_ntbs) : 0U,
+	       (unsigned int)stats.build_us_max,
+	       (unsigned int)stats.usb_completions,
+	       (unsigned int)stats.usb_errors,
+	       stats.usb_completions ? (unsigned int)(stats.usb_us_total /
+		stats.usb_completions) : 0U,
+	       (unsigned int)stats.usb_us_max,
+	       (unsigned int)stats.completion_ready,
+	       (unsigned int)stats.completion_underrun,
+	       (unsigned int)stats.completion_idle,
+	       stats.handoff_samples ? (unsigned int)(stats.handoff_us_total /
+		stats.handoff_samples) : 0U,
+	       (unsigned int)stats.handoff_us_max,
+	       (unsigned int)input_now, (unsigned int)ready_now,
+	       (unsigned int)free_now, (unsigned int)stats.ready_depth_max,
+	       (unsigned int)stats.free_waits);
+#else
+	(void)sequence;
+#endif
 }
 
 
@@ -1249,6 +1334,67 @@ static void ncm_tx_async_report(u32_t now)
 #endif
 }
 
+#if CONFIG_NCM_TX_PIPELINE
+static void ncm_tx_usb_worker(void *arg)
+{
+	struct ncm_tx_pipeline_slot *slot;
+	u32_t last_completion_us = 0U;
+	u8_t completion_had_ready = 0U;
+
+	(void)arg;
+	for (;;) {
+		u32_t start_us;
+		u32_t end_us;
+		u32_t elapsed_us;
+		u32_t ready_depth;
+		u32_t input_depth;
+		int status;
+
+		if (xQueueReceive(g_ncm_tx_ready_queue, &slot, portMAX_DELAY) != pdTRUE)
+			continue;
+		start_us = hal_read_curtime_us();
+		if (last_completion_us != 0U && completion_had_ready != 0U) {
+			u32_t handoff_us = start_us - last_completion_us;
+			g_ncm_tx_pipeline_stats.handoff_samples++;
+			g_ncm_tx_pipeline_stats.handoff_us_total += handoff_us;
+			if (handoff_us > g_ncm_tx_pipeline_stats.handoff_us_max)
+				g_ncm_tx_pipeline_stats.handoff_us_max = handoff_us;
+		}
+		status = carbox_ncm_tx_send_prebuilt(slot->buffer, slot->len);
+		end_us = hal_read_curtime_us();
+		elapsed_us = end_us - start_us;
+		g_ncm_tx_pipeline_stats.usb_completions++;
+		g_ncm_tx_pipeline_stats.usb_us_total += elapsed_us;
+		if (elapsed_us > g_ncm_tx_pipeline_stats.usb_us_max)
+			g_ncm_tx_pipeline_stats.usb_us_max = elapsed_us;
+		if (status != 0) {
+			g_ncm_tx_pipeline_stats.usb_errors++;
+#if CONFIG_NCM_TX_ASYNC_PROFILE
+			taskENTER_CRITICAL();
+			g_ncm_tx_async_stats.send_errors += slot->frames;
+			taskEXIT_CRITICAL();
+#endif
+		}
+		slot->len = 0U;
+		slot->frames = 0U;
+		(void)xQueueSend(g_ncm_tx_free_queue, &slot, portMAX_DELAY);
+		ready_depth = (u32_t)uxQueueMessagesWaiting(g_ncm_tx_ready_queue);
+		input_depth = (u32_t)uxQueueMessagesWaiting(g_ncm_tx_async_queue);
+		if (ready_depth != 0U) {
+			g_ncm_tx_pipeline_stats.completion_ready++;
+			completion_had_ready = 1U;
+		} else if (input_depth != 0U || g_ncm_tx_inflight_packets != 0U) {
+			g_ncm_tx_pipeline_stats.completion_underrun++;
+			completion_had_ready = 0U;
+		} else {
+			g_ncm_tx_pipeline_stats.completion_idle++;
+			completion_had_ready = 0U;
+		}
+		last_completion_us = end_us;
+	}
+}
+#endif
+
 static void ncm_tx_async_worker(void *arg)
 {
 	struct ncm_tx_async_item items[CARBOX_NCM_TX_BATCH_MAX_DATAGRAMS];
@@ -1283,6 +1429,12 @@ static void ncm_tx_async_worker(void *arg)
 				u32_t built_frames = 0U;
 				uint16_t sent_frames = 0U;
 				int batch_status = CARBOX_NCM_TX_BATCH_RETRY_SINGLE;
+#if CONFIG_NCM_TX_PIPELINE
+				struct ncm_tx_pipeline_slot *slot = NULL;
+				size_t ntb_len = 0U;
+				u32_t build_start_us;
+				u32_t build_elapsed_us;
+#endif
 
 				memset(&batch, 0, sizeof(batch));
 				batch.magic = CARBOX_NCM_TX_BATCH_MAGIC;
@@ -1314,8 +1466,63 @@ static void ncm_tx_async_worker(void *arg)
 				batch.frame_count = (uint16_t)built_frames;
 
 				if (built_frames > 1U)
+#if CONFIG_NCM_TX_PIPELINE
+					batch_status = 0;
+#else
 					batch_status = carbox_ncm_tx_send_batch(&batch,
 									 &sent_frames);
+#endif
+#if CONFIG_NCM_TX_PIPELINE
+				/* Two slots decouple NTB assembly from the customer HAL's
+				 * synchronous completion wait.  While USB owns slot A, this
+				 * task gathers the next FIFO prefix into slot B. */
+				if (built_frames != 0U) {
+					if (xQueueReceive(g_ncm_tx_free_queue, &slot, 0) != pdTRUE) {
+						g_ncm_tx_pipeline_stats.free_waits++;
+						(void)xQueueReceive(g_ncm_tx_free_queue, &slot,
+								   portMAX_DELAY);
+					}
+				}
+				if (slot != NULL) {
+					build_start_us = hal_read_curtime_us();
+					batch_status = carbox_ncm_tx_build_batch(
+						&batch, slot->buffer, sizeof(slot->buffer),
+						&ntb_len, &sent_frames);
+					build_elapsed_us = hal_read_curtime_us() - build_start_us;
+					if (batch_status == 0 && sent_frames != 0U) {
+						u32_t ready_depth;
+
+						slot->len = ntb_len;
+						slot->frames = sent_frames;
+						g_ncm_tx_pipeline_stats.built_ntbs++;
+						g_ncm_tx_pipeline_stats.built_frames += sent_frames;
+						g_ncm_tx_pipeline_stats.built_bytes += (u32_t)ntb_len;
+						g_ncm_tx_pipeline_stats.build_us_total +=
+							build_elapsed_us;
+						if (build_elapsed_us >
+						    g_ncm_tx_pipeline_stats.build_us_max)
+							g_ncm_tx_pipeline_stats.build_us_max =
+								build_elapsed_us;
+						/* Publish remaining source work before READY wakes the
+						 * higher-priority USB owner. */
+						g_ncm_tx_inflight_packets = item_count -
+							(send_index + sent_frames);
+						(void)xQueueSend(g_ncm_tx_ready_queue, &slot,
+								 portMAX_DELAY);
+						ready_depth = (u32_t)uxQueueMessagesWaiting(
+							g_ncm_tx_ready_queue);
+						if (ready_depth >
+						    g_ncm_tx_pipeline_stats.ready_depth_max)
+							g_ncm_tx_pipeline_stats.ready_depth_max =
+								ready_depth;
+					} else {
+						slot->len = 0U;
+						slot->frames = 0U;
+						(void)xQueueSend(g_ncm_tx_free_queue, &slot,
+								 portMAX_DELAY);
+					}
+				}
+#endif
 				if (sent_frames != 0U) {
 					if (batch_status != 0)
 						result = ERR_BUF;
@@ -1323,10 +1530,17 @@ static void ncm_tx_async_worker(void *arg)
 					continue;
 				}
 
-				/* No legal two-frame prefix: preserve FIFO with one NTB. */
+				/* No legal prefix: preserve the old synchronous fallback when
+				 * pipelining is disabled.  A one-frame pipeline build is legal,
+				 * so reaching this path there means malformed input. */
+#if CONFIG_NCM_TX_PIPELINE
+				result = ERR_BUF;
+				send_index++;
+#else
 				if (ncm_send_pbuf_sync(items[send_index].p) != ERR_OK)
 					result = ERR_BUF;
 				send_index++;
+#endif
 			}
 			taskENTER_CRITICAL();
 			g_ncm_tx_inflight_packets = 0U;
@@ -1361,6 +1575,11 @@ static void ncm_tx_async_worker(void *arg)
 
 static int ncm_tx_async_init(void)
 {
+#if CONFIG_NCM_TX_PIPELINE
+	u32_t slot_index;
+	struct ncm_tx_pipeline_slot *slot;
+#endif
+
 	if (g_ncm_tx_async_task != NULL) {
 		return 1;
 	}
@@ -1372,6 +1591,29 @@ static int ncm_tx_async_init(void)
 			return 0;
 		}
 	}
+#if CONFIG_NCM_TX_PIPELINE
+	if (g_ncm_tx_free_queue == NULL)
+		g_ncm_tx_free_queue = xQueueCreate(NCM_TX_PIPELINE_SLOTS,
+						 sizeof(struct ncm_tx_pipeline_slot *));
+	if (g_ncm_tx_ready_queue == NULL)
+		g_ncm_tx_ready_queue = xQueueCreate(NCM_TX_PIPELINE_SLOTS,
+						  sizeof(struct ncm_tx_pipeline_slot *));
+	if (g_ncm_tx_free_queue == NULL || g_ncm_tx_ready_queue == NULL) {
+		printf("[NCMTXASYNC] ERROR: pipeline queue allocation failed\n");
+		return 0;
+	}
+	for (slot_index = 0U; slot_index < NCM_TX_PIPELINE_SLOTS; ++slot_index) {
+		slot = &g_ncm_tx_pipeline_slots[slot_index];
+		(void)xQueueSend(g_ncm_tx_free_queue, &slot, 0);
+	}
+	/* A higher-priority completion owner submits slot A immediately, then
+	 * blocks in the customer HAL while the builder resumes on slot B. */
+	if (xTaskCreate(ncm_tx_usb_worker, "ncm_usb_tx", NCM_TX_ASYNC_TASK_STACK,
+			NULL, NCM_TX_USB_TASK_PRIORITY, &g_ncm_tx_usb_task) != pdPASS) {
+		printf("[NCMTXASYNC] ERROR: USB completion owner creation failed\n");
+		return 0;
+	}
+#endif
 	if (xTaskCreate(ncm_tx_async_worker, "ncm_tx", NCM_TX_ASYNC_TASK_STACK,
 			NULL, NCM_TX_ASYNC_TASK_PRIORITY, &g_ncm_tx_async_task) != pdPASS) {
 		printf("[NCMTXASYNC] ERROR: worker creation failed; using synchronous NCM TX\n");
@@ -1381,9 +1623,14 @@ static int ncm_tx_async_init(void)
 		return 0;
 	}
 #if CONFIG_NCM_TX_BATCH_MAX > 1
-	printf("[NCMTXASYNC] enabled mode=task-batch%u queue=%u priority=%u; "
+	printf("[NCMTXASYNC] enabled mode=task-batch%u%s queue=%u priority=%u; "
 	       "no-wait pbuf-reference batching, customer HAL\n",
 	       (unsigned int)CONFIG_NCM_TX_BATCH_MAX,
+#if CONFIG_NCM_TX_PIPELINE
+	       "-pipeline3",
+#else
+	       "",
+#endif
 #else
 	printf("[NCMTXASYNC] enabled mode=single-immediate queue=%u priority=%u; "
 	       "pbuf-reference queue, customer HAL\n",

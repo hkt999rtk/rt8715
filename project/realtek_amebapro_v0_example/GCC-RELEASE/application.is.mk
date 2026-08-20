@@ -910,6 +910,10 @@ NCM_TX_ASYNC ?= 1
 # single-immediate behavior; 2 selects the first hardware-validated batching
 # milestone. The negotiated device limit is reported by NCMTXCFG.
 NCM_TX_BATCH_MAX ?= 16
+# Keep one 16-KiB NTB in USB, one ready, and a third available to the builder
+# while the customer HAL synchronously waits for bulk OUT completion.
+# Queue arrival drives assembly; no aggregation timer or artificial delay.
+NCM_TX_PIPELINE ?= 1
 # Assemble the selected pbuf segments into the contiguous USB NTB with the
 # existing cache-safe linked-GDMA copyv helper.  The NCM builder falls back to
 # a complete CPU copy whenever GDMA is unavailable, busy, or reports an error.
@@ -918,7 +922,7 @@ NCM_TX_LINKED_GDMA ?= 1
 NCM_TX_ASYNC_PROFILE ?= 0
 # Compiler command-line changes are not tracked by ordinary source timestamps.
 # Force the sole consumer to rebuild whenever the observation mode changes.
-NCM_TX_PROFILE_STAMP := $(OBJ_DIR)/.ncm_tx_profile_$(NCM_TX_PROFILE)-async$(NCM_TX_ASYNC_PROFILE)-batch$(NCM_TX_BATCH_MAX)-gdma$(NCM_TX_LINKED_GDMA)
+NCM_TX_PROFILE_STAMP := $(OBJ_DIR)/.ncm_tx_profile_$(NCM_TX_PROFILE)-async$(NCM_TX_ASYNC_PROFILE)-batch$(NCM_TX_BATCH_MAX)-pipe$(NCM_TX_PIPELINE)-gdma$(NCM_TX_LINKED_GDMA)
 $(NCM_TX_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.ncm_tx_profile_*
@@ -927,6 +931,11 @@ $(NCM_TX_PROFILE_STAMP):
 ../src/carbox/ncm/ncm_tx.o: $(NCM_TX_PROFILE_STAMP)
 # Keep the boot-time PLL/SPIC result visible in the recurring 10-second report.
 PC_PROFILER ?= 1
+# Keep task CPU utilization and the active subsystem report, but suppress the
+# already-validated recurring clock/PLL/SPIC, I2C pacing, and firmware-slot
+# dumps during normal soak tests. Set this to 1 when platform bring-up data is
+# needed again; it does not change any clock, I2C, or boot configuration.
+PC_PROFILER_PLATFORM_REPORT ?= 0
 # Optional PC-level reports. Keep task utilization sampling enabled while
 # suppressing the verbose per-PC reports during IRQ-count investigation.
 PC_PROFILER_PC_DETAIL ?= 0
@@ -1187,7 +1196,7 @@ $(SCREEN_FLOW_PROFILE_STAMP):
 	$(SCREEN_FLOW_PROFILE_STAMP)
 # These switches affect several standalone profiler/wrapper objects.  Track
 # them explicitly so a diagnostic override cannot reuse release-mode objects.
-DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)-touch$(TOUCH_PATH_PROFILE)-rxrec$(SCREEN_RX_RECORD_PROFILE)
+DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-platform$(PC_PROFILER_PLATFORM_REPORT)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)-touch$(TOUCH_PATH_PROFILE)-rxrec$(SCREEN_RX_RECORD_PROFILE)
 $(DIAGNOSTIC_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.diagnostic_profile_*
@@ -1344,8 +1353,10 @@ GCCFLAGS += -DCONFIG_NCM_TX_PROFILE=$(NCM_TX_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_TX_ASYNC=$(NCM_TX_ASYNC)
 GCCFLAGS += -DCONFIG_NCM_TX_ASYNC_PROFILE=$(NCM_TX_ASYNC_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_TX_BATCH_MAX=$(NCM_TX_BATCH_MAX)
+GCCFLAGS += -DCONFIG_NCM_TX_PIPELINE=$(NCM_TX_PIPELINE)
 GCCFLAGS += -DCONFIG_NCM_TX_LINKED_GDMA=$(NCM_TX_LINKED_GDMA)
 GCCFLAGS += -DCONFIG_PC_PROFILER=$(PC_PROFILER)
+GCCFLAGS += -DCONFIG_PC_PROFILER_PLATFORM_REPORT=$(PC_PROFILER_PLATFORM_REPORT)
 GCCFLAGS += -DCONFIG_PC_PROFILER_PC_DETAIL=$(PC_PROFILER_PC_DETAIL)
 GCCFLAGS += -DCONFIG_PC_PROFILER_RTW_RECV_DETAIL=$(PC_PROFILER_RTW_RECV_DETAIL)
 GCCFLAGS += -DCONFIG_PC_PROFILER_RTW_DUMP_PROFILE=$(PC_PROFILER_RTW_DUMP_PROFILE)

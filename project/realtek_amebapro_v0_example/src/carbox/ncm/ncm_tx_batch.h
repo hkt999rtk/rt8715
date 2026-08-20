@@ -42,4 +42,16 @@ struct carbox_ncm_tx_batch {
 int carbox_ncm_tx_send_batch(const struct carbox_ncm_tx_batch *batch,
 			     uint16_t *sent_frames);
 
+/*
+ * Pipeline interface.  build_batch() copies the largest FIFO prefix into a
+ * caller-owned contiguous NTB buffer without submitting USB.  The source
+ * segments only need to remain valid until it returns.  send_prebuilt() then
+ * hands that immutable NTB to the customer HAL and returns after its normal
+ * bulk-OUT completion semaphore fires.
+ */
+int carbox_ncm_tx_build_batch(const struct carbox_ncm_tx_batch *batch,
+			      void *ntb_buffer, size_t ntb_capacity,
+			      size_t *ntb_len, uint16_t *built_frames);
+int carbox_ncm_tx_send_prebuilt(void *ntb_buffer, size_t ntb_len);
+
 #endif
