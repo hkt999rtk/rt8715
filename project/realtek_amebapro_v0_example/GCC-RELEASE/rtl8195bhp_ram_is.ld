@@ -573,6 +573,10 @@ SECTIONS
 
 		*(.psram.bss*)
 		*(.lpddr.bss*)
+		/* SRAM_C adds a .sram prefix to input sections.  Allow explicitly
+		 * tagged, non-critical statistics to remain in LPDDR while the IRQ
+		 * controller's live semaphore/state stays in internal SRAM. */
+		*(.sram.lpddr.bss*)
 		*(.sdram.bss*)
 		*(.usbd.bss*)
 		*(.wlan.bss*)

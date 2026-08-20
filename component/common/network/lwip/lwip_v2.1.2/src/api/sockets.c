@@ -56,6 +56,7 @@
 #if (defined(CONFIG_SCREEN_TCP_BUFFER_PROFILE) && CONFIG_SCREEN_TCP_BUFFER_PROFILE) || \
     (defined(CONFIG_SCREEN_BLOCK_PROFILE) && CONFIG_SCREEN_BLOCK_PROFILE) || \
     (defined(CONFIG_SCREEN_USB_PROBE) && CONFIG_SCREEN_USB_PROBE) || \
+    (defined(CONFIG_SCREEN_FPS_PROFILE) && CONFIG_SCREEN_FPS_PROFILE) || \
     (defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE)
 #include "lwip/priv/tcp_priv.h"
 #endif
@@ -4922,7 +4923,8 @@ lwip_diag_screen_tcp_ack_track(int s)
 
 #if (defined(CONFIG_SCREEN_TCP_BUFFER_PROFILE) && CONFIG_SCREEN_TCP_BUFFER_PROFILE) || \
     (defined(CONFIG_SCREEN_BLOCK_PROFILE) && CONFIG_SCREEN_BLOCK_PROFILE) || \
-    (defined(CONFIG_SCREEN_USB_PROBE) && CONFIG_SCREEN_USB_PROBE)
+    (defined(CONFIG_SCREEN_USB_PROBE) && CONFIG_SCREEN_USB_PROBE) || \
+    (defined(CONFIG_SCREEN_FPS_PROFILE) && CONFIG_SCREEN_FPS_PROFILE)
 /*
  * Diagnostic-only, read-only snapshot of a TCP socket.  Keeping this inside
  * sockets.c lets the profiler use the same descriptor lifetime protection as

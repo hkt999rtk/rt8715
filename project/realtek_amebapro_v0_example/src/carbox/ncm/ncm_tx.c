@@ -10,6 +10,9 @@
 #include "ncm_tx_abi.h"
 #include "ncm_tx_batch.h"
 #include "../large_memcpy_gdma.h"
+#include "hal_timer.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #ifndef NCM_TX_COMPAT_SINGLE_DATAGRAM
 #define NCM_TX_COMPAT_SINGLE_DATAGRAM 0
@@ -17,6 +20,9 @@
 
 #ifndef CONFIG_NCM_TX_LINKED_GDMA
 #define CONFIG_NCM_TX_LINKED_GDMA 0
+#endif
+#ifndef CONFIG_SCREEN_FPS_PROFILE
+#define CONFIG_SCREEN_FPS_PROFILE 0
 #endif
 
 /* 固件侧日志映射：库侧由 stub smart_log.h 提供 RTK_LOGS 宏，固件 SDK 没有，
@@ -463,6 +469,17 @@ struct ncm_single_profile {
 	volatile u32 gdma_blocks;
 	volatile u32 gdma_batches;
 	volatile u32 gdma_cpu_fallback_bytes;
+	volatile u64 gdma_time_sum_us;
+	volatile u32 gdma_time_max_us;
+	volatile u32 gdma_over_1ms;
+	volatile u32 gdma_over_4ms;
+	volatile u32 gdma_over_8ms;
+	volatile u32 gdma_lat_attempts;
+	volatile u32 gdma_lat_success;
+	volatile u32 gdma_lat_fallback;
+	volatile u32 gdma_lat_bytes;
+	volatile u32 gdma_lat_cpu_edge_bytes;
+	volatile u32 gdma_lat_cpu_fallback_bytes;
 };
 
 static struct ncm_single_profile ncm_single_profile;
@@ -662,8 +679,11 @@ static void *cdc_ncm_tx_build_batch(usbh_cdc_ncm_host_hal_t *dev,
 	 * returns zero after quiescing GDMA, making a complete CPU recopy safe. */
 	{
 		carbox_gdma_copyv_result_t gdma_result;
+		u32 gdma_start_us = hal_read_curtime_us();
+		u32 gdma_elapsed_us;
 
 		ncm_single_profile.gdma_attempts++;
+		ncm_single_profile.gdma_lat_attempts++;
 		if (carbox_linked_gdma_copyv_bytes_try(copy_blocks,
 						 copy_block_count,
 						 &gdma_result)) {
@@ -673,11 +693,18 @@ static void *cdc_ncm_tx_build_batch(usbh_cdc_ncm_host_hal_t *dev,
 				gdma_result.cpu_edge_bytes;
 			ncm_single_profile.gdma_blocks += gdma_result.dma_blocks;
 			ncm_single_profile.gdma_batches += gdma_result.dma_batches;
+			ncm_single_profile.gdma_lat_success++;
+			ncm_single_profile.gdma_lat_bytes += gdma_result.dma_bytes;
+			ncm_single_profile.gdma_lat_cpu_edge_bytes +=
+				gdma_result.cpu_edge_bytes;
 		} else {
 			size_t block_index;
 
 			ncm_single_profile.gdma_fallback++;
 			ncm_single_profile.gdma_cpu_fallback_bytes +=
+				(u32)payload_bytes;
+			ncm_single_profile.gdma_lat_fallback++;
+			ncm_single_profile.gdma_lat_cpu_fallback_bytes +=
 				(u32)payload_bytes;
 			for (block_index = 0U; block_index < copy_block_count;
 			     ++block_index) {
@@ -686,6 +713,13 @@ static void *cdc_ncm_tx_build_batch(usbh_cdc_ncm_host_hal_t *dev,
 				       copy_blocks[block_index].len);
 			}
 		}
+		gdma_elapsed_us = hal_read_curtime_us() - gdma_start_us;
+		ncm_single_profile.gdma_time_sum_us += gdma_elapsed_us;
+		if (gdma_elapsed_us > ncm_single_profile.gdma_time_max_us)
+			ncm_single_profile.gdma_time_max_us = gdma_elapsed_us;
+		ncm_single_profile.gdma_over_1ms += gdma_elapsed_us > 1000U;
+		ncm_single_profile.gdma_over_4ms += gdma_elapsed_us > 4000U;
+		ncm_single_profile.gdma_over_8ms += gdma_elapsed_us > 8000U;
 	}
 #endif
 
@@ -1255,6 +1289,60 @@ void carbox_ncm_tx_single_profile_report(unsigned long sequence)
 		  (unsigned long)ncm_single_profile.gdma_cpu_fallback_bytes,
 		  (unsigned long)ncm_single_profile.gdma_blocks,
 		  (unsigned long)ncm_single_profile.gdma_batches);
+#else
+	(void)sequence;
+#endif
+}
+
+void carbox_ncm_tx_gdma_latency_report(unsigned long sequence)
+{
+#if NCM_TX_COMPAT_SINGLE_DATAGRAM && CONFIG_SCREEN_FPS_PROFILE
+	u32 attempts;
+	u32 success;
+	u32 fallback;
+	u32 dma_bytes;
+	u32 cpu_edge_bytes;
+	u32 cpu_fallback_bytes;
+	u32 max_us;
+	u32 over_1ms;
+	u32 over_4ms;
+	u32 over_8ms;
+	u64 sum_us;
+
+	taskENTER_CRITICAL();
+	attempts = ncm_single_profile.gdma_lat_attempts;
+	success = ncm_single_profile.gdma_lat_success;
+	fallback = ncm_single_profile.gdma_lat_fallback;
+	dma_bytes = ncm_single_profile.gdma_lat_bytes;
+	cpu_edge_bytes = ncm_single_profile.gdma_lat_cpu_edge_bytes;
+	cpu_fallback_bytes = ncm_single_profile.gdma_lat_cpu_fallback_bytes;
+	sum_us = ncm_single_profile.gdma_time_sum_us;
+	max_us = ncm_single_profile.gdma_time_max_us;
+	over_1ms = ncm_single_profile.gdma_over_1ms;
+	over_4ms = ncm_single_profile.gdma_over_4ms;
+	over_8ms = ncm_single_profile.gdma_over_8ms;
+	ncm_single_profile.gdma_lat_attempts = 0U;
+	ncm_single_profile.gdma_lat_success = 0U;
+	ncm_single_profile.gdma_lat_fallback = 0U;
+	ncm_single_profile.gdma_lat_bytes = 0U;
+	ncm_single_profile.gdma_lat_cpu_edge_bytes = 0U;
+	ncm_single_profile.gdma_lat_cpu_fallback_bytes = 0U;
+	ncm_single_profile.gdma_time_sum_us = 0U;
+	ncm_single_profile.gdma_time_max_us = 0U;
+	ncm_single_profile.gdma_over_1ms = 0U;
+	ncm_single_profile.gdma_over_4ms = 0U;
+	ncm_single_profile.gdma_over_8ms = 0U;
+	taskEXIT_CRITICAL();
+	if (attempts == 0U) return;
+	rt_printf("[NCMTXGDMA_LAT][%lu] attempt/ok/fallback=%lu/%lu/%lu "
+		  "bytes dma/cpu_edge/cpu_fallback=%lu/%lu/%lu us avg/max=%llu/%lu "
+		  "over1/4/8ms=%lu/%lu/%lu\r\n",
+		  sequence, (unsigned long)attempts, (unsigned long)success,
+		  (unsigned long)fallback, (unsigned long)dma_bytes,
+		  (unsigned long)cpu_edge_bytes, (unsigned long)cpu_fallback_bytes,
+		  (unsigned long long)(sum_us / attempts), (unsigned long)max_us,
+		  (unsigned long)over_1ms, (unsigned long)over_4ms,
+		  (unsigned long)over_8ms);
 #else
 	(void)sequence;
 #endif

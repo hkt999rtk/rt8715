@@ -145,9 +145,6 @@ typedef struct
 static _mutex			gAESRTLLock;
 static volatile int		gAESRTLLockState;		// 0=not started, 1=initializing, 2=ready.
 static int				gAESRTLHWState;			// 0=unknown, 1=available, -1=unavailable.
-static _sema			gAESRTLCompletionSema;
-static Boolean			gAESRTLCompletionReady;
-static volatile Boolean	gAESRTLCompletionTimedOut;
 static volatile Boolean	gAESRTLFallbackSafe = true;
 static AESRTLKeyEntry	gAESRTLKeyRegistry[ AES_UTILS_RTL_KEY_REGISTRY_SIZE ];
 static uint8_t			gAESRTLKey[ 32 ] __attribute__( ( aligned( 32 ) ) );
@@ -164,85 +161,9 @@ static uint32_t			gAESRTLVerifyMismatches;
 static uint32_t			gAESRTLVerifyMatchMask;
 #endif
 
-// These hooks are implemented by the RTL8195B crypto HAL but are not declared
-// by this SDK's public hal_crypto.h. rtl_cryptoEngine_init() installs the
-// polling versions; the declarations below let AESUtils replace only the
-// notification mechanism while retaining the HAL's handler and state updates.
-
-extern hal_crypto_adapter_t	g_rtl_cryptoEngine_s;
-extern void					g_crypto_handler( int inCryptoDone, int inCRCDone );
-extern int					g_crypto_pre_exec( void *inAdapter );
-extern int					g_crypto_wait_done( void *inAdapter );
-extern void					rtl_crypto_irq_enable(
-								hal_crypto_adapter_t *	inAdapter,
-								void ( *inHandler )( int, int ) );
-
-static int	_AES_RTL_IRQ_PreExec( void *inAdapter )
-{
-	g_crypto_pre_exec( inAdapter );
-	while( rtw_down_timeout_sema( &gAESRTLCompletionSema, 0 ) == _TRUE ) {}
-	gAESRTLCompletionTimedOut = false;
-	return( 0 );
-}
-
-static int	_AES_RTL_IRQ_WaitDone( void *inAdapter )
-{
-	hal_crypto_adapter_t *	adapter;
-	int						err;
-
-	adapter = (hal_crypto_adapter_t *) inAdapter;
-	if( !adapter->isIntMode ) return( 0 );
-	if( rtw_down_timeout_sema( &gAESRTLCompletionSema, AES_UTILS_RTL_IRQ_TIMEOUT_MS ) == _TRUE )
-	{
-		return( 0 );
-	}
-
-	// A timeout is exceptional. Fall back to the ROM HAL's bounded poll so a
-	// late IRQ can still complete cache maintenance safely. If that also times
-	// out, the caller resets the engine before allowing later software fallback.
-
-	printf( "AES HW IRQ TIMEOUT: waited %lu ms; checking DMA completion\n",
-		(unsigned long) AES_UTILS_RTL_IRQ_TIMEOUT_MS );
-	err = g_crypto_wait_done( inAdapter );
-	if( err != 0 ) gAESRTLCompletionTimedOut = true;
-	return( err );
-}
-
-static void	_AES_RTL_IRQ_Handler( int inCryptoDone, int inCRCDone )
-{
-	// Preserve the HAL's completion/error bookkeeping. The semaphore is only a
-	// task notification; cache invalidation remains in the HAL after wait_done.
-
-	g_crypto_handler( inCryptoDone, inCRCDone );
-	if( inCryptoDone > 0 )
-	{
-		rtw_up_sema_from_isr( &gAESRTLCompletionSema );
-	}
-}
-
 static int	_AES_RTL_EnableIRQCompletion( void )
 {
-	if( !gAESRTLCompletionReady )
-	{
-		rtw_init_sema( &gAESRTLCompletionSema, 0 );
-		if( !gAESRTLCompletionSema ) return( -1 );
-		gAESRTLCompletionReady = true;
-		printf( "AES HW INIT: IRQ + semaphore completion enabled (timeout=%lu ms)\n",
-			(unsigned long) AES_UTILS_RTL_IRQ_TIMEOUT_MS );
-	}
-
-	// The adapter and IRQ callback are global to every RTL crypto algorithm.
-	// ChaCha or another client may have installed its completion bridge since
-	// the previous AES operation, so reclaim ownership for every transaction.
-	if( ( g_rtl_cryptoEngine_s.pre_exec_func != _AES_RTL_IRQ_PreExec ) ||
-		( g_rtl_cryptoEngine_s.wait_done_func != _AES_RTL_IRQ_WaitDone ) ||
-		!g_rtl_cryptoEngine_s.isIntMode )
-	{
-		g_rtl_cryptoEngine_s.pre_exec_func = _AES_RTL_IRQ_PreExec;
-		g_rtl_cryptoEngine_s.wait_done_func = _AES_RTL_IRQ_WaitDone;
-		rtl_crypto_irq_enable( &g_rtl_cryptoEngine_s, _AES_RTL_IRQ_Handler );
-	}
-	return( 0 );
+	return( carbox_crypto_irq_controller_enable() );
 }
 
 static void
@@ -253,7 +174,7 @@ static void
 {
 	if( gAESRTLHWState != -1 )
 	{
-		if( inResetEngine || gAESRTLCompletionTimedOut )
+		if( inResetEngine || carbox_crypto_irq_controller_last_timed_out() )
 		{
 			int		resetErr;
 
@@ -264,8 +185,7 @@ static void
 			resetErr = crypto_deinit();
 			printf( "AES HW RESET: reason=%s reset_err=%d\n", inReason, resetErr );
 			if( resetErr != 0 ) gAESRTLFallbackSafe = false;
-			gAESRTLCompletionTimedOut = false;
-			gAESRTLCompletionReady = false;
+			carbox_crypto_irq_controller_engine_reset();
 		}
 		if( gAESRTLFallbackSafe )
 		{

@@ -74,6 +74,20 @@ void chacha20_xor(
 #error "CARBOX_CHACHA_HW_SELFTEST must be 0 or 1"
 #endif
 
+/*
+ * Diagnostic-only ROM capability probe.  This bypasses the public RTL8195B
+ * combined ChaCha20-Poly1305 wrapper's msglen%16 rejection and compares the
+ * ROM-stub result against the portable implementation.  Production routing
+ * remains unchanged regardless of the result.
+ */
+#ifndef CARBOX_CHACHA_COMBINED_PARTIAL_SELFTEST
+#define CARBOX_CHACHA_COMBINED_PARTIAL_SELFTEST 0
+#endif
+#if (CARBOX_CHACHA_COMBINED_PARTIAL_SELFTEST != 0) && \
+    (CARBOX_CHACHA_COMBINED_PARTIAL_SELFTEST != 1)
+#error "CARBOX_CHACHA_COMBINED_PARTIAL_SELFTEST must be 0 or 1"
+#endif
+
 typedef struct {
   uint32_t chacha_key[8];
   uint32_t chacha_nonce[2];
@@ -150,6 +164,15 @@ int32_t chacha20_poly1305_decrypt_all_64x64(
   const void *ciphertext, size_t ciphertext_len,
   void *plaintext, const uint8_t tag[CHACHA20_POLY1305_TAG_BYTES]
 );
+
+#if CARBOX_CHACHA_COMBINED_PARTIAL_SELFTEST
+void chacha20_poly1305_reference_encrypt_all_64x64(
+  const uint8_t key[32], const uint8_t nonce[8],
+  const void *aad, size_t aad_len,
+  const void *plaintext, size_t plaintext_len,
+  void *ciphertext, uint8_t tag[CHACHA20_POLY1305_TAG_BYTES]
+);
+#endif
 
 #ifdef __cplusplus
 }

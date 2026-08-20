@@ -1024,6 +1024,18 @@ USBH_MAIN_TASK_PRIORITY ?= 6
 # Overnight UI-freeze diagnosis: trace the CarPlay screen RX, handover queue,
 # and TX stages in the existing 10-second profiler report.
 SCREEN_QUEUE_PROFILE ?= 0
+# Lightweight 30/60-fps latency probe.  It reuses the production handover and
+# lwIP-write wrappers and records counters/timestamps only; unlike the full
+# SCREEN_QUEUE_PROFILE it does not scan frames or retain histogram samples.
+SCREEN_FPS_PROFILE ?= 1
+# Keep the screen RX profiler aware of the selected backend.  In mode 2 the
+# decrypt/update API only queues record data and the hardware work is performed
+# by verify/finalize, so labelling the first phase as software throughput is
+# misleading.
+CHACHA_MODE ?= 2
+ifeq ($(SCREEN_QUEUE_PROFILE)$(SCREEN_FPS_PROFILE),11)
+$(error SCREEN_FPS_PROFILE and SCREEN_QUEUE_PROFILE are mutually exclusive)
+endif
 # Production switch for the temporary RX/TX investigation reports. Keep the
 # limiter, pacer, handover gate, and pressure feedback active when this is off.
 SCREEN_DATAPATH_PROFILE ?= 0
@@ -1181,7 +1193,7 @@ NET_QUEUE_PROFILE ?= 0
 # Make the RX/queue/TX diagnostic switches safe for incremental builds. These
 # options affect both the wrappers and lwIP internals, so changing one must
 # recompile every consumer instead of silently retaining yesterday's objects.
-SCREEN_FLOW_PROFILE_STAMP := $(OBJ_DIR)/.screen_flow_profile_q$(SCREEN_QUEUE_PROFILE)-dp$(SCREEN_DATAPATH_PROFILE)-fmt$(SCREEN_FRAME_FORMAT_PROFILE)-buf$(SCREEN_TCP_BUFFER_PROFILE)-block$(SCREEN_BLOCK_PROFILE)-screenusb$(SCREEN_USB_PROBE)-ack$(SCREEN_TCP_ACK_PROFILE)
+SCREEN_FLOW_PROFILE_STAMP := $(OBJ_DIR)/.screen_flow_profile_q$(SCREEN_QUEUE_PROFILE)-fps$(SCREEN_FPS_PROFILE)-dp$(SCREEN_DATAPATH_PROFILE)-fmt$(SCREEN_FRAME_FORMAT_PROFILE)-buf$(SCREEN_TCP_BUFFER_PROFILE)-block$(SCREEN_BLOCK_PROFILE)-screenusb$(SCREEN_USB_PROBE)-ack$(SCREEN_TCP_ACK_PROFILE)
 $(SCREEN_FLOW_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.screen_flow_profile_*
@@ -1191,12 +1203,16 @@ $(SCREEN_FLOW_PROFILE_STAMP):
 	../src/carbox/screen_rx_rate_limit.o \
 	../src/carbox/screen_tx_direct_crypto.o \
 	../src/carbox/video_handover_zero_copy.o \
+	../src/carbox/chacha_key_alias_fix.o \
+	../src/carbox/large_memcpy_gdma.o \
+	../src/carbox/ncm/ncm_tx.o \
 	../../../component/common/network/lwip/lwip_v2.1.2/src/api/sockets.o \
 	../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_in.o: \
 	$(SCREEN_FLOW_PROFILE_STAMP)
 # These switches affect several standalone profiler/wrapper objects.  Track
 # them explicitly so a diagnostic override cannot reuse release-mode objects.
-DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-platform$(PC_PROFILER_PLATFORM_REPORT)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)-touch$(TOUCH_PATH_PROFILE)-rxrec$(SCREEN_RX_RECORD_PROFILE)
+CRYPTO_ENGINE_PROFILE ?= 1
+DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-platform$(PC_PROFILER_PLATFORM_REPORT)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)-touch$(TOUCH_PATH_PROFILE)-rxrec$(SCREEN_RX_RECORD_PROFILE)-crypto$(CRYPTO_ENGINE_PROFILE)
 $(DIAGNOSTIC_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.diagnostic_profile_*
@@ -1205,6 +1221,7 @@ $(DIAGNOSTIC_PROFILE_STAMP):
 	../src/carbox/irq_profiler.o \
 	../src/carbox/usb_hcd_profiler.o \
 	../src/carbox/audio_decode_profiler.o \
+	../src/carbox/crypto_engine_profiler.o \
 	../src/carbox/touch_path_profiler.o \
 	../src/carbox/screen_rx_record_profiler.o \
 	../src/carbox/chacha_key_alias_fix.o \
@@ -1226,7 +1243,6 @@ TCPIP_RX_BATCH_MAX_PACKETS ?= 8
 TCPIP_RX_BATCH_TIMEOUT_US ?= 1000
 # Diagnostic counters/logs only; aggregation remains enabled when this is 0.
 TCPIP_RX_BATCH_PROFILE ?= 0
-CRYPTO_ENGINE_PROFILE ?= 0
 CARBOX_CRYPTO_OWNER_BOOST_PRIORITY ?= 11
 # Public clock selection.  Use only SYSTEM_CLOCK_PROFILE on normal builds;
 # SYS_PLL_OVERCLOCK and SYS_PLL_TARGET_HZ are derived implementation details.
@@ -1393,6 +1409,8 @@ GCCFLAGS += -DCONFIG_GCD_WORK_PRIORITY=$(GCD_WORK_PRIORITY)
 GCCFLAGS += -DCONFIG_USBH_ISR_TASK_PRIORITY=$(USBH_ISR_TASK_PRIORITY)
 GCCFLAGS += -DCONFIG_USBH_MAIN_TASK_PRIORITY=$(USBH_MAIN_TASK_PRIORITY)
 GCCFLAGS += -DCONFIG_SCREEN_QUEUE_PROFILE=$(SCREEN_QUEUE_PROFILE)
+GCCFLAGS += -DCONFIG_SCREEN_FPS_PROFILE=$(SCREEN_FPS_PROFILE)
+GCCFLAGS += -DCONFIG_CHACHA_MODE=$(CHACHA_MODE)
 GCCFLAGS += -DCONFIG_SCREEN_DATAPATH_PROFILE=$(SCREEN_DATAPATH_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT=$(SCREEN_RX_RATE_LIMIT_ACTIVE)
 GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_BPS=$(SCREEN_RX_RATE_LIMIT_BPS)
@@ -1558,6 +1576,9 @@ ifeq ($(VIDEO_HANDOVER_ZERO_COPY),1)
 ifeq ($(SCREEN_QUEUE_PROFILE),0)
 LFLAGS += -Wl,--wrap=AirPlayScreen_SendVideo
 LFLAGS += -Wl,--wrap=CVector_push_back
+ifeq ($(SCREEN_FPS_PROFILE),1)
+LFLAGS += -Wl,--wrap=CVector_erase
+endif
 endif
 endif
 LFLAGS += -Wl,--wrap=AES_CTR_Init -Wl,--wrap=AES_CTR_Update
@@ -1573,7 +1594,7 @@ endif
 ifeq ($(CHACHA_KEY_ALIAS_FIX),1)
 ifeq ($(CHACHA_API_TRACE)$(CHACHA_VENDOR_TRACE)$(CHACHA_PRE_RX_VENDOR),000)
 LFLAGS += -Wl,--wrap=chacha20_poly1305_init_64x64
-ifeq ($(SCREEN_RX_RECORD_PROFILE),1)
+ifneq ($(filter 1,$(SCREEN_RX_RECORD_PROFILE) $(SCREEN_FPS_PROFILE)),)
 LFLAGS += -Wl,--wrap=chacha20_poly1305_add_aad
 LFLAGS += -Wl,--wrap=chacha20_poly1305_decrypt
 endif
@@ -1766,15 +1787,18 @@ CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/li
 #   1 = software authoritative plus hardware verification
 #   2 = hardware only for RX and TX
 #   3 = screen RX software, TX hardware (reliability isolation build)
-CHACHA_MODE ?= 3
 CHACHA_HW_MIN_LEN ?= 4096
-CHACHA_STATS_INTERVAL_MS ?= 0
+CHACHA_STATS_INTERVAL_MS ?= 10000
 CHACHA_HW_SELFTEST ?= 0
+# Destructive ROM capability probe only.  It must never run on the first live
+# PairSetup/PairVerify crypto transaction: partial decrypt is rejected by ROM
+# and recovering the shared engine at that point can disrupt pairing.
+CHACHA_COMBINED_PARTIAL_SELFTEST ?= 0
 CHACHA_TRANSACTION_TRACE ?= 0
 # GNU Make does not normally treat command-line option changes as target
 # dependencies. Include every exposed archive-affecting ChaCha option in a
 # stamp so switching mode/config automatically rebuilds the derived archive.
-CARBOX_CHACHA_CONFIG_STAMP := $(CARBOX_CARPLAY_CHACHA_DIR)/build/.carbox_chacha_config_mode$(CHACHA_MODE)-min$(CHACHA_HW_MIN_LEN)-direct$(SCREEN_TX_DIRECT_CRYPTO)-stats$(CHACHA_STATS_INTERVAL_MS)-selftest$(CHACHA_HW_SELFTEST)-trace$(CHACHA_TRANSACTION_TRACE)-privverify$(CHACHA_PRIVATE_SW_VERIFY)-prio$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
+CARBOX_CHACHA_CONFIG_STAMP := $(CARBOX_CARPLAY_CHACHA_DIR)/build/.carbox_chacha_config_mode$(CHACHA_MODE)-min$(CHACHA_HW_MIN_LEN)-direct$(SCREEN_TX_DIRECT_CRYPTO)-stats$(CHACHA_STATS_INTERVAL_MS)-selftest$(CHACHA_HW_SELFTEST)-partialtest$(CHACHA_COMBINED_PARTIAL_SELFTEST)-trace$(CHACHA_TRANSACTION_TRACE)-privverify$(CHACHA_PRIVATE_SW_VERIFY)-prio$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
 CARBOX_VIDEO_HANDOVER_PATCH := $(CARBOX_SMART_CARPLAY_LIB_DIR)/patch_video_handover_archive.sh
 CARBOX_ACCESSORY2_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2.a
 CARBOX_ACCESSORY2_HANDOVER_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2_handover.a
@@ -1821,6 +1845,7 @@ $(CARBOX_CARPLAY_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 		SCREEN_TX_DIRECT_CRYPTO=$(SCREEN_TX_DIRECT_CRYPTO) \
 		CHACHA_STATS_INTERVAL_MS=$(CHACHA_STATS_INTERVAL_MS) \
 		CHACHA_HW_SELFTEST=$(CHACHA_HW_SELFTEST) \
+		CHACHA_COMBINED_PARTIAL_SELFTEST=$(CHACHA_COMBINED_PARTIAL_SELFTEST) \
 		CHACHA_TRANSACTION_TRACE=$(CHACHA_TRANSACTION_TRACE) \
 		CHACHA_PRIVATE_MEMORY=$(CHACHA_PRIVATE_SW_VERIFY) \
 		CRYPTO_OWNER_BOOST_PRIORITY=$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)

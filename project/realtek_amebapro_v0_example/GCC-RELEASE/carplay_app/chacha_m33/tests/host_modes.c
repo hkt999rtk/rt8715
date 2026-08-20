@@ -20,6 +20,7 @@ void mock_rtl_fail_chacha_on(unsigned int call_index);
 void mock_rtl_fail_poly1305_on(unsigned int call_index);
 void mock_rtl_fail_aad_snapshot_once(void);
 void mock_rtl_set_interrupt_context(unsigned int enabled);
+unsigned int mock_rtl_transaction_active(void);
 
 #if CARBOX_CHACHA_MODE != CARBOX_CHACHA_MODE_SOFTWARE_ONLY
 static size_t round_up_16(size_t value) {
@@ -550,6 +551,11 @@ int main(void) {
   if (!run_aad_snapshot_cases()) return 1;
   if (!run_failure_fallbacks()) return 1;
 #endif
+  if (mock_rtl_transaction_active()) {
+    fprintf(stderr, "mode %d left crypto transaction locked\n",
+            CARBOX_CHACHA_MODE);
+    return 1;
+  }
   printf("host ChaCha mode %d: PASS\n", CARBOX_CHACHA_MODE);
   return 0;
 }

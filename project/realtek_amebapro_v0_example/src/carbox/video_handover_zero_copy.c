@@ -35,12 +35,202 @@
 #define CONFIG_SCREEN_QUEUE_PROFILE 0
 #endif
 
+#ifndef CONFIG_SCREEN_FPS_PROFILE
+#define CONFIG_SCREEN_FPS_PROFILE 0
+#endif
+
 #if CONFIG_VIDEO_HANDOVER_ZERO_COPY
 
 #define VIDEO_HANDOVER_SOURCE_SLOTS 64U
 #define VIDEO_HANDOVER_ACTIVE_SLOTS  4U
 #define VIDEO_HANDOVER_REF_PRODUCER  1U
 #define VIDEO_HANDOVER_REF_CONSUMER  2U
+
+#if CONFIG_SCREEN_FPS_PROFILE
+#define SCREEN_FPS_QUEUE_TIMES 32U
+
+typedef struct screen_fps_stats_s {
+	uint32_t frames;
+	uint64_t bytes;
+	uint32_t interval_samples;
+	uint64_t interval_sum_us;
+	uint32_t interval_max_us;
+	uint32_t gap_over_20ms;
+	uint32_t gap_over_33ms;
+	uint32_t gap_over_50ms;
+	uint32_t gap_over_100ms;
+	uint64_t send_sum_us;
+	uint32_t send_max_us;
+	uint32_t send_over_16ms;
+	uint32_t send_over_33ms;
+	uint32_t pushes;
+	uint64_t push_sum_us;
+	uint32_t push_max_us;
+	uint32_t dequeues;
+	uint32_t queue_age_samples;
+	uint64_t queue_age_sum_us;
+	uint32_t queue_age_max_us;
+	uint32_t queue_age_over_16ms;
+	uint32_t queue_age_over_33ms;
+	uint32_t queue_depth_max;
+	uint32_t tracking_lost;
+} screen_fps_stats_t;
+
+static screen_fps_stats_t screen_fps_stats
+	__attribute__((section(".lpddr.bss.screen_fps_stats")));
+static TaskHandle_t screen_fps_active_task;
+static void *screen_fps_vector;
+static uint32_t screen_fps_active_arrival_us;
+static uint32_t screen_fps_last_arrival_us;
+static uint32_t screen_fps_queue_times[SCREEN_FPS_QUEUE_TIMES]
+	__attribute__((section(".lpddr.bss.screen_fps_queue_times")));
+static uint32_t screen_fps_queue_head;
+static uint32_t screen_fps_queue_count;
+static uint8_t screen_fps_have_arrival;
+
+static uint32_t screen_fps_begin(int bytes)
+{
+	TaskHandle_t task = xTaskGetCurrentTaskHandle();
+	uint32_t now_us = hal_read_curtime_us();
+	uint32_t delta_us = 0U;
+
+	taskENTER_CRITICAL();
+	if (screen_fps_have_arrival) {
+		delta_us = now_us - screen_fps_last_arrival_us;
+		screen_fps_stats.interval_samples++;
+		screen_fps_stats.interval_sum_us += delta_us;
+		if (delta_us > screen_fps_stats.interval_max_us) {
+			screen_fps_stats.interval_max_us = delta_us;
+		}
+		screen_fps_stats.gap_over_20ms += delta_us > 20000U;
+		screen_fps_stats.gap_over_33ms += delta_us > 33333U;
+		screen_fps_stats.gap_over_50ms += delta_us > 50000U;
+		screen_fps_stats.gap_over_100ms += delta_us > 100000U;
+	}
+	screen_fps_last_arrival_us = now_us;
+	screen_fps_have_arrival = 1U;
+	screen_fps_stats.frames++;
+	if (bytes > 0) {
+		screen_fps_stats.bytes += (uint32_t)bytes;
+	}
+	screen_fps_active_task = task;
+	screen_fps_active_arrival_us = now_us;
+	taskEXIT_CRITICAL();
+	return now_us;
+}
+
+static void screen_fps_end(uint32_t start_us)
+{
+	TaskHandle_t task = xTaskGetCurrentTaskHandle();
+	uint32_t elapsed_us = hal_read_curtime_us() - start_us;
+
+	taskENTER_CRITICAL();
+	screen_fps_stats.send_sum_us += elapsed_us;
+	if (elapsed_us > screen_fps_stats.send_max_us) {
+		screen_fps_stats.send_max_us = elapsed_us;
+	}
+	screen_fps_stats.send_over_16ms += elapsed_us > 16667U;
+	screen_fps_stats.send_over_33ms += elapsed_us > 33333U;
+	if (screen_fps_active_task == task) {
+		screen_fps_active_task = NULL;
+		screen_fps_active_arrival_us = 0U;
+	}
+	taskEXIT_CRITICAL();
+}
+
+static int screen_fps_push_begin(void *vector, int element_size,
+				 uint32_t *arrival_us)
+{
+	TaskHandle_t task = xTaskGetCurrentTaskHandle();
+	int measured = 0;
+
+	taskENTER_CRITICAL();
+	if ((screen_fps_active_task == task) &&
+	    (element_size == (int)(sizeof(void *) + sizeof(int)))) {
+		if (screen_fps_vector == NULL) {
+			screen_fps_vector = vector;
+		}
+		if (screen_fps_vector == vector) {
+			*arrival_us = screen_fps_active_arrival_us;
+			measured = 1;
+		}
+	}
+	taskEXIT_CRITICAL();
+	return measured;
+}
+
+static void screen_fps_push_end(uint32_t start_us, uint32_t arrival_us,
+				int pushed, uint32_t depth)
+{
+	uint32_t elapsed_us = hal_read_curtime_us() - start_us;
+
+	taskENTER_CRITICAL();
+	if (pushed) {
+		screen_fps_stats.pushes++;
+		screen_fps_stats.push_sum_us += elapsed_us;
+		if (elapsed_us > screen_fps_stats.push_max_us) {
+			screen_fps_stats.push_max_us = elapsed_us;
+		}
+		if (depth > screen_fps_stats.queue_depth_max) {
+			screen_fps_stats.queue_depth_max = depth;
+		}
+		if (screen_fps_queue_count < SCREEN_FPS_QUEUE_TIMES) {
+			uint32_t tail = (screen_fps_queue_head +
+				screen_fps_queue_count) % SCREEN_FPS_QUEUE_TIMES;
+
+			screen_fps_queue_times[tail] = arrival_us;
+			screen_fps_queue_count++;
+		} else {
+			screen_fps_stats.tracking_lost++;
+		}
+	}
+	taskEXIT_CRITICAL();
+}
+
+static int screen_fps_erase_begin(void *vector, int index,
+				  uint32_t *arrival_us)
+{
+	int measured = 0;
+
+	taskENTER_CRITICAL();
+	if ((vector == screen_fps_vector) && (index == 0)) {
+		measured = 1;
+		if (screen_fps_queue_count != 0U) {
+			*arrival_us = screen_fps_queue_times[screen_fps_queue_head];
+			screen_fps_queue_head = (screen_fps_queue_head + 1U) %
+				SCREEN_FPS_QUEUE_TIMES;
+			screen_fps_queue_count--;
+		} else {
+			*arrival_us = 0U;
+			screen_fps_stats.tracking_lost++;
+		}
+	}
+	taskEXIT_CRITICAL();
+	return measured;
+}
+
+static void screen_fps_erase_end(uint32_t arrival_us, uint32_t depth)
+{
+	uint32_t age_us = arrival_us != 0U ?
+		hal_read_curtime_us() - arrival_us : 0U;
+
+	taskENTER_CRITICAL();
+	screen_fps_stats.dequeues++;
+	if (arrival_us != 0U) {
+		screen_fps_stats.queue_age_samples++;
+		screen_fps_stats.queue_age_sum_us += age_us;
+		if (age_us > screen_fps_stats.queue_age_max_us) {
+			screen_fps_stats.queue_age_max_us = age_us;
+		}
+		screen_fps_stats.queue_age_over_16ms += age_us > 16667U;
+		screen_fps_stats.queue_age_over_33ms += age_us > 33333U;
+	}
+	if (depth > screen_fps_stats.queue_depth_max) {
+		screen_fps_stats.queue_depth_max = depth;
+	}
+	taskEXIT_CRITICAL();
+}
+#endif
 
 typedef enum video_handover_state_e {
 	VIDEO_HANDOVER_EMPTY = 0,
@@ -106,7 +296,8 @@ static video_handover_owner_t video_handover_owners[
 static video_handover_active_t video_handover_active[
 	VIDEO_HANDOVER_ACTIVE_SLOTS];
 static video_handover_stats_t video_handover_stats;
-static video_handover_gate_stats_t video_handover_gate_stats;
+static video_handover_gate_stats_t video_handover_gate_stats
+	__attribute__((section(".lpddr.bss.video_handover_gate_stats")));
 static uint32_t video_handover_sequence;
 static uint8_t video_handover_enabled = 1U;
 static uint8_t video_handover_first_commit_logged;
@@ -239,7 +430,13 @@ void carbox_video_handover_gate(const void *source, int frame_length)
 
 void *carbox_video_handover_source_malloc(size_t length)
 {
-	void *pointer = malloc(length);
+	/*
+	 * The source may later become the zero-copy plaintext input of RTL8195B's
+	 * combined ChaCha DMA. The ROM accepts the logical partial length but may
+	 * fetch through ROUND_UP(length, 16), so retain the logical allocation
+	 * metadata while providing 15 bytes of physically readable tail padding.
+	 */
+	void *pointer = length <= SIZE_MAX - 15U ? malloc(length + 15U) : NULL;
 	TaskHandle_t task;
 	uint32_t i;
 
@@ -321,7 +518,25 @@ void *carbox_video_handover_destination_malloc(size_t length)
 {
 	TaskHandle_t task = xTaskGetCurrentTaskHandle();
 	video_handover_active_t *active;
-	void *result = malloc(length);
+	void *result;
+
+	/*
+	 * AirPlayScreen.o is a closed customer object. Disassembly of
+	 * AirPlayScreen_SendScreenNormalFrame() shows this exact layout:
+	 *
+	 *     malloc(payload_length + 16-byte tag + 128-byte header)
+	 *     ciphertext = allocation + 128
+	 *     chacha20_poly1305_encrypt(..., payload_length, ciphertext)
+	 *
+	 * RTL8195B's ROM combined ChaCha20-Poly1305 encrypt accepts the logical
+	 * non-16-byte length, but DMA writes through ROUND_UP(length, 16). The tag
+	 * area already provides 16 writable bytes after ciphertext; add a further
+	 * 15-byte physical guard to make the closed-object contract explicit and
+	 * keep the same rule as the zero-copy source allocation. Retain the
+	 * customer's original logical length everywhere else.
+	 * free() remains ABI-compatible because the returned pointer is unchanged.
+	 */
+	result = length <= SIZE_MAX - 15U ? malloc(length + 15U) : NULL;
 
 	taskENTER_CRITICAL();
 	active = video_handover_find_active_locked(task);
@@ -708,6 +923,9 @@ void carbox_video_handover_gate_report(uint32_t sequence)
 #if !CONFIG_SCREEN_QUEUE_PROFILE
 extern void __real_AirPlayScreen_SendVideo(const void *data, int bytes);
 extern void __real_CVector_push_back(void *vector, const void *element);
+#if CONFIG_SCREEN_FPS_PROFILE
+extern void __real_CVector_erase(void *vector, int index);
+#endif
 
 /* Minimal closed CVector views required by the production handover hook.
  * Profiling builds use screen_queue_profiler.c's richer wrapper instead. */
@@ -725,11 +943,17 @@ typedef struct video_handover_frame_item_s {
 
 void __wrap_AirPlayScreen_SendVideo(const void *data, int bytes)
 {
+#if CONFIG_SCREEN_FPS_PROFILE
+	uint32_t start_us = screen_fps_begin(bytes);
+#endif
 	carbox_screen_rx_record_send_video(data, bytes);
 	carbox_video_handover_gate(data, bytes);
 	carbox_video_handover_begin(data, bytes);
 	__real_AirPlayScreen_SendVideo(data, bytes);
 	carbox_video_handover_end();
+#if CONFIG_SCREEN_FPS_PROFILE
+	screen_fps_end(start_us);
+#endif
 }
 
 void __wrap_CVector_push_back(void *vector, const void *element)
@@ -740,6 +964,11 @@ void __wrap_CVector_push_back(void *vector, const void *element)
 	video_handover_frame_item_t replacement;
 	int size_before = 0;
 	int prepared = 0;
+#if CONFIG_SCREEN_FPS_PROFILE
+	uint32_t profile_start_us = 0U;
+	uint32_t profile_arrival_us = 0U;
+	int profile_measured = 0;
+#endif
 
 	/* prepare_push() also validates the active task, exact temporary pointer
 	 * and exact frame length.  The element-size check prevents interpreting an
@@ -751,6 +980,11 @@ void __wrap_CVector_push_back(void *vector, const void *element)
 		size_before = view->size;
 		prepared = carbox_video_handover_prepare_push(original.data,
 			original.bytes, &replacement.data);
+#if CONFIG_SCREEN_FPS_PROFILE
+		profile_start_us = hal_read_curtime_us();
+		profile_measured = screen_fps_push_begin(vector,
+			view->element_size, &profile_arrival_us);
+#endif
 	}
 
 	__real_CVector_push_back(vector,
@@ -760,8 +994,96 @@ void __wrap_CVector_push_back(void *vector, const void *element)
 
 		carbox_video_handover_finish_push(original.data, pushed);
 	}
+#if CONFIG_SCREEN_FPS_PROFILE
+	if (profile_measured) {
+		screen_fps_push_end(profile_start_us, profile_arrival_us,
+			view->size == size_before + 1,
+			view->size > 0 ? (uint32_t)view->size : 0U);
+	}
+#endif
+}
+
+#if CONFIG_SCREEN_FPS_PROFILE
+void __wrap_CVector_erase(void *vector, int index)
+{
+	video_handover_vector_view_t *view =
+		(video_handover_vector_view_t *)vector;
+	uint32_t arrival_us = 0U;
+	int valid = (view != NULL) && (view->size > 0);
+	int measured = valid ?
+		screen_fps_erase_begin(vector, index, &arrival_us) : 0;
+
+	__real_CVector_erase(vector, index);
+	if (measured) {
+		screen_fps_erase_end(arrival_us,
+			view->size > 0 ? (uint32_t)view->size : 0U);
+	}
 }
 #endif
+#endif
+
+void carbox_screen_fps_report(uint32_t sequence)
+{
+#if CONFIG_SCREEN_FPS_PROFILE
+	screen_fps_stats_t stats;
+	uint32_t queue_depth;
+	uint32_t fps_x100;
+	uint32_t rate_kbps;
+
+	taskENTER_CRITICAL();
+	stats = screen_fps_stats;
+	screen_fps_stats = (screen_fps_stats_t){ 0 };
+	queue_depth = screen_fps_queue_count;
+	taskEXIT_CRITICAL();
+	if (stats.frames == 0U) {
+		return;
+	}
+	/* The caller is the existing 10-second PC profiler window. */
+	fps_x100 = stats.frames * 10U;
+	rate_kbps = (uint32_t)(stats.bytes / 1250U);
+	rt_printf("[SCREENFPS][%lu] rx frames/bytes/fps/kbps=%lu/%llu/%lu.%02lu/%lu "
+		  "interval_us avg/max=%llu/%lu gaps >20/33/50/100ms=%lu/%lu/%lu/%lu "
+		  "send_us avg/max=%llu/%lu over16/33ms=%lu/%lu\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)stats.frames,
+		  (unsigned long long)stats.bytes,
+		  (unsigned long)(fps_x100 / 100U),
+		  (unsigned long)(fps_x100 % 100U),
+		  (unsigned long)rate_kbps,
+		  (unsigned long long)(stats.interval_samples != 0U ?
+			stats.interval_sum_us / stats.interval_samples : 0U),
+		  (unsigned long)stats.interval_max_us,
+		  (unsigned long)stats.gap_over_20ms,
+		  (unsigned long)stats.gap_over_33ms,
+		  (unsigned long)stats.gap_over_50ms,
+		  (unsigned long)stats.gap_over_100ms,
+		  (unsigned long long)(stats.frames != 0U ?
+			stats.send_sum_us / stats.frames : 0U),
+		  (unsigned long)stats.send_max_us,
+		  (unsigned long)stats.send_over_16ms,
+		  (unsigned long)stats.send_over_33ms);
+	rt_printf("[SCREENFPS][%lu] queue enq/deq=%lu/%lu depth now/max=%lu/%lu "
+		  "age_us samples/avg/max=%lu/%llu/%lu over16/33ms=%lu/%lu "
+		  "push_us avg/max=%llu/%lu tracking_lost=%lu\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)stats.pushes,
+		  (unsigned long)stats.dequeues,
+		  (unsigned long)queue_depth,
+		  (unsigned long)stats.queue_depth_max,
+		  (unsigned long)stats.queue_age_samples,
+		  (unsigned long long)(stats.queue_age_samples != 0U ?
+			stats.queue_age_sum_us / stats.queue_age_samples : 0U),
+		  (unsigned long)stats.queue_age_max_us,
+		  (unsigned long)stats.queue_age_over_16ms,
+		  (unsigned long)stats.queue_age_over_33ms,
+		  (unsigned long long)(stats.pushes != 0U ?
+			stats.push_sum_us / stats.pushes : 0U),
+		  (unsigned long)stats.push_max_us,
+		  (unsigned long)stats.tracking_lost);
+#else
+	(void)sequence;
+#endif
+}
 
 #else
 
@@ -814,5 +1136,6 @@ void carbox_video_handover_finish_push(void *temporary, int pushed)
 }
 void carbox_video_handover_report(uint32_t sequence) { (void)sequence; }
 void carbox_video_handover_gate_report(uint32_t sequence) { (void)sequence; }
+void carbox_screen_fps_report(uint32_t sequence) { (void)sequence; }
 
 #endif

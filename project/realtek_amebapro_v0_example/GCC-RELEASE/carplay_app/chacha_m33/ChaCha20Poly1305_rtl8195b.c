@@ -14,25 +14,25 @@
 #include "device_lock.h"
 #include "osdep_service.h"
 #include "crypto_priority_lock.h"
-
-#ifndef CARBOX_CHACHA_HW_IRQ_TIMEOUT_MS
-#define CARBOX_CHACHA_HW_IRQ_TIMEOUT_MS 1000u
-#endif
+#include "crypto_engine_profiler.h"
 
 #define CHACHA_RTL_MAX_MESSAGE 65536u
 #define CHACHA_RTL_MAX_AAD       496u
 
 extern hal_crypto_adapter_t g_rtl_cryptoEngine_s;
-extern void g_crypto_handler(int crypto_done, int crc_done);
-extern int g_crypto_pre_exec(void *adapter);
-extern int g_crypto_wait_done(void *adapter);
-extern void rtl_crypto_irq_enable(
-  hal_crypto_adapter_t *adapter, void (*handler)(int, int)
-);
 extern int rtw_in_interrupt(void);
 
-static _sema g_chacha_completion_sema;
-static int g_chacha_completion_ready;
+extern hal_crypto_func_stubs_t hal_crypto_stubs_s;
+
+typedef char chacha_combined_encrypt_stub_offset_must_match_rom[
+  (offsetof(hal_crypto_func_stubs_t, rtl_crypto_chacha_poly1305_encrypt) ==
+   0x13cu) ? 1 : -1
+];
+typedef char chacha_combined_decrypt_stub_offset_must_match_rom[
+  (offsetof(hal_crypto_func_stubs_t, rtl_crypto_chacha_poly1305_decrypt) ==
+   0x140u) ? 1 : -1
+];
+
 static int g_chacha_hw_state;
 static uint8_t g_chacha_hw_key[32] __attribute__((aligned(32)));
 static uint8_t g_chacha_hw_nonce[32] __attribute__((aligned(32)));
@@ -43,6 +43,58 @@ static uint8_t g_chacha_hw_tag[32] __attribute__((aligned(32)));
 static int g_chacha_hw_selftest_started;
 static int chacha_rtl_selftest_locked(void);
 #endif
+
+#if CARBOX_CHACHA_COMBINED_PARTIAL_SELFTEST
+static int g_chacha_partial_selftest_started;
+static void chacha_rtl_partial_selftest_locked(void);
+
+typedef struct {
+  volatile uint32_t state; /* 0=not run, 1=running, 2=pass, 3=fail */
+  volatile uint32_t cases;
+  volatile uint32_t passed;
+  volatile uint32_t api_errors;
+  volatile uint32_t mismatches;
+  volatile uint32_t guard_errors;
+  volatile uint32_t rounded_tail_write_cases;
+  volatile uint32_t rounded_tail_bytes_changed;
+  volatile uint32_t rounded_tail_max_changed;
+  volatile uint32_t encrypt_ok;
+  volatile uint32_t decrypt_ok;
+  volatile uint32_t last_len;
+  volatile uint32_t last_layout;
+  volatile uint32_t last_stage;
+  volatile int32_t last_error;
+  uintptr_t encrypt_stub;
+  uintptr_t decrypt_stub;
+} chacha_partial_selftest_stats_t;
+
+static chacha_partial_selftest_stats_t g_chacha_partial_selftest;
+#endif
+
+void chacha_rtl8195b_partial_selftest_report(unsigned window_index) {
+#if CARBOX_CHACHA_COMBINED_PARTIAL_SELFTEST
+  const chacha_partial_selftest_stats_t *s = &g_chacha_partial_selftest;
+  printf(
+    "[CHACHAPARTIAL][%u] state=%lu cases/pass=%lu/%lu "
+    "enc/dec_ok=%lu/%lu api_error/mismatch/guard=%lu/%lu/%lu "
+    "rounded_tail cases/bytes/max=%lu/%lu/%lu "
+    "last len/layout/stage/error=%lu/%lu/%lu/%ld "
+    "stub enc/dec=%08lx/%08lx production_route=unchanged\n",
+    window_index, (unsigned long)s->state, (unsigned long)s->cases,
+    (unsigned long)s->passed, (unsigned long)s->encrypt_ok,
+    (unsigned long)s->decrypt_ok, (unsigned long)s->api_errors,
+    (unsigned long)s->mismatches, (unsigned long)s->guard_errors,
+    (unsigned long)s->rounded_tail_write_cases,
+    (unsigned long)s->rounded_tail_bytes_changed,
+    (unsigned long)s->rounded_tail_max_changed,
+    (unsigned long)s->last_len, (unsigned long)s->last_layout,
+    (unsigned long)s->last_stage, (long)s->last_error,
+    (unsigned long)s->encrypt_stub, (unsigned long)s->decrypt_stub
+  );
+#else
+  (void)window_index;
+#endif
+}
 
 /*
  * The public streaming encrypt API cannot report a DMA-quiesce failure.
@@ -68,43 +120,7 @@ static void chacha_rtl_clear_key_material(void) {
   for (i = 0; i < sizeof(g_chacha_hw_tag); ++i) p[i] = 0u;
 }
 
-static int chacha_rtl_irq_pre_exec(void *adapter) {
-  g_crypto_pre_exec(adapter);
-  while (rtw_down_timeout_sema(&g_chacha_completion_sema, 0) == _TRUE) {}
-  return 0;
-}
-
-static int chacha_rtl_irq_wait_done(void *adapter) {
-  hal_crypto_adapter_t *rtl_adapter = (hal_crypto_adapter_t *)adapter;
-  int result;
-
-  if (!rtl_adapter->isIntMode) return 0;
-  if (rtw_down_timeout_sema(
-        &g_chacha_completion_sema, CARBOX_CHACHA_HW_IRQ_TIMEOUT_MS
-      ) == _TRUE) {
-    return 0;
-  }
-
-  printf(
-    "[CHACHA][HW] IRQ timeout after %lu ms; checking DMA completion\n",
-    (unsigned long)CARBOX_CHACHA_HW_IRQ_TIMEOUT_MS
-  );
-  result = g_crypto_wait_done(adapter);
-  return result;
-}
-
-static void chacha_rtl_irq_handler(int crypto_done, int crc_done) {
-  g_crypto_handler(crypto_done, crc_done);
-  if (crypto_done > 0) {
-    rtw_up_sema_from_isr(&g_chacha_completion_sema);
-  }
-}
-
-/*
- * RT_DEV_LOCK_CRYPTO must be held. AES and ChaCha may install different
- * semaphore instances, but both callback sets are generic for every RTL crypto
- * operation. Reinstall this set before each ChaCha transaction.
- */
+/* RT_DEV_LOCK_CRYPTO must be held. */
 static int chacha_rtl_prepare_locked(void) {
   int result;
 
@@ -119,23 +135,20 @@ static int chacha_rtl_prepare_locked(void) {
     }
   }
 
-  if (!g_chacha_completion_ready) {
-    rtw_init_sema(&g_chacha_completion_sema, 0);
-    if (!g_chacha_completion_sema) {
-      g_chacha_hw_state = -1;
-      printf("[CHACHA][HW] completion semaphore init failed\n");
-      return CHACHA_RTL_ERROR_INIT;
-    }
-    g_chacha_completion_ready = 1;
+  result = carbox_crypto_irq_controller_enable();
+  if (result != 0) {
+    g_chacha_hw_state = -1;
+    printf("[CHACHA][HW] unified IRQ controller init failed\n");
+    return CHACHA_RTL_ERROR_INIT;
   }
 
-  if ((g_rtl_cryptoEngine_s.pre_exec_func != chacha_rtl_irq_pre_exec) ||
-      (g_rtl_cryptoEngine_s.wait_done_func != chacha_rtl_irq_wait_done) ||
-      !g_rtl_cryptoEngine_s.isIntMode) {
-    g_rtl_cryptoEngine_s.pre_exec_func = chacha_rtl_irq_pre_exec;
-    g_rtl_cryptoEngine_s.wait_done_func = chacha_rtl_irq_wait_done;
-    rtl_crypto_irq_enable(&g_rtl_cryptoEngine_s, chacha_rtl_irq_handler);
+#if CARBOX_CHACHA_COMBINED_PARTIAL_SELFTEST
+  if (!g_chacha_partial_selftest_started) {
+    g_chacha_partial_selftest_started = 1;
+    chacha_rtl_partial_selftest_locked();
+    if (g_chacha_hw_state < 0) return CHACHA_RTL_ERROR_INIT;
   }
+#endif
 
 #if CARBOX_CHACHA_HW_SELFTEST
   if (!g_chacha_hw_selftest_started) {
@@ -148,9 +161,8 @@ static int chacha_rtl_prepare_locked(void) {
   if (g_chacha_hw_state == 0) {
     g_chacha_hw_state = 1;
     printf(
-      "[CHACHA][HW] RTL8195B IRQ + semaphore backend initialized "
-      "(not board-validated, timeout=%lu ms)\n",
-      (unsigned long)CARBOX_CHACHA_HW_IRQ_TIMEOUT_MS
+      "[CHACHA][HW] RTL8195B unified IRQ backend initialized "
+      "(not board-validated)\n"
     );
   }
   return CHACHA_RTL_OK;
@@ -165,6 +177,8 @@ static int chacha_rtl_prepare_locked(void) {
 static int chacha_rtl_recover_locked(int dma_may_be_active) {
   int deinit_result = rtl_cryptoEngine_deinit();
   int init_result = -1;
+
+  carbox_crypto_irq_controller_engine_reset();
 
   if (deinit_result != 0) {
     g_chacha_hw_state = -1;
@@ -185,10 +199,12 @@ static int chacha_rtl_recover_locked(int dma_may_be_active) {
   init_result = rtl_cryptoEngine_init();
   if (init_result == 0) {
     g_chacha_hw_state = 0;
-    g_rtl_cryptoEngine_s.pre_exec_func = chacha_rtl_irq_pre_exec;
-    g_rtl_cryptoEngine_s.wait_done_func = chacha_rtl_irq_wait_done;
-    rtl_crypto_irq_enable(&g_rtl_cryptoEngine_s, chacha_rtl_irq_handler);
-    printf("[CHACHA][HW] engine recovered after operation failure\n");
+    if (carbox_crypto_irq_controller_enable() == 0) {
+      printf("[CHACHA][HW] engine recovered after operation failure\n");
+    } else {
+      g_chacha_hw_state = -1;
+      init_result = -1;
+    }
   } else {
     g_chacha_hw_state = -1;
     printf(
@@ -246,6 +262,312 @@ static void chacha_rtl_stage_parameters(
   memcpy(g_chacha_hw_nonce + 4, nonce, 8);
   if (aad_len != 0u) memcpy(g_chacha_hw_aad, aad, aad_len);
 }
+
+#if CARBOX_CHACHA_COMBINED_PARTIAL_SELFTEST
+
+#define CHACHA_PARTIAL_GUARD_SIZE 32u
+
+static int chacha_partial_equal(
+  const uint8_t *a, const uint8_t *b, size_t len
+) {
+  size_t i;
+  uint8_t diff = 0u;
+  for (i = 0u; i < len; ++i) diff |= (uint8_t)(a[i] ^ b[i]);
+  return diff == 0u;
+}
+
+static int chacha_partial_guard_ok(
+  const uint8_t *data, size_t len, uint8_t value
+) {
+  size_t i;
+  for (i = 0u; i < len; ++i) {
+    if (data[i] != value) return 0;
+  }
+  return 1;
+}
+
+static void chacha_partial_fill(uint8_t *data, size_t len, uint8_t seed) {
+  size_t i;
+  uint32_t state = 0x9e3779b9u ^ seed;
+  for (i = 0u; i < len; ++i) {
+    state = state * 1664525u + 1013904223u;
+    data[i] = (uint8_t)(state >> 24);
+  }
+}
+
+static void chacha_partial_record_tail_change(
+  const uint8_t *before, const uint8_t *after, size_t len
+) {
+  chacha_partial_selftest_stats_t *s = &g_chacha_partial_selftest;
+  size_t i;
+  uint32_t changed = 0u;
+  for (i = 0u; i < len; ++i) {
+    if (before[i] != after[i]) ++changed;
+  }
+  if (changed != 0u) {
+    ++s->rounded_tail_write_cases;
+    s->rounded_tail_bytes_changed += changed;
+    if (changed > s->rounded_tail_max_changed) {
+      s->rounded_tail_max_changed = changed;
+    }
+  }
+}
+
+static int chacha_partial_direct_operation(
+  int decrypt, const uint8_t *input, size_t len, uint8_t *output,
+  uint8_t tag[16]
+) {
+  int result = rtl_crypto_chacha_poly1305_init(g_chacha_hw_key);
+  if (result != 0) return result;
+
+  /*
+   * Reverse-engineering note (RTL8195B ROM):
+   *
+   * The public rtl_crypto_chacha_poly1305_{encrypt,decrypt} functions in
+   * lib_soc_is.a reject (msglen & 15) before entering ROM.  Disassembly of
+   * hal_crypto_s.o shows that, after this policy check, they tail-call these
+   * exact members of hal_crypto_stubs_s (offsets 0x13c and 0x140).  Calling
+   * the members directly therefore bypasses only the public alignment guard;
+   * key setup, descriptors, DMA, and the unified IRQ completion path remain
+   * the vendor implementation.
+   *
+   * Board probing established an asymmetric result.  Partial ENCRYPT consumes
+   * the original logical len and produces the correct ciphertext/tag, but its
+   * destination is written through ROUND_UP(len, 16).  Partial DECRYPT is
+   * rejected by the ROM stub with -14.  Therefore this bypass is currently an
+   * encrypt-only capability; it must not be used for the RX/decrypt route.
+   *
+   * Every encrypt caller must provide at least ROUND_UP(len, 16) writable
+   * destination capacity.  Never pass the rounded length to ROM: doing so
+   * changes the AEAD record length and therefore its authentication tag.  This
+   * probe is deliberately disabled in normal builds because recovering the
+   * shared crypto engine after an experimental failure during PairSetup can
+   * disrupt pairing.
+   */
+  if (decrypt) {
+    result = hal_crypto_stubs_s.rtl_crypto_chacha_poly1305_decrypt(
+      input, (uint32_t)len, g_chacha_hw_nonce,
+      g_chacha_hw_aad, 2u, output, g_chacha_hw_tag
+    );
+  } else {
+    result = hal_crypto_stubs_s.rtl_crypto_chacha_poly1305_encrypt(
+      input, (uint32_t)len, g_chacha_hw_nonce,
+      g_chacha_hw_aad, 2u, output, g_chacha_hw_tag
+    );
+  }
+  if (result == 0) memcpy(tag, g_chacha_hw_tag, 16u);
+  return result;
+}
+
+/* RT_DEV_LOCK_CRYPTO is held and the unified IRQ controller is installed. */
+static void chacha_rtl_partial_selftest_locked(void) {
+  static const size_t lengths[] = {
+    1u, 15u, 17u, 31u, 33u, 4095u, 4097u, 65535u
+  };
+  static const uint8_t key[32] = {
+    0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
+    0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f,
+    0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
+    0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f
+  };
+  static const uint8_t nonce[8] = {
+    0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27
+  };
+  static const uint8_t aad[2] = {0x50, 0x51};
+  const size_t max_len = 65535u;
+  const size_t max_rounded_len = (max_len + 15u) & ~(size_t)15u;
+  const size_t arena_len =
+    max_rounded_len + 2u * CHACHA_PARTIAL_GUARD_SIZE;
+  chacha_partial_selftest_stats_t *s = &g_chacha_partial_selftest;
+  uint8_t *plain_raw = NULL;
+  uint8_t *reference_raw = NULL;
+  uint8_t *work_raw = NULL;
+  uint8_t *decrypt_raw = NULL;
+  uint8_t *plain;
+  uint8_t *reference;
+  uint8_t *work_arena;
+  uint8_t *decrypt_arena;
+  uint8_t reference_tag[16];
+  uint8_t hardware_tag[16];
+  uint8_t tail_before[16];
+  size_t li;
+  unsigned layout;
+
+  memset(s, 0, sizeof(*s));
+  s->state = 1u;
+  s->encrypt_stub = (uintptr_t)
+    hal_crypto_stubs_s.rtl_crypto_chacha_poly1305_encrypt;
+  s->decrypt_stub = (uintptr_t)
+    hal_crypto_stubs_s.rtl_crypto_chacha_poly1305_decrypt;
+
+  plain_raw = (uint8_t *)malloc(max_rounded_len + 31u);
+  reference_raw = (uint8_t *)malloc(max_rounded_len + 31u);
+  work_raw = (uint8_t *)malloc(arena_len + 31u);
+  decrypt_raw = (uint8_t *)malloc(arena_len + 31u);
+  if (!plain_raw || !reference_raw || !work_raw || !decrypt_raw) {
+    s->api_errors = 1u;
+    s->last_error = -1001;
+    s->state = 3u;
+    goto cleanup;
+  }
+
+  plain = (uint8_t *)(((uintptr_t)plain_raw + 31u) & ~(uintptr_t)31u);
+  reference =
+    (uint8_t *)(((uintptr_t)reference_raw + 31u) & ~(uintptr_t)31u);
+  work_arena =
+    (uint8_t *)(((uintptr_t)work_raw + 31u) & ~(uintptr_t)31u);
+  decrypt_arena =
+    (uint8_t *)(((uintptr_t)decrypt_raw + 31u) & ~(uintptr_t)31u);
+  chacha_partial_fill(plain, max_rounded_len, 0x71u);
+
+  for (li = 0u; li < sizeof(lengths) / sizeof(lengths[0]); ++li) {
+    const size_t len = lengths[li];
+    const size_t rounded_len = (len + 15u) & ~(size_t)15u;
+    const size_t tail_len = rounded_len - len;
+
+    chacha20_poly1305_reference_encrypt_all_64x64(
+      key, nonce, aad, sizeof(aad), plain, len, reference, reference_tag
+    );
+
+    for (layout = 0u; layout < 2u; ++layout) {
+      uint8_t *work = work_arena + CHACHA_PARTIAL_GUARD_SIZE;
+      uint8_t *decrypted =
+        decrypt_arena + CHACHA_PARTIAL_GUARD_SIZE;
+      const uint8_t *encrypt_input;
+      uint8_t *encrypt_output;
+      const uint8_t *decrypt_input;
+      uint8_t *decrypt_output;
+      int result;
+      int guards_ok;
+
+      ++s->cases;
+      s->last_len = (uint32_t)len;
+      s->last_layout = layout; /* 0=out-of-place, 1=in-place */
+      memset(work_arena, 0xa5, arena_len);
+      memset(decrypt_arena, 0x5a, arena_len);
+      if (layout != 0u) memcpy(work, plain, len);
+      encrypt_input = (layout != 0u) ? work : plain;
+      encrypt_output = work;
+      if (tail_len != 0u) memcpy(tail_before, work + len, tail_len);
+
+      chacha_rtl_stage_parameters(key, nonce, aad, sizeof(aad));
+      s->last_stage = 1u; /* direct ROM encrypt */
+      result = chacha_partial_direct_operation(
+        0, encrypt_input, len, encrypt_output, hardware_tag
+      );
+      s->last_error = result;
+      if (result != 0) {
+        ++s->api_errors;
+        (void)chacha_rtl_recover_locked(1);
+        s->state = 3u;
+        goto cleanup;
+      }
+      ++s->encrypt_ok;
+
+      if (tail_len != 0u) {
+        chacha_partial_record_tail_change(
+          tail_before, work + len, tail_len
+        );
+      }
+
+      guards_ok =
+        chacha_partial_guard_ok(
+          work - CHACHA_PARTIAL_GUARD_SIZE,
+          CHACHA_PARTIAL_GUARD_SIZE, 0xa5
+        ) &&
+        chacha_partial_guard_ok(
+          work + rounded_len, CHACHA_PARTIAL_GUARD_SIZE, 0xa5
+        );
+      s->last_stage = 2u; /* encrypt comparison */
+      if (!guards_ok) ++s->guard_errors;
+      if (!chacha_partial_equal(work, reference, len) ||
+          !chacha_partial_equal(hardware_tag, reference_tag, 16u)) {
+        ++s->mismatches;
+      }
+      if (!guards_ok || s->mismatches != 0u) {
+        s->state = 3u;
+        goto cleanup;
+      }
+
+      decrypt_input = work;
+      decrypt_output = (layout != 0u) ? work : decrypted;
+      if (tail_len != 0u) {
+        memcpy(tail_before, decrypt_output + len, tail_len);
+      }
+      chacha_rtl_stage_parameters(key, nonce, aad, sizeof(aad));
+      s->last_stage = 3u; /* direct ROM decrypt */
+      result = chacha_partial_direct_operation(
+        1, decrypt_input, len, decrypt_output, hardware_tag
+      );
+      s->last_error = result;
+      if (result != 0) {
+        ++s->api_errors;
+        (void)chacha_rtl_recover_locked(1);
+        s->state = 3u;
+        goto cleanup;
+      }
+      ++s->decrypt_ok;
+
+      if (tail_len != 0u) {
+        chacha_partial_record_tail_change(
+          tail_before, decrypt_output + len, tail_len
+        );
+      }
+
+      guards_ok = (layout != 0u) ?
+        (chacha_partial_guard_ok(
+           work - CHACHA_PARTIAL_GUARD_SIZE,
+           CHACHA_PARTIAL_GUARD_SIZE, 0xa5
+         ) &&
+         chacha_partial_guard_ok(
+           work + rounded_len, CHACHA_PARTIAL_GUARD_SIZE, 0xa5
+         )) :
+        (chacha_partial_guard_ok(
+           decrypted - CHACHA_PARTIAL_GUARD_SIZE,
+           CHACHA_PARTIAL_GUARD_SIZE, 0x5a
+         ) &&
+         chacha_partial_guard_ok(
+           decrypted + rounded_len, CHACHA_PARTIAL_GUARD_SIZE, 0x5a
+         ));
+      s->last_stage = 4u; /* decrypt comparison */
+      if (!guards_ok) ++s->guard_errors;
+      if (!chacha_partial_equal(decrypt_output, plain, len) ||
+          !chacha_partial_equal(hardware_tag, reference_tag, 16u)) {
+        ++s->mismatches;
+      }
+      if (!guards_ok || s->mismatches != 0u) {
+        s->state = 3u;
+        goto cleanup;
+      }
+      ++s->passed;
+    }
+  }
+  s->state = 2u;
+
+cleanup:
+  printf(
+    "[CHACHAPARTIAL] %s cases/pass=%lu/%lu "
+    "api_error/mismatch/guard=%lu/%lu/%lu "
+    "rounded_tail=%lu/%lu/%lu last=%lu/%lu/%lu/%ld\n",
+    (s->state == 2u) ? "PASS" : "FAIL",
+    (unsigned long)s->cases, (unsigned long)s->passed,
+    (unsigned long)s->api_errors, (unsigned long)s->mismatches,
+    (unsigned long)s->guard_errors,
+    (unsigned long)s->rounded_tail_write_cases,
+    (unsigned long)s->rounded_tail_bytes_changed,
+    (unsigned long)s->rounded_tail_max_changed,
+    (unsigned long)s->last_len,
+    (unsigned long)s->last_layout, (unsigned long)s->last_stage,
+    (long)s->last_error
+  );
+  chacha_rtl_clear_key_material();
+  if (decrypt_raw) free(decrypt_raw);
+  if (work_raw) free(work_raw);
+  if (reference_raw) free(reference_raw);
+  if (plain_raw) free(plain_raw);
+}
+
+#endif /* CARBOX_CHACHA_COMBINED_PARTIAL_SELFTEST */
 
 #if CARBOX_CHACHA_HW_SELFTEST
 
@@ -1039,6 +1361,74 @@ int chacha_rtl8195b_encrypt(
   );
 }
 
+int chacha_rtl8195b_encrypt_partial_padded(
+  const uint8_t key[32], const uint8_t nonce[8],
+  const void *aad, size_t aad_len,
+  const void *plaintext, size_t plaintext_len,
+  void *ciphertext, uint8_t tag[16]
+) {
+  int result;
+  uint32_t profile_start_us;
+
+  if ((plaintext_len == 0u) || (plaintext_len > CHACHA_RTL_MAX_MESSAGE) ||
+      ((plaintext_len & 15u) == 0u)) {
+    return CHACHA_RTL_SKIP_LENGTH;
+  }
+  if (aad_len > CHACHA_RTL_MAX_AAD) return CHACHA_RTL_SKIP_AAD_LENGTH;
+  if (rtw_in_interrupt()) return CHACHA_RTL_SKIP_INTERRUPT;
+
+  carbox_crypto_chacha_device_lock(RT_DEV_LOCK_CRYPTO);
+  result = chacha_rtl_prepare_locked();
+  if (result == CHACHA_RTL_OK) {
+    chacha_rtl_stage_parameters(key, nonce, aad, aad_len);
+    result = rtl_crypto_chacha_poly1305_init(g_chacha_hw_key);
+    if (result == 0) {
+      /*
+       * The public SDK wrapper rejects msg_len % 16 before entering ROM.
+       * Board reverse-engineering proved that the underlying encrypt stub
+       * produces the correct logical ciphertext/tag, while DMA writes up to
+       * 15 extra destination bytes. Only the AirPlay TX direct path calls
+       * this entry, after its object-local malloc hook supplied that padding.
+       * Partial decrypt remains unsupported and never uses this bypass.
+       */
+      /*
+       * This direct function-table call intentionally bypasses the public
+       * SDK alignment check and therefore also bypasses the linker's normal
+       * crypto HAL wrapper.  Mark the exact ROM interval explicitly so the
+       * 10-second report attributes this operation to CHACHA_COMBINED rather
+       * than producing a false outside_us/SLOW payload=0 transaction.
+       */
+      profile_start_us =
+        crypto_engine_profiler_chacha_combined_begin(
+          (uint32_t)plaintext_len);
+      result = hal_crypto_stubs_s.rtl_crypto_chacha_poly1305_encrypt(
+        (const uint8_t *)plaintext, (uint32_t)plaintext_len,
+        g_chacha_hw_nonce, g_chacha_hw_aad, (uint32_t)aad_len,
+        (uint8_t *)ciphertext, g_chacha_hw_tag
+      );
+      crypto_engine_profiler_chacha_combined_end(
+        profile_start_us, (uint32_t)plaintext_len, (uint32_t)aad_len, result);
+      if (result == 0) {
+        memcpy(tag, g_chacha_hw_tag, 16u);
+        result = CHACHA_RTL_OK;
+      } else {
+        printf("[CHACHA][HW] partial combined encrypt failed: err=%d\n",
+               result);
+        (void)chacha_rtl_recover_locked(1);
+        result = CHACHA_RTL_ERROR_OPERATION;
+      }
+    } else {
+      printf("[CHACHA][HW] partial combined key init failed: err=%d\n",
+             result);
+      (void)chacha_rtl_recover_locked(0);
+      result = CHACHA_RTL_ERROR_OPERATION;
+    }
+  }
+  chacha_rtl_clear_key_material();
+  carbox_crypto_chacha_device_unlock(RT_DEV_LOCK_CRYPTO);
+  return result;
+}
+
 int chacha_rtl8195b_decrypt(
   const uint8_t key[32], const uint8_t nonce[8],
   const void *aad, size_t aad_len,
@@ -1051,7 +1441,19 @@ int chacha_rtl8195b_decrypt(
   );
 }
 
-int chacha_rtl8195b_chacha_xor(
+int chacha_rtl8195b_transaction_begin(void)
+{
+  if (rtw_in_interrupt()) return CHACHA_RTL_SKIP_INTERRUPT;
+  carbox_crypto_chacha_device_lock(RT_DEV_LOCK_CRYPTO);
+  return CHACHA_RTL_OK;
+}
+
+void chacha_rtl8195b_transaction_end(void)
+{
+  carbox_crypto_chacha_device_unlock(RT_DEV_LOCK_CRYPTO);
+}
+
+int chacha_rtl8195b_chacha_xor_locked(
   const uint8_t key[32], const uint8_t nonce[8], uint32_t counter,
   const void *input, size_t input_len, void *output
 ) {
@@ -1059,7 +1461,6 @@ int chacha_rtl8195b_chacha_xor(
 
   if (result != CHACHA_RTL_OK) return result;
 
-  carbox_crypto_chacha_device_lock(RT_DEV_LOCK_CRYPTO);
   result = chacha_rtl_prepare_locked();
   if (result == CHACHA_RTL_OK) {
     chacha_rtl_stage_parameters(key, nonce, NULL, 0u);
@@ -1084,11 +1485,25 @@ int chacha_rtl8195b_chacha_xor(
     }
   }
   chacha_rtl_clear_key_material();
-  carbox_crypto_chacha_device_unlock(RT_DEV_LOCK_CRYPTO);
   return result;
 }
 
-int chacha_rtl8195b_poly1305(
+int chacha_rtl8195b_chacha_xor(
+  const uint8_t key[32], const uint8_t nonce[8], uint32_t counter,
+  const void *input, size_t input_len, void *output
+) {
+  int result = chacha_rtl8195b_transaction_begin();
+
+  if (result == CHACHA_RTL_OK) {
+    result = chacha_rtl8195b_chacha_xor_locked(
+      key, nonce, counter, input, input_len, output
+    );
+    chacha_rtl8195b_transaction_end();
+  }
+  return result;
+}
+
+int chacha_rtl8195b_poly1305_locked(
   const uint8_t poly_key[32],
   const void *message, size_t message_len,
   uint8_t digest[16]
@@ -1097,7 +1512,6 @@ int chacha_rtl8195b_poly1305(
 
   if (result != CHACHA_RTL_OK) return result;
 
-  carbox_crypto_chacha_device_lock(RT_DEV_LOCK_CRYPTO);
   result = chacha_rtl_prepare_locked();
   if (result == CHACHA_RTL_OK) {
     memcpy(g_chacha_hw_key, poly_key, 32);
@@ -1115,13 +1529,55 @@ int chacha_rtl8195b_poly1305(
     }
   }
   chacha_rtl_clear_key_material();
-  carbox_crypto_chacha_device_unlock(RT_DEV_LOCK_CRYPTO);
+  return result;
+}
+
+int chacha_rtl8195b_poly1305(
+  const uint8_t poly_key[32],
+  const void *message, size_t message_len,
+  uint8_t digest[16]
+) {
+  int result = chacha_rtl8195b_transaction_begin();
+
+  if (result == CHACHA_RTL_OK) {
+    result = chacha_rtl8195b_poly1305_locked(
+      poly_key, message, message_len, digest
+    );
+    chacha_rtl8195b_transaction_end();
+  }
   return result;
 }
 
 #else
 
 int chacha_rtl8195b_encrypt(
+  const uint8_t key[32], const uint8_t nonce[8],
+  const void *aad, size_t aad_len,
+  const void *plaintext, size_t plaintext_len,
+  void *ciphertext, uint8_t tag[16]
+) {
+  (void)key; (void)nonce; (void)aad; (void)aad_len;
+  (void)plaintext; (void)plaintext_len; (void)ciphertext; (void)tag;
+  return CHACHA_RTL_SKIP_DISABLED;
+}
+
+int chacha_rtl8195b_transaction_begin(void) {
+  return CHACHA_RTL_SKIP_DISABLED;
+}
+
+void chacha_rtl8195b_transaction_end(void) {
+}
+
+int chacha_rtl8195b_chacha_xor_locked(
+  const uint8_t key[32], const uint8_t nonce[8], uint32_t counter,
+  const void *input, size_t input_len, void *output
+) {
+  (void)key; (void)nonce; (void)counter;
+  (void)input; (void)input_len; (void)output;
+  return CHACHA_RTL_SKIP_DISABLED;
+}
+
+int chacha_rtl8195b_encrypt_partial_padded(
   const uint8_t key[32], const uint8_t nonce[8],
   const void *aad, size_t aad_len,
   const void *plaintext, size_t plaintext_len,
@@ -1154,6 +1610,15 @@ int chacha_rtl8195b_chacha_xor(
 }
 
 int chacha_rtl8195b_poly1305(
+  const uint8_t poly_key[32],
+  const void *message, size_t message_len,
+  uint8_t digest[16]
+) {
+  (void)poly_key; (void)message; (void)message_len; (void)digest;
+  return CHACHA_RTL_SKIP_DISABLED;
+}
+
+int chacha_rtl8195b_poly1305_locked(
   const uint8_t poly_key[32],
   const void *message, size_t message_len,
   uint8_t digest[16]

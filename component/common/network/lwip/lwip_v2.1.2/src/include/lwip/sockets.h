@@ -693,7 +693,8 @@ int lwip_inet_pton(int af, const char *src, void *dst);
 
 #if (defined(CONFIG_SCREEN_TCP_BUFFER_PROFILE) && CONFIG_SCREEN_TCP_BUFFER_PROFILE) || \
     (defined(CONFIG_SCREEN_BLOCK_PROFILE) && CONFIG_SCREEN_BLOCK_PROFILE) || \
-    (defined(CONFIG_SCREEN_USB_PROBE) && CONFIG_SCREEN_USB_PROBE)
+    (defined(CONFIG_SCREEN_USB_PROBE) && CONFIG_SCREEN_USB_PROBE) || \
+    (defined(CONFIG_SCREEN_FPS_PROFILE) && CONFIG_SCREEN_FPS_PROFILE)
 /* Read-only TCP queue snapshot used by the CarPlay diagnostic profiler. */
 struct lwip_tcp_buffer_diag {
   u32_t rx_pending_bytes;

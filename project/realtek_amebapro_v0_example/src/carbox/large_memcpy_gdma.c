@@ -22,6 +22,9 @@
 #ifndef LARGE_MEMCPY_GDMA_OWNER_BOOST_PRIORITY
 #define LARGE_MEMCPY_GDMA_OWNER_BOOST_PRIORITY 11U
 #endif
+#ifndef CONFIG_SCREEN_FPS_PROFILE
+#define CONFIG_SCREEN_FPS_PROFILE 0
+#endif
 
 #ifndef LARGE_MEMCPY_GDMA_COPYV_VERIFY
 #define LARGE_MEMCPY_GDMA_COPYV_VERIFY 0
@@ -63,6 +66,67 @@ static uint8_t large_memcpy_gdma_early_irq_reported;
 static uint8_t large_memcpy_gdma_lli_reported;
 static uint32_t large_memcpy_gdma_unavailable_fallbacks;
 static uint32_t large_memcpy_gdma_busy_fallbacks;
+
+#if CONFIG_SCREEN_FPS_PROFILE
+typedef struct screen_gdma_stats_s {
+	uint32_t calls;
+	uint32_t success;
+	uint32_t fallback;
+	uint64_t requested_bytes;
+	uint64_t dma_bytes;
+	uint64_t time_sum_us;
+	uint32_t time_max_us;
+	uint32_t over_1ms;
+	uint32_t over_4ms;
+	uint32_t over_8ms;
+	uint32_t over_16ms;
+} screen_gdma_stats_t;
+
+static screen_gdma_stats_t screen_gdma_stats[2];
+static TaskHandle_t screen_gdma_tasks[2];
+
+static int screen_gdma_task_role(TaskHandle_t task)
+{
+	const char *name;
+
+	if (task == screen_gdma_tasks[0]) return 0;
+	if (task == screen_gdma_tasks[1]) return 1;
+	name = pcTaskGetName(task);
+	if (name != NULL && strcmp(name, "AirPlayScreenReceiver") == 0) {
+		screen_gdma_tasks[0] = task;
+		return 0;
+	}
+	if (name != NULL && strcmp(name, "ScreenThread") == 0) {
+		screen_gdma_tasks[1] = task;
+		return 1;
+	}
+	return -1;
+}
+
+static void screen_gdma_record(int role, size_t len, int success,
+			       uint32_t start_us)
+{
+	uint32_t elapsed_us;
+	screen_gdma_stats_t *stats;
+
+	if (role < 0) return;
+	elapsed_us = hal_read_curtime_us() - start_us;
+	taskENTER_CRITICAL();
+	stats = &screen_gdma_stats[role];
+	stats->calls++;
+	stats->success += success != 0;
+	stats->fallback += success == 0;
+	stats->requested_bytes += len;
+	if (success) stats->dma_bytes += len;
+	stats->time_sum_us += elapsed_us;
+	if (elapsed_us > stats->time_max_us) stats->time_max_us = elapsed_us;
+	stats->over_1ms += elapsed_us > 1000U;
+	stats->over_4ms += elapsed_us > 4000U;
+	stats->over_8ms += elapsed_us > 8000U;
+	stats->over_16ms += elapsed_us > 16667U;
+	taskEXIT_CRITICAL();
+}
+#endif
 
 static int large_memcpy_in_interrupt(void)
 {
@@ -219,21 +283,58 @@ void carbox_large_memcpy_gdma_report(uint32_t sequence)
 	const large_memcpy_gdma_context_t *slot0 = &large_memcpy_gdma[0];
 	const large_memcpy_gdma_context_t *slot1 = &large_memcpy_gdma[1];
 
-	rt_printf("[LARGE_MEMCPY_GDMA][%lu] fallback busy/unavailable=%lu/%lu "
-		  "slot0 avail/busy=%u/%u reason=%s raw=0x%02x "
-		  "slot1 avail/busy=%u/%u reason=%s raw=0x%02x\r\n",
-		  (unsigned long)sequence,
-		  (unsigned long)busy, (unsigned long)unavailable,
-		  (unsigned int)slot0->available, (unsigned int)slot0->busy,
-		  slot0->available ? "ready" :
-			(slot0->disabled_reason != NULL ? slot0->disabled_reason :
-			 "not-initialized"),
-		  (unsigned int)slot0->disabled_raw_error,
-		  (unsigned int)slot1->available, (unsigned int)slot1->busy,
-		  slot1->available ? "ready" :
-			(slot1->disabled_reason != NULL ? slot1->disabled_reason :
-			 "not-initialized"),
-		  (unsigned int)slot1->disabled_raw_error);
+	/* Keep the 10-second output quiet unless the shared memcpy engine itself
+	 * rejected work.  Per-screen latency, when present, is printed below. */
+	if ((busy != 0U) || (unavailable != 0U)) {
+		rt_printf("[LARGE_MEMCPY_GDMA][%lu] fallback busy/unavailable=%lu/%lu "
+			  "slot0 avail/busy=%u/%u reason=%s raw=0x%02x "
+			  "slot1 avail/busy=%u/%u reason=%s raw=0x%02x\r\n",
+			  (unsigned long)sequence,
+			  (unsigned long)busy, (unsigned long)unavailable,
+			  (unsigned int)slot0->available, (unsigned int)slot0->busy,
+			  slot0->available ? "ready" :
+				(slot0->disabled_reason != NULL ? slot0->disabled_reason :
+				 "not-initialized"),
+			  (unsigned int)slot0->disabled_raw_error,
+			  (unsigned int)slot1->available, (unsigned int)slot1->busy,
+			  slot1->available ? "ready" :
+				(slot1->disabled_reason != NULL ? slot1->disabled_reason :
+				 "not-initialized"),
+			  (unsigned int)slot1->disabled_raw_error);
+	}
+#if CONFIG_SCREEN_FPS_PROFILE
+	{
+		screen_gdma_stats_t stats[2];
+		uint32_t i;
+
+		taskENTER_CRITICAL();
+		stats[0] = screen_gdma_stats[0];
+		stats[1] = screen_gdma_stats[1];
+		screen_gdma_stats[0] = (screen_gdma_stats_t){ 0 };
+		screen_gdma_stats[1] = (screen_gdma_stats_t){ 0 };
+		taskEXIT_CRITICAL();
+		for (i = 0U; i < 2U; ++i) {
+			if (stats[i].calls == 0U) continue;
+			rt_printf("[SCREENGDMA][%lu] task=%s calls/ok/fallback=%lu/%lu/%lu "
+				  "bytes request/dma=%llu/%llu us avg/max=%llu/%lu "
+				  "over1/4/8/16ms=%lu/%lu/%lu/%lu\r\n",
+				  (unsigned long)sequence,
+				  i == 0U ? "AirPlayScreenReceiver" : "ScreenThread",
+				  (unsigned long)stats[i].calls,
+				  (unsigned long)stats[i].success,
+				  (unsigned long)stats[i].fallback,
+				  (unsigned long long)stats[i].requested_bytes,
+				  (unsigned long long)stats[i].dma_bytes,
+				  (unsigned long long)(stats[i].calls != 0U ?
+					stats[i].time_sum_us / stats[i].calls : 0U),
+				  (unsigned long)stats[i].time_max_us,
+				  (unsigned long)stats[i].over_1ms,
+				  (unsigned long)stats[i].over_4ms,
+				  (unsigned long)stats[i].over_8ms,
+				  (unsigned long)stats[i].over_16ms);
+		}
+	}
+#endif
 }
 
 static int large_memcpy_gdma_wait(large_memcpy_gdma_context_t *context)
@@ -310,6 +411,10 @@ int carbox_large_memcpy_gdma_try(void *dst, const void *src, size_t len)
 	uint32_t dma_len;
 	uint32_t tail_len;
 	int copied = 0;
+#if CONFIG_SCREEN_FPS_PROFILE
+	int profile_role = -1;
+	uint32_t profile_start_us = 0U;
+#endif
 
 	/* Two persistent linked-channel contexts are claimed non-blockingly.  This
 	 * lets ScreenThread and AirPlayScreenReceiver overlap one large copy each.
@@ -333,9 +438,17 @@ int carbox_large_memcpy_gdma_try(void *dst, const void *src, size_t len)
 			  (unsigned int)len);
 		return 0;
 	}
+	owner = xTaskGetCurrentTaskHandle();
+#if CONFIG_SCREEN_FPS_PROFILE
+	profile_role = screen_gdma_task_role(owner);
+	profile_start_us = hal_read_curtime_us();
+#endif
 	if ((((uintptr_t)destination ^ (uintptr_t)source) & 3U) != 0U) {
 		rt_printf("[LARGE_MEMCPY_GDMA][FALLBACK] reason=alignment len=%u using=M33\r\n",
 			  (unsigned int)len);
+#if CONFIG_SCREEN_FPS_PROFILE
+		screen_gdma_record(profile_role, len, 0, profile_start_us);
+#endif
 		return 0;
 	}
 
@@ -360,10 +473,12 @@ int carbox_large_memcpy_gdma_try(void *dst, const void *src, size_t len)
 			__atomic_fetch_add(&large_memcpy_gdma_unavailable_fallbacks,
 				1U, __ATOMIC_RELAXED);
 		}
+#if CONFIG_SCREEN_FPS_PROFILE
+		screen_gdma_record(profile_role, len, 0, profile_start_us);
+#endif
 		return 0;
 	}
 
-	owner = xTaskGetCurrentTaskHandle();
 	original_priority = uxTaskPriorityGet(owner);
 	if (original_priority < LARGE_MEMCPY_GDMA_OWNER_BOOST_PRIORITY) {
 		vTaskPrioritySet(owner, LARGE_MEMCPY_GDMA_OWNER_BOOST_PRIORITY);
@@ -480,6 +595,9 @@ out:
 	if (uxTaskPriorityGet(owner) != original_priority) {
 		vTaskPrioritySet(owner, original_priority);
 	}
+#if CONFIG_SCREEN_FPS_PROFILE
+	screen_gdma_record(profile_role, len, copied, profile_start_us);
+#endif
 	return copied;
 }
 

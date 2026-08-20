@@ -1,8 +1,34 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
+#include "FreeRTOS.h"
+#include "task.h"
+#include "hal_timer.h"
+#include "diag.h"
+#include "chacha_key_alias_fix.h"
 #include "screen_rx_record_profiler.h"
+
+#ifndef CONFIG_SCREEN_FPS_PROFILE
+#define CONFIG_SCREEN_FPS_PROFILE 0
+#endif
+
+#ifndef CONFIG_CHACHA_MODE
+#define CONFIG_CHACHA_MODE 0
+#endif
+
+#if CONFIG_CHACHA_MODE == 0
+#define CARBOX_CHACHA_RX_BACKEND "SW"
+#elif CONFIG_CHACHA_MODE == 1
+#define CARBOX_CHACHA_RX_BACKEND "SW_HW_VERIFY"
+#elif CONFIG_CHACHA_MODE == 2
+#define CARBOX_CHACHA_RX_BACKEND "HW"
+#elif CONFIG_CHACHA_MODE == 3
+#define CARBOX_CHACHA_RX_BACKEND "SW"
+#else
+#define CARBOX_CHACHA_RX_BACKEND "UNKNOWN"
+#endif
 
 /*
  * AirPlayScreen's closed-object ABI places the persistent 32-byte key and
@@ -29,6 +55,153 @@ typedef struct {
 
 static carbox_chacha_alias_slot g_alias_slots[CARBOX_CHACHA_ALIAS_SLOTS];
 static uint32_t g_alias_banner;
+
+#if CONFIG_SCREEN_FPS_PROFILE
+#define CARBOX_CHACHA_RX_PROFILE_SLOTS 8u
+
+typedef struct {
+  void *state;
+  uint32_t start_us;
+  uint32_t bytes;
+  uint32_t decrypt_calls;
+} carbox_chacha_rx_profile_slot;
+
+typedef struct {
+  uint32_t records;
+  uint32_t errors;
+  uint32_t decrypt_calls;
+  uint64_t bytes;
+  uint64_t decrypt_us;
+  uint32_t decrypt_max_us;
+  uint32_t decrypt_over_8ms;
+  uint32_t decrypt_over_16ms;
+  uint64_t verify_us;
+  uint32_t verify_max_us;
+  uint64_t record_us;
+  uint32_t record_max_us;
+  uint32_t record_over_16ms;
+  uint32_t record_over_33ms;
+  uint32_t slot_miss;
+} carbox_chacha_rx_latency_stats;
+
+static carbox_chacha_rx_profile_slot g_rx_profile_slots[
+  CARBOX_CHACHA_RX_PROFILE_SLOTS
+];
+static carbox_chacha_rx_latency_stats g_rx_latency;
+static TaskHandle_t g_rx_task;
+
+static int chacha_rx_is_screen_task(void) {
+  TaskHandle_t task = xTaskGetCurrentTaskHandle();
+  const char *name;
+
+  if (task == g_rx_task) return task != NULL;
+  name = pcTaskGetName(task);
+  if (name && strcmp(name, "AirPlayScreenReceiver") == 0) {
+    g_rx_task = task;
+    return 1;
+  }
+  return 0;
+}
+
+static carbox_chacha_rx_profile_slot *chacha_rx_profile_find(
+  void *state, int allocate
+) {
+  carbox_chacha_rx_profile_slot *free_slot = NULL;
+  unsigned int i;
+
+  for (i = 0; i < CARBOX_CHACHA_RX_PROFILE_SLOTS; ++i) {
+    carbox_chacha_rx_profile_slot *slot = &g_rx_profile_slots[i];
+    if (slot->state == state) return slot;
+    if (!slot->state && !free_slot) free_slot = slot;
+  }
+  if (allocate && free_slot) {
+    memset(free_slot, 0, sizeof(*free_slot));
+    free_slot->state = state;
+  }
+  return allocate ? free_slot : NULL;
+}
+
+static uint32_t chacha_rx_decrypt_begin(void *state, size_t len) {
+  carbox_chacha_rx_profile_slot *slot;
+  uint32_t now_us;
+
+  if (!chacha_rx_is_screen_task()) return 0u;
+  now_us = hal_read_curtime_us();
+  taskENTER_CRITICAL();
+  slot = chacha_rx_profile_find(state, 1);
+  if (slot) {
+    if (slot->decrypt_calls == 0u) slot->start_us = now_us;
+    slot->decrypt_calls++;
+    slot->bytes += (uint32_t)len;
+  } else {
+    g_rx_latency.slot_miss++;
+  }
+  taskEXIT_CRITICAL();
+  return slot ? now_us : 0u;
+}
+
+static void chacha_rx_decrypt_end(uint32_t start_us) {
+  uint32_t elapsed_us;
+
+  if (start_us == 0u) return;
+  elapsed_us = hal_read_curtime_us() - start_us;
+  taskENTER_CRITICAL();
+  g_rx_latency.decrypt_calls++;
+  g_rx_latency.decrypt_us += elapsed_us;
+  if (elapsed_us > g_rx_latency.decrypt_max_us) {
+    g_rx_latency.decrypt_max_us = elapsed_us;
+  }
+  g_rx_latency.decrypt_over_8ms += elapsed_us > 8000u;
+  g_rx_latency.decrypt_over_16ms += elapsed_us > 16667u;
+  taskEXIT_CRITICAL();
+}
+
+static uint32_t chacha_rx_verify_begin(void *state) {
+  if (!chacha_rx_is_screen_task()) return 0u;
+  taskENTER_CRITICAL();
+  if (!chacha_rx_profile_find(state, 0)) {
+    taskEXIT_CRITICAL();
+    return 0u;
+  }
+  taskEXIT_CRITICAL();
+  return hal_read_curtime_us();
+}
+
+static void chacha_rx_verify_end(void *state, uint32_t start_us,
+                                 const int32_t *error) {
+  carbox_chacha_rx_profile_slot *slot;
+  uint32_t now_us;
+  uint32_t verify_us;
+  uint32_t record_us;
+
+  if (start_us == 0u) return;
+  now_us = hal_read_curtime_us();
+  verify_us = now_us - start_us;
+  taskENTER_CRITICAL();
+  slot = chacha_rx_profile_find(state, 0);
+  if (!slot) {
+    g_rx_latency.slot_miss++;
+    taskEXIT_CRITICAL();
+    return;
+  }
+  record_us = now_us - slot->start_us;
+  g_rx_latency.records++;
+  g_rx_latency.errors += error == NULL || *error != 0;
+  g_rx_latency.bytes += slot->bytes;
+  g_rx_latency.verify_us += verify_us;
+  if (verify_us > g_rx_latency.verify_max_us) {
+    g_rx_latency.verify_max_us = verify_us;
+  }
+  g_rx_latency.record_us += record_us;
+  if (record_us > g_rx_latency.record_max_us) {
+    g_rx_latency.record_max_us = record_us;
+  }
+  g_rx_latency.record_over_16ms += record_us > 16667u;
+  g_rx_latency.record_over_33ms += record_us > 33333u;
+  memset(slot, 0, sizeof(*slot));
+  taskEXIT_CRITICAL();
+}
+#endif
 
 /* The performance replacement archive keeps its NetTransport member pointed
  * at these dispatch names.  With pre-RX A/B routing disabled, forward them to
@@ -165,7 +338,13 @@ void __wrap_chacha20_poly1305_add_aad(
 size_t __wrap_chacha20_poly1305_decrypt(
   void *state, const void *src, size_t len, void *dst
 ) {
+#if CONFIG_SCREEN_FPS_PROFILE
+  uint32_t profile_start_us = chacha_rx_decrypt_begin(state, len);
+#endif
   size_t written = __real_chacha20_poly1305_decrypt(state, src, len, dst);
+#if CONFIG_SCREEN_FPS_PROFILE
+  chacha_rx_decrypt_end(profile_start_us);
+#endif
   carbox_screen_rx_crypto_decrypt(len, written);
   return written;
 }
@@ -182,9 +361,61 @@ size_t __wrap_chacha20_poly1305_final(
 size_t __wrap_chacha20_poly1305_verify(
   void *state, void *dst, const uint8_t tag[16], int32_t *out_error
 ) {
+#if CONFIG_SCREEN_FPS_PROFILE
+  uint32_t profile_start_us = chacha_rx_verify_begin(state);
+#endif
   size_t written =
     __real_chacha20_poly1305_verify(state, dst, tag, out_error);
+#if CONFIG_SCREEN_FPS_PROFILE
+  chacha_rx_verify_end(state, profile_start_us, out_error);
+#endif
   carbox_screen_rx_crypto_verify(written, out_error);
   restore_slot(find_slot(state));
   return written;
+}
+
+void carbox_chacha_rx_latency_report(uint32_t sequence) {
+#if CONFIG_SCREEN_FPS_PROFILE
+  carbox_chacha_rx_latency_stats stats;
+  uint32_t mbps_x100;
+
+  taskENTER_CRITICAL();
+  stats = g_rx_latency;
+  memset(&g_rx_latency, 0, sizeof(g_rx_latency));
+  taskEXIT_CRITICAL();
+  if (stats.decrypt_calls == 0u && stats.records == 0u) return;
+  /* Use complete-record latency for throughput.  Hardware-only mode defers
+   * the actual crypto work from update/decrypt to verify/finalize, so using
+   * decrypt_us alone measured only wrapper/copy overhead. */
+  mbps_x100 = stats.record_us != 0u ?
+    (uint32_t)((stats.bytes * 800u) / stats.record_us) : 0u;
+  rt_printf(
+    "[CHACHARX][%lu] dir=RX_DEC backend=%s records/error=%lu/%lu "
+    "calls/bytes=%lu/%llu update_us avg/max=%llu/%lu over8/16ms=%lu/%lu "
+    "finalize_us avg/max=%llu/%lu record_us avg/max=%llu/%lu "
+    "over16/33ms=%lu/%lu record_throughput=%lu.%02luMbps slot_miss=%lu\r\n",
+    (unsigned long)sequence,
+    CARBOX_CHACHA_RX_BACKEND,
+    (unsigned long)stats.records, (unsigned long)stats.errors,
+    (unsigned long)stats.decrypt_calls, (unsigned long long)stats.bytes,
+    (unsigned long long)(stats.decrypt_calls ?
+      stats.decrypt_us / stats.decrypt_calls : 0u),
+    (unsigned long)stats.decrypt_max_us,
+    (unsigned long)stats.decrypt_over_8ms,
+    (unsigned long)stats.decrypt_over_16ms,
+    (unsigned long long)(stats.records ?
+      stats.verify_us / stats.records : 0u),
+    (unsigned long)stats.verify_max_us,
+    (unsigned long long)(stats.records ?
+      stats.record_us / stats.records : 0u),
+    (unsigned long)stats.record_max_us,
+    (unsigned long)stats.record_over_16ms,
+    (unsigned long)stats.record_over_33ms,
+    (unsigned long)(mbps_x100 / 100u),
+    (unsigned long)(mbps_x100 % 100u),
+    (unsigned long)stats.slot_miss
+  );
+#else
+  (void)sequence;
+#endif
 }

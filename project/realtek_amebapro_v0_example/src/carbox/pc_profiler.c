@@ -6,10 +6,13 @@
 #include "screen_queue_profiler.h"
 #include "screen_rx_rate_limit.h"
 #include "screen_rx_record_profiler.h"
+#include "chacha_key_alias_fix.h"
 #include "usb_hcd_profiler.h"
 #include "net_queue_profiler.h"
 #include "crypto_engine_profiler.h"
+#include "crypto_priority_lock.h"
 #include "memcpy_task_profiler.h"
+#include "large_memcpy_gdma.h"
 #include "irq_profiler.h"
 #include "video_handover_zero_copy.h"
 #include "screen_tx_direct_crypto.h"
@@ -18,6 +21,14 @@
 #include "ncm/usb_boot_profiler.h"
 #include "ncm/ncm_tx_profile.h"
 #include "ethernetif.h"
+
+/* Supplied by the optional CarPlay ChaCha replacement archive. */
+extern void chacha_rtl8195b_partial_selftest_report(unsigned window_index)
+	__attribute__((weak));
+extern void chacha_poly_scratch_report(unsigned window_index)
+	__attribute__((weak));
+extern void chacha_crypto_transaction_report(unsigned window_index)
+	__attribute__((weak));
 
 #include <stdint.h>
 #include <string.h>
@@ -28,6 +39,9 @@
 
 #ifndef CONFIG_USB_PROFILE_REPORT
 #define CONFIG_USB_PROFILE_REPORT 0
+#endif
+#ifndef CONFIG_SCREEN_FPS_PROFILE
+#define CONFIG_SCREEN_FPS_PROFILE 0
 #endif
 
 #include "FreeRTOS.h"
@@ -1562,6 +1576,25 @@ static void pcprof_task(void *arg)
 #if defined(CONFIG_NCM_TX_PIPELINE) && CONFIG_NCM_TX_PIPELINE
 		rltk_ncm_tx_pipeline_report(sequence);
 #endif
+		carbox_crypto_irq_controller_report(sequence);
+		if (chacha_rtl8195b_partial_selftest_report != NULL) {
+			chacha_rtl8195b_partial_selftest_report(sequence);
+		}
+		if (chacha_poly_scratch_report != NULL) {
+			chacha_poly_scratch_report(sequence);
+		}
+		if (chacha_crypto_transaction_report != NULL) {
+			chacha_crypto_transaction_report(sequence);
+		}
+#if CONFIG_SCREEN_FPS_PROFILE
+		carbox_screen_fps_report(sequence);
+		carbox_video_handover_gate_report(sequence);
+		carbox_chacha_rx_latency_report(sequence);
+		carbox_screen_crypto_latency_report(sequence);
+		carbox_large_memcpy_gdma_report(sequence);
+		carbox_ncm_tx_gdma_latency_report(sequence);
+		carbox_screen_block_profile_report(sequence);
+#endif
 		carbox_touch_path_profiler_report(sequence);
 		carbox_screen_rx_record_profiler_report(sequence);
 #if CONFIG_USB_PROFILE_REPORT
@@ -1576,12 +1609,14 @@ static void pcprof_task(void *arg)
 #endif
 #if defined(CONFIG_SCREEN_DATAPATH_PROFILE) && \
 	CONFIG_SCREEN_DATAPATH_PROFILE && \
+	!CONFIG_SCREEN_FPS_PROFILE && \
 	defined(CONFIG_VIDEO_HANDOVER_BACKPRESSURE) && \
 	CONFIG_VIDEO_HANDOVER_BACKPRESSURE
 		carbox_video_handover_gate_report(sequence);
 #endif
 #if defined(CONFIG_SCREEN_DATAPATH_PROFILE) && \
 	CONFIG_SCREEN_DATAPATH_PROFILE && \
+	!CONFIG_SCREEN_FPS_PROFILE && \
 	defined(CONFIG_SCREEN_BLOCK_PROFILE) && CONFIG_SCREEN_BLOCK_PROFILE
 		carbox_screen_block_profile_report(sequence);
 #endif

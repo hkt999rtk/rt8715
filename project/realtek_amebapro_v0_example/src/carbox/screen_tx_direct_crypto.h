@@ -29,6 +29,7 @@ void carbox_screen_block_profile_write(int socket, size_t requested,
 size_t carbox_screen_tx_pacer_allowance(size_t requested);
 void carbox_screen_tx_pacer_complete(size_t allowed, int result);
 void carbox_screen_tx_direct_crypto_report(uint32_t sequence);
+void carbox_screen_crypto_latency_report(uint32_t sequence);
 void carbox_screen_block_profile_report(uint32_t sequence);
 void carbox_screen_tx_pacer_report(uint32_t sequence);
 void carbox_screen_usb_probe_start(void);

@@ -25,6 +25,20 @@ void carbox_crypto_aes_device_unlock(RT_DEV_LOCK_E device);
 void carbox_crypto_chacha_device_lock(RT_DEV_LOCK_E device);
 void carbox_crypto_chacha_device_unlock(RT_DEV_LOCK_E device);
 
+/*
+ * The RTL crypto adapter owns one global completion callback set, shared by
+ * AES, ChaCha and Poly1305.  Keep one controller installed for every
+ * algorithm instead of switching callback/semaphore ownership per request.
+ * The caller must hold RT_DEV_LOCK_CRYPTO while enabling or resetting it.
+ */
+int carbox_crypto_irq_controller_enable(void);
+void carbox_crypto_irq_controller_vendor_enable(
+	void *adapter, void (*ignored_handler)(int, int)
+);
+void carbox_crypto_irq_controller_engine_reset(void);
+int carbox_crypto_irq_controller_last_timed_out(void);
+void carbox_crypto_irq_controller_report(unsigned window_index);
+
 #define CARBOX_CRYPTO_KIND_NONE   0u
 #define CARBOX_CRYPTO_KIND_AES    1u
 #define CARBOX_CRYPTO_KIND_CHACHA 2u

@@ -17,6 +17,7 @@ static unsigned int g_mock_fail_chacha_call;
 static unsigned int g_mock_fail_poly1305_call;
 static unsigned int g_mock_fail_aad_snapshot;
 static unsigned int g_mock_interrupt_context;
+static unsigned int g_mock_transaction_active;
 
 void mock_rtl_reset_stats(void) {
   g_mock_decrypt_successes = 0;
@@ -31,6 +32,7 @@ void mock_rtl_reset_stats(void) {
   g_mock_fail_poly1305_call = 0;
   g_mock_fail_aad_snapshot = 0;
   g_mock_interrupt_context = 0;
+  g_mock_transaction_active = 0;
 }
 
 unsigned int mock_rtl_decrypt_successes(void) {
@@ -79,6 +81,10 @@ void mock_rtl_fail_aad_snapshot_once(void) {
 
 void mock_rtl_set_interrupt_context(unsigned int enabled) {
   g_mock_interrupt_context = enabled;
+}
+
+unsigned int mock_rtl_transaction_active(void) {
+  return g_mock_transaction_active;
 }
 
 #if CARBOX_CHACHA_MODE != CARBOX_CHACHA_MODE_SOFTWARE_ONLY
@@ -258,6 +264,25 @@ int chacha_rtl8195b_chacha_xor(
   return CHACHA_RTL_OK;
 }
 
+int chacha_rtl8195b_transaction_begin(void) {
+  if (g_mock_transaction_active) return CHACHA_RTL_ERROR_OPERATION;
+  g_mock_transaction_active = 1u;
+  return CHACHA_RTL_OK;
+}
+
+void chacha_rtl8195b_transaction_end(void) {
+  g_mock_transaction_active = 0u;
+}
+
+int chacha_rtl8195b_chacha_xor_locked(
+  const uint8_t key[32], const uint8_t nonce[8], uint32_t counter,
+  const void *input, size_t input_len, void *output
+) {
+  return chacha_rtl8195b_chacha_xor(
+    key, nonce, counter, input, input_len, output
+  );
+}
+
 int chacha_rtl8195b_poly1305(
   const uint8_t poly_key[32],
   const void *message, size_t message_len,
@@ -292,6 +317,16 @@ int chacha_rtl8195b_poly1305(
   EVP_PKEY_free(pkey);
   if (!ok) return CHACHA_RTL_ERROR_OPERATION;
   return CHACHA_RTL_OK;
+}
+
+int chacha_rtl8195b_poly1305_locked(
+  const uint8_t poly_key[32],
+  const void *message, size_t message_len,
+  uint8_t digest[16]
+) {
+  return chacha_rtl8195b_poly1305(
+    poly_key, message, message_len, digest
+  );
 }
 
 int chacha_rtl8195b_precheck_context(void) {

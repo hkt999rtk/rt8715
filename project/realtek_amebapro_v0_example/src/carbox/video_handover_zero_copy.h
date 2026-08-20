@@ -29,5 +29,6 @@ void carbox_video_handover_finish_push(void *temporary, int pushed);
 
 void carbox_video_handover_report(uint32_t sequence);
 void carbox_video_handover_gate_report(uint32_t sequence);
+void carbox_screen_fps_report(uint32_t sequence);
 
 #endif /* CARBOX_VIDEO_HANDOVER_ZERO_COPY_H */

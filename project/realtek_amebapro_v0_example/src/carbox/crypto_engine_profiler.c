@@ -361,6 +361,19 @@ static uint32_t crypto_api_end(uint32_t start_us)
 	return elapsed_us;
 }
 
+uint32_t crypto_engine_profiler_chacha_combined_begin(uint32_t message_len)
+{
+	return crypto_api_begin(message_len);
+}
+
+void crypto_engine_profiler_chacha_combined_end(uint32_t start_us,
+						 uint32_t message_len,
+						 uint32_t aad_len, int result)
+{
+	crypto_size_record(CRYPTO_SIZE_CHACHA_COMBINED, message_len, aad_len,
+		crypto_api_end(start_us), result);
+}
+
 static void crypto_phase_insert_slow(const crypto_phase_slow_t *sample)
 {
 	uint32_t position;
@@ -991,6 +1004,22 @@ void crypto_engine_profiler_report(uint32_t sequence)
 }
 
 #else
+
+uint32_t crypto_engine_profiler_chacha_combined_begin(uint32_t message_len)
+{
+	(void)message_len;
+	return 0U;
+}
+
+void crypto_engine_profiler_chacha_combined_end(uint32_t start_us,
+						 uint32_t message_len,
+						 uint32_t aad_len, int result)
+{
+	(void)start_us;
+	(void)message_len;
+	(void)aad_len;
+	(void)result;
+}
 
 void crypto_engine_profiler_report(uint32_t sequence)
 {

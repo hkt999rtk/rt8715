@@ -29,6 +29,9 @@
 #ifndef CONFIG_SCREEN_USB_PROBE
 #define CONFIG_SCREEN_USB_PROBE 0
 #endif
+#ifndef CONFIG_SCREEN_FPS_PROFILE
+#define CONFIG_SCREEN_FPS_PROFILE 0
+#endif
 #ifndef CONFIG_SCREEN_TX_PACER
 #define CONFIG_SCREEN_TX_PACER 0
 #endif
@@ -93,6 +96,7 @@ typedef struct screen_tx_direct_slot_s {
 	void *destination;
 	size_t payload_length;
 	uint32_t crypto_kind;
+	uint32_t crypto_start_us;
 	uint8_t state;
 	uint8_t materialized;
 	uint8_t tcp_owned;
@@ -123,8 +127,25 @@ typedef struct screen_tx_direct_stats_s {
 } screen_tx_direct_stats_t;
 
 static screen_tx_direct_slot_t screen_tx_slots[SCREEN_TX_DIRECT_SLOTS];
-static screen_tx_direct_stats_t screen_tx_stats;
+static screen_tx_direct_stats_t screen_tx_stats
+	__attribute__((section(".lpddr.bss.screen_tx_stats")));
 static uint8_t screen_tx_enabled = 1U;
+
+#if CONFIG_SCREEN_FPS_PROFILE
+typedef struct screen_crypto_latency_s {
+	uint32_t calls;
+	uint32_t errors;
+	uint64_t bytes;
+	uint64_t time_sum_us;
+	uint32_t time_max_us;
+	uint32_t over_8ms;
+	uint32_t over_16ms;
+	uint32_t over_33ms;
+} screen_crypto_latency_t;
+
+static screen_crypto_latency_t screen_crypto_latency[2]
+	__attribute__((section(".lpddr.bss.screen_crypto_latency")));
+#endif
 
 #if CONFIG_SCREEN_TX_PACER_ACTIVE
 typedef struct screen_tx_pacer_stats_s {
@@ -255,7 +276,8 @@ void carbox_screen_tx_pacer_complete(size_t allowed, int result)
 }
 #endif
 
-#if CONFIG_SCREEN_BLOCK_PROFILE || CONFIG_SCREEN_USB_PROBE
+#if CONFIG_SCREEN_BLOCK_PROFILE || CONFIG_SCREEN_USB_PROBE || \
+	CONFIG_SCREEN_FPS_PROFILE
 typedef struct screen_block_stats_s {
 	uint32_t writes;
 	uint32_t successful;
@@ -644,6 +666,7 @@ int carbox_screen_tx_crypto_begin(void *alias_source, size_t length,
 			screen_tx_stats.prefix_rewritten++;
 		}
 		slot->crypto_kind = kind;
+		slot->crypto_start_us = hal_read_curtime_us();
 		slot->state = SCREEN_TX_DIRECT_ACTIVE;
 		if (direct_source != NULL) {
 			*direct_source = slot->source;
@@ -699,12 +722,32 @@ void carbox_screen_tx_crypto_complete(void *destination, size_t length,
 {
 	TaskHandle_t task = xTaskGetCurrentTaskHandle();
 	screen_tx_direct_slot_t *slot;
+	uint32_t now_us = hal_read_curtime_us();
 	int fatal = 0;
 
 	taskENTER_CRITICAL();
 	slot = screen_tx_find_destination_locked(task, destination, length);
 	if ((slot != NULL) && (slot->state == SCREEN_TX_DIRECT_ACTIVE) &&
 	    (slot->crypto_kind == kind)) {
+#if CONFIG_SCREEN_FPS_PROFILE
+		{
+			uint32_t elapsed_us = now_us - slot->crypto_start_us;
+			uint32_t index = kind == CARBOX_SCREEN_TX_CRYPTO_AES ? 0U : 1U;
+			screen_crypto_latency_t *stats =
+				&screen_crypto_latency[index];
+
+			stats->calls++;
+			stats->errors += status != 0;
+			stats->bytes += length;
+			stats->time_sum_us += elapsed_us;
+			if (elapsed_us > stats->time_max_us) {
+				stats->time_max_us = elapsed_us;
+			}
+			stats->over_8ms += elapsed_us > 8000U;
+			stats->over_16ms += elapsed_us > 16667U;
+			stats->over_33ms += elapsed_us > 33333U;
+		}
+#endif
 		if (status == 0) {
 			slot->state = SCREEN_TX_DIRECT_READY;
 			if (!slot->materialized) {
@@ -754,7 +797,8 @@ void carbox_screen_tx_before_write(const void *buffer, size_t length)
 
 void carbox_screen_block_profile_write(int socket, size_t requested, int result)
 {
-#if CONFIG_SCREEN_BLOCK_PROFILE || CONFIG_SCREEN_USB_PROBE
+#if CONFIG_SCREEN_BLOCK_PROFILE || CONFIG_SCREEN_USB_PROBE || \
+	CONFIG_SCREEN_FPS_PROFILE
 	struct lwip_tcp_buffer_diag tcp;
 	rltk_ncm_tx_diag_t ncm;
 	/* sock_set_errno() updates the lwIP global errno.  Realtek's
@@ -888,7 +932,8 @@ void carbox_screen_block_profile_write(int socket, size_t requested, int result)
 
 void carbox_screen_block_profile_report(uint32_t sequence)
 {
-#if CONFIG_SCREEN_BLOCK_PROFILE || CONFIG_SCREEN_USB_PROBE
+#if CONFIG_SCREEN_BLOCK_PROFILE || CONFIG_SCREEN_USB_PROBE || \
+	CONFIG_SCREEN_FPS_PROFILE
 	screen_block_stats_t stats;
 	uint32_t pending;
 	uint32_t pending_retries;
@@ -900,7 +945,7 @@ void carbox_screen_block_profile_report(uint32_t sequence)
 	pending_retries = screen_block_active_retries;
 	pending_age_us = pending ?
 		hal_read_curtime_us() - screen_block_start_us : 0U;
-		screen_block_stats = (screen_block_stats_t){
+	screen_block_stats = (screen_block_stats_t){
 		.tx_buffer_min = UINT32_MAX,
 		.send_window_min = UINT32_MAX,
 		.send_window_available_min = UINT32_MAX,
@@ -1034,6 +1079,47 @@ void carbox_screen_usb_probe_start(void)
 #else
 void carbox_screen_usb_probe_start(void) { }
 #endif
+
+void carbox_screen_crypto_latency_report(uint32_t sequence)
+{
+#if CONFIG_SCREEN_FPS_PROFILE
+	screen_crypto_latency_t stats[2];
+	uint32_t i;
+
+	taskENTER_CRITICAL();
+	stats[0] = screen_crypto_latency[0];
+	stats[1] = screen_crypto_latency[1];
+	screen_crypto_latency[0] = (screen_crypto_latency_t){ 0 };
+	screen_crypto_latency[1] = (screen_crypto_latency_t){ 0 };
+	taskEXIT_CRITICAL();
+	if ((stats[0].calls == 0U) && (stats[1].calls == 0U)) {
+		return;
+	}
+	for (i = 0U; i < 2U; ++i) {
+		uint32_t mbps_x100 = stats[i].time_sum_us != 0U ?
+			(uint32_t)((stats[i].bytes * 800U) /
+				stats[i].time_sum_us) : 0U;
+
+		rt_printf("[SCREENCRYPTO][%lu] scope=TX_ENC_DIRECT kind=%s calls/error=%lu/%lu "
+			  "bytes=%llu us avg/max=%llu/%lu over8/16/33ms=%lu/%lu/%lu "
+			  "throughput=%lu.%02luMbps\r\n",
+			  (unsigned long)sequence, i == 0U ? "AES" : "CHACHA",
+			  (unsigned long)stats[i].calls,
+			  (unsigned long)stats[i].errors,
+			  (unsigned long long)stats[i].bytes,
+			  (unsigned long long)(stats[i].calls != 0U ?
+				stats[i].time_sum_us / stats[i].calls : 0U),
+			  (unsigned long)stats[i].time_max_us,
+			  (unsigned long)stats[i].over_8ms,
+			  (unsigned long)stats[i].over_16ms,
+			  (unsigned long)stats[i].over_33ms,
+			  (unsigned long)(mbps_x100 / 100U),
+			  (unsigned long)(mbps_x100 % 100U));
+	}
+#else
+	(void)sequence;
+#endif
+}
 
 void carbox_screen_tx_direct_crypto_report(uint32_t sequence)
 {
@@ -1226,6 +1312,10 @@ void carbox_screen_tx_pacer_complete(size_t allowed, int result)
 	(void)result;
 }
 void carbox_screen_tx_direct_crypto_report(uint32_t sequence)
+{
+	(void)sequence;
+}
+void carbox_screen_crypto_latency_report(uint32_t sequence)
 {
 	(void)sequence;
 }
