@@ -28,18 +28,20 @@ CROSS_COMPILE = $(ARM_GCC_TOOLCHAIN)/arm-none-eabi-
 
 # Compilation tools
 # Keep customer builds working with legacy toolchain bundles that omit the
-# cross ar binary.  GNU ar archives do not encode a host architecture.
-ifneq ($(origin AR),command line)
-CROSS_AR := $(strip $(shell command -v "$(CROSS_COMPILE)ar" 2>/dev/null))
+# cross ar binary.  GNU ar archives do not encode a host architecture.  Use
+# override because recursive MAKEFLAGS may carry a stale AR as a command-line
+# variable even when the user invoked plain `make all`.
+CROSS_AR := $(strip $(shell if [ -x "$(CROSS_COMPILE)ar" ]; then \
+	printf '%s' "$(CROSS_COMPILE)ar"; else \
+	command -v "$(CROSS_COMPILE)ar" 2>/dev/null; fi))
 ifeq ($(CROSS_AR),)
-AR := $(strip $(shell command -v ar 2>/dev/null))
+override AR := $(strip $(shell command -v ar 2>/dev/null))
 ifeq ($(AR),)
 $(error Neither $(CROSS_COMPILE)ar nor a host GNU ar was found)
 endif
 $(info Archive tool: $(AR) (host fallback; cross ar is absent))
 else
-AR := $(CROSS_AR)
-endif
+override AR := $(CROSS_AR)
 endif
 CC = $(CROSS_COMPILE)gcc
 AS = $(CROSS_COMPILE)as

@@ -1,6 +1,20 @@
 CROSS_COMPILE ?= arm-none-eabi-
 CC := $(CROSS_COMPILE)gcc
-AR := $(CROSS_COMPILE)ar
+# Archives are architecture-neutral containers.  Some legacy Realtek
+# toolchain bundles omit arm-none-eabi-ar, so use host GNU ar when the cross
+# binary is unavailable.  override also defeats a stale AR propagated through
+# recursive MAKEFLAGS.
+CROSS_AR := $(strip $(shell if [ -x "$(CROSS_COMPILE)ar" ]; then \
+	printf '%s' "$(CROSS_COMPILE)ar"; else \
+	command -v "$(CROSS_COMPILE)ar" 2>/dev/null; fi))
+ifeq ($(CROSS_AR),)
+override AR := $(strip $(shell command -v ar 2>/dev/null))
+ifeq ($(AR),)
+$(error Neither $(CROSS_COMPILE)ar nor a host GNU ar was found)
+endif
+else
+override AR := $(CROSS_AR)
+endif
 NM := $(CROSS_COMPILE)nm
 OBJDUMP := $(CROSS_COMPILE)objdump
 

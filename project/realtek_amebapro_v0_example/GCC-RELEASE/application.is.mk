@@ -33,20 +33,20 @@ CROSS_COMPILE = $(ARM_GCC_TOOLCHAIN)/arm-none-eabi-
 # Some customer copies of the legacy Realtek Linux toolchain contain gcc,
 # nm and objcopy but omit arm-none-eabi-ar.  GNU ar archives are target
 # independent containers, so host GNU ar is safe for both creating archives
-# and replacing/extracting ARM object members.  Prefer the cross tool when it
-# exists.  Preserve only an explicit `make AR=...`; stale AR values exported
-# by vendor setup scripts must not bypass detection in a recursive make.
-ifneq ($(origin AR),command line)
-CROSS_AR := $(strip $(shell command -v "$(CROSS_COMPILE)ar" 2>/dev/null))
+# and replacing/extracting ARM object members.  MAKEFLAGS can promote an
+# exported stale AR to command-line origin in recursive makes, so deliberately
+# override AR after resolving an executable instead of trusting its origin.
+CROSS_AR := $(strip $(shell if [ -x "$(CROSS_COMPILE)ar" ]; then \
+	printf '%s' "$(CROSS_COMPILE)ar"; else \
+	command -v "$(CROSS_COMPILE)ar" 2>/dev/null; fi))
 ifeq ($(CROSS_AR),)
-AR := $(strip $(shell command -v ar 2>/dev/null))
+override AR := $(strip $(shell command -v ar 2>/dev/null))
 ifeq ($(AR),)
 $(error Neither $(CROSS_COMPILE)ar nor a host GNU ar was found)
 endif
 $(info Archive tool: $(AR) (host fallback; cross ar is absent))
 else
-AR := $(CROSS_AR)
-endif
+override AR := $(CROSS_AR)
 endif
 CC = $(CROSS_COMPILE)gcc
 AS = $(CROSS_COMPILE)as
