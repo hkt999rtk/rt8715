@@ -30,7 +30,23 @@ endif
 CROSS_COMPILE = $(ARM_GCC_TOOLCHAIN)/arm-none-eabi-
 
 # Compilation tools
-AR = $(CROSS_COMPILE)ar
+# Some customer copies of the legacy Realtek Linux toolchain contain gcc,
+# nm and objcopy but omit arm-none-eabi-ar.  GNU ar archives are target
+# independent containers, so host GNU ar is safe for both creating archives
+# and replacing/extracting ARM object members.  Prefer the cross tool when it
+# exists, while keeping an explicit AR=... supplied by the caller unchanged.
+ifeq ($(filter command line environment environment override,$(origin AR)),)
+CROSS_AR := $(strip $(shell command -v "$(CROSS_COMPILE)ar" 2>/dev/null))
+ifeq ($(CROSS_AR),)
+AR := $(strip $(shell command -v ar 2>/dev/null))
+ifeq ($(AR),)
+$(error Neither $(CROSS_COMPILE)ar nor a host GNU ar was found)
+endif
+$(info Archive tool: $(AR) (host fallback; cross ar is absent))
+else
+AR := $(CROSS_AR)
+endif
+endif
 CC = $(CROSS_COMPILE)gcc
 AS = $(CROSS_COMPILE)as
 NM = $(CROSS_COMPILE)nm
@@ -1816,21 +1832,23 @@ LFLAGS += -Wl,--wrap=usbh_core_connect -Wl,--wrap=usbh_core_disconnect \
 	-Wl,--wrap=usbh_ctrl_request
 $(CARBOX_USB_ARCHIVE): $(CARBOX_USB_VENDOR_ARCHIVE) application.is.mk
 	@mkdir -p $(dir $@)
-	@cp -f $< $@
-	@chmod u+w $@
-	@$(AR) d $@ carplay_ota_compat.o
+	@rm -f $@.tmp
+	@cp -f $< $@.tmp
+	@chmod u+w $@.tmp
+	@$(AR) d $@.tmp carplay_ota_compat.o
 	@mkdir -p $(OBJ_DIR)/usbsmart_compat
 	@rm -f $(OBJ_DIR)/usbsmart_compat/cdc_ncm.o \
 		$(OBJ_DIR)/usbsmart_compat/usbh_cdc_ncm_hal.o
-	@cd $(OBJ_DIR)/usbsmart_compat && $(AR) x $(abspath $@) cdc_ncm.o
+	@cd $(OBJ_DIR)/usbsmart_compat && $(AR) x $(abspath $@.tmp) cdc_ncm.o
 	@$(OBJCOPY) --redefine-sym usbh_ctrl_request=carbox_ncm_ctrl_request \
 		$(OBJ_DIR)/usbsmart_compat/cdc_ncm.o
-	@$(AR) r $@ $(OBJ_DIR)/usbsmart_compat/cdc_ncm.o
-	@cd $(OBJ_DIR)/usbsmart_compat && $(AR) x $(abspath $@) usbh_cdc_ncm_hal.o
+	@$(AR) r $@.tmp $(OBJ_DIR)/usbsmart_compat/cdc_ncm.o
+	@cd $(OBJ_DIR)/usbsmart_compat && $(AR) x $(abspath $@.tmp) usbh_cdc_ncm_hal.o
 	@$(OBJCOPY) --globalize-symbol usbh_cdc_ncm_host_user \
 		--redefine-sym usbh_cdc_ncm_send_data=carbox_vendor_usbh_cdc_ncm_send_data \
 		$(OBJ_DIR)/usbsmart_compat/usbh_cdc_ncm_hal.o
-	@$(AR) r $@ $(OBJ_DIR)/usbsmart_compat/usbh_cdc_ncm_hal.o
+	@$(AR) r $@.tmp $(OBJ_DIR)/usbsmart_compat/usbh_cdc_ncm_hal.o
+	@mv -f $@.tmp $@
 	@echo "  AR   $@ (customer NCM source + status/ready compatibility)"
 
 application: $(CARBOX_USB_ARCHIVE)
