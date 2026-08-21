@@ -1,11 +1,15 @@
 #include "video_handover_zero_copy.h"
 #include "screen_rx_record_profiler.h"
+#include "screen_queue_wait.h"
+#include "screen_rx_stage_profiler.h"
+#include "screen_timestamp_rebase.h"
 
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "FreeRTOS.h"
+#include "semphr.h"
 #include "task.h"
 #include "diag.h"
 #include "hal_timer.h"
@@ -25,10 +29,6 @@
 
 #ifndef VIDEO_HANDOVER_MAX_INFLIGHT
 #define VIDEO_HANDOVER_MAX_INFLIGHT 2U
-#endif
-
-#ifndef VIDEO_HANDOVER_GATE_POLL_TICKS
-#define VIDEO_HANDOVER_GATE_POLL_TICKS 1U
 #endif
 
 #ifndef CONFIG_SCREEN_QUEUE_PROFILE
@@ -286,6 +286,8 @@ typedef struct video_handover_gate_stats_s {
 	uint32_t calls;
 	uint32_t waits;
 	uint32_t wait_loops;
+	uint32_t signals;
+	uint32_t coalesced;
 	uint64_t wait_sum_us;
 	uint32_t wait_max_us;
 	uint32_t observed_max;
@@ -298,11 +300,50 @@ static video_handover_active_t video_handover_active[
 static video_handover_stats_t video_handover_stats;
 static video_handover_gate_stats_t video_handover_gate_stats
 	__attribute__((section(".lpddr.bss.video_handover_gate_stats")));
+static StaticSemaphore_t video_handover_gate_storage;
+static SemaphoreHandle_t video_handover_gate_semaphore;
 static uint32_t video_handover_sequence;
 static uint8_t video_handover_enabled = 1U;
 static uint8_t video_handover_first_commit_logged;
 static uint8_t video_handover_first_producer_release_logged;
 static uint8_t video_handover_first_consumer_release_logged;
+
+static SemaphoreHandle_t video_handover_gate_get_semaphore(void)
+{
+	SemaphoreHandle_t semaphore;
+
+	/* The gate belongs to our wrapper, not to the closed AirPlay object.  A
+	 * static binary semaphore makes the producer wait completion-driven without
+	 * adding heap allocation or another queue to the frame ownership contract. */
+	taskENTER_CRITICAL();
+	if (video_handover_gate_semaphore == NULL) {
+		video_handover_gate_semaphore = xSemaphoreCreateBinaryStatic(
+			&video_handover_gate_storage);
+	}
+	semaphore = video_handover_gate_semaphore;
+	taskEXIT_CRITICAL();
+	return semaphore;
+}
+
+static void video_handover_gate_signal(void)
+{
+	SemaphoreHandle_t semaphore = video_handover_gate_get_semaphore();
+	BaseType_t result = pdFALSE;
+
+	if (semaphore != NULL) {
+		result = xSemaphoreGive(semaphore);
+	}
+	taskENTER_CRITICAL();
+	if (result == pdTRUE) {
+		video_handover_gate_stats.signals++;
+	} else {
+		/* A binary semaphore intentionally coalesces releases.  One wake is
+		 * sufficient because the producer always rechecks the real inflight
+		 * count before publishing another frame. */
+		video_handover_gate_stats.coalesced++;
+	}
+	taskEXIT_CRITICAL();
+}
 
 static uint32_t video_handover_inflight_locked(void)
 {
@@ -354,6 +395,9 @@ static void video_handover_disable(const char *reason, const void *pointer)
 	video_handover_enabled = 0U;
 	video_handover_stats.anomalies++;
 	taskEXIT_CRITICAL();
+	/* Do not strand a producer that was waiting when a lifecycle anomaly
+	 * disabled new substitutions. */
+	video_handover_gate_signal();
 	rt_printf("[VIDEOHOF][FATAL] reason=%s pointer=0x%08lx; "
 		  "new substitutions disabled\r\n", reason,
 		  (unsigned long)(uintptr_t)pointer);
@@ -362,6 +406,7 @@ static void video_handover_disable(const char *reason, const void *pointer)
 void carbox_video_handover_gate(const void *source, int frame_length)
 {
 #if CONFIG_VIDEO_HANDOVER_BACKPRESSURE
+	SemaphoreHandle_t semaphore = video_handover_gate_get_semaphore();
 	TaskHandle_t task = xTaskGetCurrentTaskHandle();
 	uint32_t start_us = 0U;
 	uint32_t wait_us;
@@ -370,7 +415,7 @@ void carbox_video_handover_gate(const void *source, int frame_length)
 	int owner_index;
 	int waited = 0;
 
-	if ((source == NULL) ||
+	if ((semaphore == NULL) || (source == NULL) ||
 	    (frame_length < (int)VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES) ||
 	    (VIDEO_HANDOVER_MAX_INFLIGHT == 0U)) {
 		return;
@@ -409,7 +454,11 @@ void carbox_video_handover_gate(const void *source, int frame_length)
 		}
 		taskEXIT_CRITICAL();
 		loops++;
-		vTaskDelay((TickType_t)VIDEO_HANDOVER_GATE_POLL_TICKS);
+		/* A release can race between the locked inflight check and this take;
+		 * the binary semaphore retains that signal.  After every wake, recheck
+		 * owner state and inflight under the critical section rather than
+		 * assuming that the signalled slot still belongs to this producer. */
+		(void)xSemaphoreTake(semaphore, portMAX_DELAY);
 	}
 
 	if (waited) {
@@ -662,6 +711,7 @@ void carbox_video_handover_finish_push(void *temporary, int pushed)
 	void *trace_source = NULL;
 	size_t trace_length = 0U;
 	int fatal = 0;
+	int released_slot = 0;
 
 	taskENTER_CRITICAL();
 	active = video_handover_find_active_locked(task);
@@ -688,6 +738,7 @@ void carbox_video_handover_finish_push(void *temporary, int pushed)
 			owner->references = 0U;
 			owner->frame_length = 0U;
 			active->ownership_published = 0U;
+			released_slot = 1;
 			video_handover_stats.push_failed++;
 			free_temporary = active->temporary;
 			active->temporary = NULL;
@@ -696,6 +747,9 @@ void carbox_video_handover_finish_push(void *temporary, int pushed)
 		}
 	}
 	taskEXIT_CRITICAL();
+	if (released_slot) {
+		video_handover_gate_signal();
+	}
 	if (free_temporary != NULL) {
 		carbox_screen_tx_release(free_temporary);
 		free(free_temporary);
@@ -753,6 +807,7 @@ static void video_handover_release(void *pointer, uint8_t reference,
 	int owner_index;
 	int actual_free = 0;
 	int duplicate = 0;
+	int released_slot = 0;
 	int trace_release = 0;
 	uint8_t references_after = 0U;
 	uint32_t trace_sequence = 0U;
@@ -792,12 +847,16 @@ static void video_handover_release(void *pointer, uint8_t reference,
 				video_handover_clear_owner_locked(owner);
 				video_handover_stats.final_frees++;
 				actual_free = 1;
+				released_slot = 1;
 			}
 		} else {
 			duplicate = 1;
 		}
 	}
 	taskEXIT_CRITICAL();
+	if (released_slot) {
+		video_handover_gate_signal();
+	}
 	if (actual_free) {
 		free(pointer);
 	} else if (duplicate) {
@@ -903,12 +962,15 @@ void carbox_video_handover_gate_report(uint32_t sequence)
 	if (stats.calls == 0U) {
 		return;
 	}
-	rt_printf("[VIDEOHOF_GATE][%lu] calls/wait/loops=%lu/%lu/%lu "
+	rt_printf("[VIDEOHOF_GATE][%lu] calls/wait/wakes=%lu/%lu/%lu "
+		  "signal/coalesced=%lu/%lu "
 		  "wait_us avg/max=%llu/%lu inflight live/seen/limit=%lu/%lu/%u\r\n",
 		  (unsigned long)sequence,
 		  (unsigned long)stats.calls,
 		  (unsigned long)stats.waits,
 		  (unsigned long)stats.wait_loops,
+		  (unsigned long)stats.signals,
+		  (unsigned long)stats.coalesced,
 		  (unsigned long long)(stats.waits != 0U ?
 			stats.wait_sum_us / stats.waits : 0U),
 		  (unsigned long)stats.wait_max_us,
@@ -943,15 +1005,21 @@ typedef struct video_handover_frame_item_s {
 
 void __wrap_AirPlayScreen_SendVideo(const void *data, int bytes)
 {
+	carbox_screen_timestamp_send_begin(data, bytes);
 #if CONFIG_SCREEN_FPS_PROFILE
 	uint32_t start_us = screen_fps_begin(bytes);
+	carbox_screen_rx_stage_handover_begin();
 #endif
 	carbox_screen_rx_record_send_video(data, bytes);
 	carbox_video_handover_gate(data, bytes);
 	carbox_video_handover_begin(data, bytes);
+	carbox_screen_queue_publish_begin();
 	__real_AirPlayScreen_SendVideo(data, bytes);
+	carbox_screen_queue_publish_end();
 	carbox_video_handover_end();
+	carbox_screen_timestamp_send_end();
 #if CONFIG_SCREEN_FPS_PROFILE
+	carbox_screen_rx_stage_handover_end();
 	screen_fps_end(start_us);
 #endif
 }
@@ -964,6 +1032,7 @@ void __wrap_CVector_push_back(void *vector, const void *element)
 	video_handover_frame_item_t replacement;
 	int size_before = 0;
 	int prepared = 0;
+	int valid_item = 0;
 #if CONFIG_SCREEN_FPS_PROFILE
 	uint32_t profile_start_us = 0U;
 	uint32_t profile_arrival_us = 0U;
@@ -975,6 +1044,7 @@ void __wrap_CVector_push_back(void *vector, const void *element)
 	 * unrelated CVector item as AirPlay's {pointer, length} pair. */
 	if ((view != NULL) && (element != NULL) &&
 	    (view->element_size == (int)sizeof(video_handover_frame_item_t))) {
+		valid_item = 1;
 		original = *(const video_handover_frame_item_t *)element;
 		replacement = original;
 		size_before = view->size;
@@ -989,10 +1059,19 @@ void __wrap_CVector_push_back(void *vector, const void *element)
 
 	__real_CVector_push_back(vector,
 		prepared ? (const void *)&replacement : element);
+	carbox_screen_queue_push_result(vector,
+		(view != NULL) && (view->size == size_before + 1));
 	if (prepared) {
 		int pushed = (view->size == size_before + 1);
 
 		carbox_video_handover_finish_push(original.data, pushed);
+	}
+	if (valid_item) {
+		int pushed = view->size == size_before + 1;
+		const void *published = prepared ? replacement.data : original.data;
+
+		carbox_screen_timestamp_queue_push(vector, published,
+			original.bytes, pushed);
 	}
 #if CONFIG_SCREEN_FPS_PROFILE
 	if (profile_measured) {
@@ -1003,23 +1082,36 @@ void __wrap_CVector_push_back(void *vector, const void *element)
 #endif
 }
 
-#if CONFIG_SCREEN_FPS_PROFILE
 void __wrap_CVector_erase(void *vector, int index)
 {
 	video_handover_vector_view_t *view =
 		(video_handover_vector_view_t *)vector;
+	video_handover_frame_item_t item = { NULL, 0 };
+
+	if ((view != NULL) && (index == 0) && (view->size > 0) &&
+	    (view->data != NULL) &&
+	    (view->element_size == (int)sizeof(video_handover_frame_item_t))) {
+		item = ((video_handover_frame_item_t *)view->data)[0];
+		carbox_screen_timestamp_queue_erase(vector, index, item.data,
+			item.bytes);
+	}
+#if CONFIG_SCREEN_FPS_PROFILE
 	uint32_t arrival_us = 0U;
 	int valid = (view != NULL) && (view->size > 0);
 	int measured = valid ?
 		screen_fps_erase_begin(vector, index, &arrival_us) : 0;
+#endif
 
 	__real_CVector_erase(vector, index);
+#if CONFIG_SCREEN_FPS_PROFILE
 	if (measured) {
 		screen_fps_erase_end(arrival_us,
 			view->size > 0 ? (uint32_t)view->size : 0U);
 	}
-}
 #endif
+	carbox_screen_queue_after_erase(vector,
+		view != NULL ? view->size : 0);
+}
 #endif
 
 void carbox_screen_fps_report(uint32_t sequence)

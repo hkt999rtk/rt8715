@@ -513,6 +513,9 @@ static u8 RX_BUFFER[MAX_BUFFER_SIZE];
 #ifndef CONFIG_NCM_TX_PIPELINE
 #define CONFIG_NCM_TX_PIPELINE 0
 #endif
+#ifndef CONFIG_TCP_OUTPUT_PROFILE
+#define CONFIG_TCP_OUTPUT_PROFILE 0
+#endif
 
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_NCM_TX_PROFILE
 #define NCM_TX_PROFILE_WINDOW_US 10000000U
@@ -1172,9 +1175,30 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 #define NCM_TX_PIPELINE_SLOTS         3U
 #define NCM_TX_PIPELINE_NTB_CAPACITY  16384U
 
+#ifndef CONFIG_NCM_TX_BATCH_MIN
+#define CONFIG_NCM_TX_BATCH_MIN 4U
+#endif
+#ifndef CONFIG_NCM_TX_BATCH_TIMEOUT_LOWER_US
+#define CONFIG_NCM_TX_BATCH_TIMEOUT_LOWER_US 100U
+#endif
+#ifndef CONFIG_NCM_TX_BATCH_TIMEOUT_UPPER_US
+#define CONFIG_NCM_TX_BATCH_TIMEOUT_UPPER_US 1000U
+#endif
+#if CONFIG_NCM_TX_BATCH_MIN < 1 || \
+	CONFIG_NCM_TX_BATCH_MIN > CONFIG_NCM_TX_BATCH_MAX
+#error "CONFIG_NCM_TX_BATCH_MIN must be within 1..CONFIG_NCM_TX_BATCH_MAX"
+#endif
+#if CONFIG_NCM_TX_BATCH_TIMEOUT_LOWER_US < 1 || \
+	CONFIG_NCM_TX_BATCH_TIMEOUT_LOWER_US > CONFIG_NCM_TX_BATCH_TIMEOUT_UPPER_US
+#error "invalid adaptive NCM TX batching timeout range"
+#endif
+
 struct ncm_tx_async_item {
 	struct pbuf *p;
 	u32_t enqueue_us;
+	u32_t timer_generation;
+	u32_t timer_irq_us;
+	u8_t timer_event;
 };
 
 struct ncm_tx_async_stats {
@@ -1214,12 +1238,37 @@ struct ncm_tx_pipeline_stats {
 	u32_t handoff_us_total;
 	u32_t handoff_us_max;
 	u32_t handoff_samples;
+	u32_t coalesce_armed;
+	u32_t coalesce_target;
+	u32_t coalesce_timeout;
+	u32_t coalesce_idle_immediate;
+	u32_t coalesce_no_timer;
+	u32_t coalesce_wait_us_total;
+	u32_t coalesce_wait_us_max;
+	u32_t coalesce_timer_fired;
+	u32_t coalesce_timer_drop;
+	u32_t coalesce_last_deadline_us;
+	u32_t coalesce_deadline_us_total;
+	u32_t coalesce_deadline_us_max;
+	u32_t coalesce_irq_late_samples;
+	u32_t coalesce_irq_late_us_total;
+	u32_t coalesce_irq_late_us_max;
+	u32_t coalesce_irq_to_task_samples;
+	u32_t coalesce_irq_to_task_us_total;
+	u32_t coalesce_irq_to_task_us_max;
 };
 static struct ncm_tx_pipeline_slot g_ncm_tx_pipeline_slots[NCM_TX_PIPELINE_SLOTS];
 static struct ncm_tx_pipeline_stats g_ncm_tx_pipeline_stats;
 static QueueHandle_t g_ncm_tx_free_queue;
 static QueueHandle_t g_ncm_tx_ready_queue;
 static TaskHandle_t g_ncm_tx_usb_task;
+static hal_timer_adapter_t g_ncm_tx_coalesce_timer;
+static volatile u32_t g_ncm_tx_coalesce_timer_available;
+static volatile u32_t g_ncm_tx_coalesce_timer_generation;
+static volatile u32_t g_ncm_tx_coalesce_timer_due_us;
+static volatile u32_t g_ncm_tx_usb_busy;
+static volatile u32_t g_ncm_tx_arrival_last_us;
+static volatile u32_t g_ncm_tx_arrival_gap_ewma_us;
 #endif
 static struct ncm_tx_async_stats g_ncm_tx_async_stats;
 static volatile u32_t g_ncm_tx_inflight_packets;
@@ -1287,6 +1336,41 @@ void rltk_ncm_tx_pipeline_report(u32 sequence)
 	       (unsigned int)input_now, (unsigned int)ready_now,
 	       (unsigned int)free_now, (unsigned int)stats.ready_depth_max,
 	       (unsigned int)stats.free_waits);
+	printf("[NCMTXBATCH][%u] target/range/deadline avg/max/last="
+	       "%u/%u-%u/%u/%u/%uus "
+	       "arm/target/timeout/idle/no_timer=%u/%u/%u/%u/%u "
+	       "wait_us avg/max=%u/%u timer fire/drop=%u/%u "
+	       "irq_late_us avg/max=%u/%u irq_to_task_us avg/max=%u/%u "
+	       "gap_ewma_us=%u\n",
+	       (unsigned int)sequence,
+	       (unsigned int)CONFIG_NCM_TX_BATCH_MIN,
+	       (unsigned int)CONFIG_NCM_TX_BATCH_TIMEOUT_LOWER_US,
+	       (unsigned int)CONFIG_NCM_TX_BATCH_TIMEOUT_UPPER_US,
+	       stats.coalesce_armed ?
+	       (unsigned int)(stats.coalesce_deadline_us_total /
+		stats.coalesce_armed) : 0U,
+	       (unsigned int)stats.coalesce_deadline_us_max,
+	       (unsigned int)stats.coalesce_last_deadline_us,
+	       (unsigned int)stats.coalesce_armed,
+	       (unsigned int)stats.coalesce_target,
+	       (unsigned int)stats.coalesce_timeout,
+	       (unsigned int)stats.coalesce_idle_immediate,
+	       (unsigned int)stats.coalesce_no_timer,
+	       stats.coalesce_armed ?
+	       (unsigned int)(stats.coalesce_wait_us_total /
+		stats.coalesce_armed) : 0U,
+	       (unsigned int)stats.coalesce_wait_us_max,
+	       (unsigned int)stats.coalesce_timer_fired,
+	       (unsigned int)stats.coalesce_timer_drop,
+	       stats.coalesce_irq_late_samples ?
+	       (unsigned int)(stats.coalesce_irq_late_us_total /
+		stats.coalesce_irq_late_samples) : 0U,
+	       (unsigned int)stats.coalesce_irq_late_us_max,
+	       stats.coalesce_irq_to_task_samples ?
+	       (unsigned int)(stats.coalesce_irq_to_task_us_total /
+		stats.coalesce_irq_to_task_samples) : 0U,
+	       (unsigned int)stats.coalesce_irq_to_task_us_max,
+	       (unsigned int)g_ncm_tx_arrival_gap_ewma_us);
 #else
 	(void)sequence;
 #endif
@@ -1335,6 +1419,59 @@ static void ncm_tx_async_report(u32_t now)
 }
 
 #if CONFIG_NCM_TX_PIPELINE
+static void ncm_tx_coalesce_timer_callback(void *arg)
+{
+	struct ncm_tx_async_item event;
+	BaseType_t task_woken = pdFALSE;
+	u32_t irq_us;
+	s32_t irq_late_us;
+
+	(void)arg;
+	irq_us = hal_read_curtime_us();
+	memset(&event, 0, sizeof(event));
+	event.timer_event = 1U;
+	event.timer_generation = g_ncm_tx_coalesce_timer_generation;
+	event.timer_irq_us = irq_us;
+	g_ncm_tx_pipeline_stats.coalesce_timer_fired++;
+	irq_late_us = (s32_t)(irq_us - g_ncm_tx_coalesce_timer_due_us);
+	if (irq_late_us > 0) {
+		g_ncm_tx_pipeline_stats.coalesce_irq_late_samples++;
+		g_ncm_tx_pipeline_stats.coalesce_irq_late_us_total +=
+			(u32_t)irq_late_us;
+		if ((u32_t)irq_late_us >
+		    g_ncm_tx_pipeline_stats.coalesce_irq_late_us_max)
+			g_ncm_tx_pipeline_stats.coalesce_irq_late_us_max =
+				(u32_t)irq_late_us;
+	}
+	if (g_ncm_tx_async_queue == NULL ||
+	    xQueueSendFromISR(g_ncm_tx_async_queue, &event, &task_woken) != pdPASS)
+		g_ncm_tx_pipeline_stats.coalesce_timer_drop++;
+	portYIELD_FROM_ISR(task_woken);
+}
+
+static u32_t ncm_tx_adaptive_deadline_us(u32_t have_frames)
+{
+	u32_t gap_us = g_ncm_tx_arrival_gap_ewma_us;
+	u32_t remaining;
+	u32_t deadline_us;
+
+	if (have_frames >= CONFIG_NCM_TX_BATCH_MIN)
+		return 0U;
+	remaining = CONFIG_NCM_TX_BATCH_MIN - have_frames;
+	if (gap_us == 0U)
+		return CONFIG_NCM_TX_BATCH_TIMEOUT_LOWER_US;
+	/* Predict the remaining within-burst arrivals and add 25% scheduling
+	 * margin.  This is a fixed deadline from the first dequeued packet; each
+	 * arrival does not extend it indefinitely. */
+	deadline_us = gap_us * remaining;
+	deadline_us += deadline_us / 4U;
+	if (deadline_us < CONFIG_NCM_TX_BATCH_TIMEOUT_LOWER_US)
+		deadline_us = CONFIG_NCM_TX_BATCH_TIMEOUT_LOWER_US;
+	if (deadline_us > CONFIG_NCM_TX_BATCH_TIMEOUT_UPPER_US)
+		deadline_us = CONFIG_NCM_TX_BATCH_TIMEOUT_UPPER_US;
+	return deadline_us;
+}
+
 static void ncm_tx_usb_worker(void *arg)
 {
 	struct ncm_tx_pipeline_slot *slot;
@@ -1360,7 +1497,9 @@ static void ncm_tx_usb_worker(void *arg)
 			if (handoff_us > g_ncm_tx_pipeline_stats.handoff_us_max)
 				g_ncm_tx_pipeline_stats.handoff_us_max = handoff_us;
 		}
+		g_ncm_tx_usb_busy = 1U;
 		status = carbox_ncm_tx_send_prebuilt(slot->buffer, slot->len);
+		g_ncm_tx_usb_busy = 0U;
 		end_us = hal_read_curtime_us();
 		elapsed_us = end_us - start_us;
 		g_ncm_tx_pipeline_stats.usb_completions++;
@@ -1410,12 +1549,112 @@ static void ncm_tx_async_worker(void *arg)
 			u32_t send_index = 0U;
 			err_t result = ERR_OK;
 
-			/* Drain only frames already queued; never add a batching delay. */
+			/* Timer expirations share the input queue so a sub-tick GTimer IRQ can
+			 * wake this owner without polling.  Stale events are harmless. */
+			if (items[0].timer_event != 0U || items[0].p == NULL)
+				continue;
+
+			/* Drain frames already queued before deciding whether a bounded
+			 * coalescing wait can be hidden behind an active USB transfer. */
 #if CONFIG_NCM_TX_BATCH_MAX > 1
 			while (item_count < CARBOX_NCM_TX_BATCH_MAX_DATAGRAMS &&
 			       xQueueReceive(g_ncm_tx_async_queue, &items[item_count],
 					     0) == pdTRUE) {
-				item_count++;
+				if (items[item_count].timer_event == 0U &&
+				    items[item_count].p != NULL)
+					item_count++;
+			}
+#endif
+
+#if CONFIG_NCM_TX_PIPELINE && CONFIG_NCM_TX_BATCH_MIN > 1
+			if (item_count < CONFIG_NCM_TX_BATCH_MIN) {
+				u32_t ready_depth = (u32_t)uxQueueMessagesWaiting(
+					g_ncm_tx_ready_queue);
+				if (g_ncm_tx_usb_busy != 0U || ready_depth != 0U) {
+					if (g_ncm_tx_coalesce_timer_available != 0U) {
+						u32_t generation =
+							++g_ncm_tx_coalesce_timer_generation;
+						u32_t deadline_us =
+							ncm_tx_adaptive_deadline_us(item_count);
+						u32_t wait_start_us = hal_read_curtime_us();
+						u8_t timed_out = 0U;
+
+						g_ncm_tx_pipeline_stats.coalesce_armed++;
+						g_ncm_tx_pipeline_stats.coalesce_last_deadline_us =
+							deadline_us;
+						g_ncm_tx_pipeline_stats.coalesce_deadline_us_total +=
+							deadline_us;
+						if (deadline_us >
+						    g_ncm_tx_pipeline_stats.coalesce_deadline_us_max)
+							g_ncm_tx_pipeline_stats.coalesce_deadline_us_max =
+								deadline_us;
+						g_ncm_tx_coalesce_timer_due_us = wait_start_us +
+							deadline_us;
+						hal_timer_start_one_shot(&g_ncm_tx_coalesce_timer,
+							deadline_us, ncm_tx_coalesce_timer_callback,
+							NULL);
+						while (item_count < CONFIG_NCM_TX_BATCH_MIN) {
+							struct ncm_tx_async_item next;
+
+							if (xQueueReceive(g_ncm_tx_async_queue, &next,
+									  portMAX_DELAY) != pdTRUE)
+								continue;
+							if (next.timer_event != 0U || next.p == NULL) {
+								if (next.timer_generation == generation) {
+									u32_t irq_to_task_us =
+										hal_read_curtime_us() - next.timer_irq_us;
+
+									g_ncm_tx_pipeline_stats.
+										coalesce_irq_to_task_samples++;
+									g_ncm_tx_pipeline_stats.
+										coalesce_irq_to_task_us_total +=
+										irq_to_task_us;
+									if (irq_to_task_us >
+									    g_ncm_tx_pipeline_stats.
+									    coalesce_irq_to_task_us_max)
+										g_ncm_tx_pipeline_stats.
+											coalesce_irq_to_task_us_max =
+											irq_to_task_us;
+									timed_out = 1U;
+									break;
+								}
+								continue;
+							}
+							items[item_count++] = next;
+						}
+						if (timed_out == 0U) {
+							hal_timer_disable(&g_ncm_tx_coalesce_timer);
+							g_ncm_tx_pipeline_stats.coalesce_target++;
+						} else {
+							g_ncm_tx_pipeline_stats.coalesce_timeout++;
+						}
+						{
+							u32_t waited_us = hal_read_curtime_us() -
+								wait_start_us;
+							g_ncm_tx_pipeline_stats.coalesce_wait_us_total +=
+								waited_us;
+							if (waited_us >
+							    g_ncm_tx_pipeline_stats.coalesce_wait_us_max)
+								g_ncm_tx_pipeline_stats.coalesce_wait_us_max =
+									waited_us;
+						}
+					} else {
+						g_ncm_tx_pipeline_stats.coalesce_no_timer++;
+					}
+				} else {
+					/* Never create a USB bubble merely to improve packing. */
+					g_ncm_tx_pipeline_stats.coalesce_idle_immediate++;
+				}
+			}
+			/* Once the target/deadline decision is complete, also consume any
+			 * additional packets that are already waiting, up to batch16. */
+			while (item_count < CARBOX_NCM_TX_BATCH_MAX_DATAGRAMS) {
+				struct ncm_tx_async_item next;
+
+				if (xQueueReceive(g_ncm_tx_async_queue, &next, 0) != pdTRUE)
+					break;
+				if (next.timer_event == 0U && next.p != NULL)
+					items[item_count++] = next;
 			}
 #endif
 
@@ -1578,6 +1817,7 @@ static int ncm_tx_async_init(void)
 #if CONFIG_NCM_TX_PIPELINE
 	u32_t slot_index;
 	struct ncm_tx_pipeline_slot *slot;
+	timer_id_t coalesce_timer_id;
 #endif
 
 	if (g_ncm_tx_async_task != NULL) {
@@ -1602,6 +1842,14 @@ static int ncm_tx_async_init(void)
 		printf("[NCMTXASYNC] ERROR: pipeline queue allocation failed\n");
 		return 0;
 	}
+	coalesce_timer_id = hal_timer_allocate(NULL);
+	if (coalesce_timer_id < MaxGTimerNum &&
+	    hal_timer_init(&g_ncm_tx_coalesce_timer, coalesce_timer_id) == HAL_OK) {
+		g_ncm_tx_coalesce_timer_available = 1U;
+	} else {
+		g_ncm_tx_coalesce_timer_available = 0U;
+		printf("[NCMTXBATCH] no GTimer available; adaptive wait disabled\n");
+	}
 	for (slot_index = 0U; slot_index < NCM_TX_PIPELINE_SLOTS; ++slot_index) {
 		slot = &g_ncm_tx_pipeline_slots[slot_index];
 		(void)xQueueSend(g_ncm_tx_free_queue, &slot, 0);
@@ -1623,6 +1871,16 @@ static int ncm_tx_async_init(void)
 		return 0;
 	}
 #if CONFIG_NCM_TX_BATCH_MAX > 1
+	#if CONFIG_NCM_TX_PIPELINE
+	printf("[NCMTXASYNC] enabled mode=task-batch%u-pipeline3 queue=%u "
+	       "priority=%u adaptive target/range=%u/%u-%uus; customer HAL\n",
+	       (unsigned int)CONFIG_NCM_TX_BATCH_MAX,
+	       (unsigned int)NCM_TX_ASYNC_QUEUE_LEN,
+	       (unsigned int)NCM_TX_ASYNC_TASK_PRIORITY,
+	       (unsigned int)CONFIG_NCM_TX_BATCH_MIN,
+	       (unsigned int)CONFIG_NCM_TX_BATCH_TIMEOUT_LOWER_US,
+	       (unsigned int)CONFIG_NCM_TX_BATCH_TIMEOUT_UPPER_US);
+	#else
 	printf("[NCMTXASYNC] enabled mode=task-batch%u%s queue=%u priority=%u; "
 	       "no-wait pbuf-reference batching, customer HAL\n",
 	       (unsigned int)CONFIG_NCM_TX_BATCH_MAX,
@@ -1631,24 +1889,44 @@ static int ncm_tx_async_init(void)
 #else
 	       "",
 #endif
+	       (unsigned int)NCM_TX_ASYNC_QUEUE_LEN,
+	       (unsigned int)NCM_TX_ASYNC_TASK_PRIORITY);
+	#endif
 #else
 	printf("[NCMTXASYNC] enabled mode=single-immediate queue=%u priority=%u; "
 	       "pbuf-reference queue, customer HAL\n",
-#endif
 	       (unsigned int)NCM_TX_ASYNC_QUEUE_LEN,
 	       (unsigned int)NCM_TX_ASYNC_TASK_PRIORITY);
+#endif
 	return 1;
 }
 
 static int ncm_tx_async_enqueue(struct pbuf *p)
 {
 	struct ncm_tx_async_item item;
+	u32_t arrival_gap_us;
 
 	if (g_ncm_tx_async_task == NULL || g_ncm_tx_async_queue == NULL) {
 		return 0;
 	}
 	item.p = p;
 	item.enqueue_us = hal_read_curtime_us();
+	item.timer_generation = 0U;
+	item.timer_event = 0U;
+#if CONFIG_NCM_TX_PIPELINE
+	arrival_gap_us = item.enqueue_us - g_ncm_tx_arrival_last_us;
+	if (g_ncm_tx_arrival_last_us != 0U &&
+	    arrival_gap_us <= CONFIG_NCM_TX_BATCH_TIMEOUT_UPPER_US * 2U) {
+		if (g_ncm_tx_arrival_gap_ewma_us == 0U)
+			g_ncm_tx_arrival_gap_ewma_us = arrival_gap_us;
+		else
+			g_ncm_tx_arrival_gap_ewma_us =
+				(g_ncm_tx_arrival_gap_ewma_us * 7U + arrival_gap_us) / 8U;
+	}
+	g_ncm_tx_arrival_last_us = item.enqueue_us;
+#else
+	(void)arrival_gap_us;
+#endif
 	/* A network driver may retain a pbuf after linkoutput() only if it owns an
 	 * extra reference and releases that reference after TX completion. */
 	pbuf_ref(p);

@@ -118,6 +118,17 @@ struct api_msg {
 #if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
       struct tcp_owned_buffer *owned;
 #endif
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE && \
+    defined(CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE) && \
+    CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE
+      u32_t profile_submit_us;
+      u32_t profile_tcpip_start_us;
+      u32_t profile_tcp_write_us;
+      u32_t profile_tcp_output_us;
+      u32_t profile_signal_us;
+      u16_t profile_tcp_write_calls;
+      u16_t profile_tcp_output_calls;
+#endif
 #if LWIP_SO_SNDTIMEO
       u32_t time_started;
 #endif /* LWIP_SO_SNDTIMEO */

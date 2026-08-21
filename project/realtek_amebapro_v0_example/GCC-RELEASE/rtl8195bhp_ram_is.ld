@@ -548,6 +548,9 @@ SECTIONS
 
 		*(.psram.data*)
 		*(.lpddr.data*)
+		/* screen_tx_direct_crypto.o is SRAM-prefixed as a whole; only its
+		 * cold 10-second SCREENBLOCK accumulator belongs in LPDDR. */
+		*(.sram.lpddr.data.screen_block_stats)
 		*(.sdram.data*)
 		*(.usbd.data*)
 		*(.wlan.data*)

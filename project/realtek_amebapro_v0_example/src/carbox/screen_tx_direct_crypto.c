@@ -1,5 +1,6 @@
 #include "screen_tx_direct_crypto.h"
 #include "usb_hcd_profiler.h"
+#include "screen_timestamp_rebase.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -96,8 +97,14 @@ typedef struct screen_tx_direct_slot_s {
 	void *destination;
 	size_t payload_length;
 	uint32_t crypto_kind;
+	uint32_t frame_start_us;
+	uint32_t header_hook_us;
+	uint32_t payload_hook_us;
 	uint32_t crypto_start_us;
+	uint32_t crypto_end_us;
+	uint32_t write_start_us;
 	uint8_t state;
+	uint8_t stage_reported;
 	uint8_t materialized;
 	uint8_t tcp_owned;
 	uint8_t consumer_released;
@@ -145,6 +152,11 @@ typedef struct screen_crypto_latency_s {
 
 static screen_crypto_latency_t screen_crypto_latency[2]
 	__attribute__((section(".lpddr.bss.screen_crypto_latency")));
+
+typedef carbox_screen_tx_stage_snapshot_t screen_tx_stage_stats_t;
+
+static screen_tx_stage_stats_t screen_tx_stage_stats
+	__attribute__((section(".lpddr.bss.screen_tx_stage_stats")));
 #endif
 
 #if CONFIG_SCREEN_TX_PACER_ACTIVE
@@ -311,7 +323,13 @@ typedef struct screen_block_stats_s {
 	uint64_t recovery_sum_us;
 } screen_block_stats_t;
 
-static screen_block_stats_t screen_block_stats = {
+/*
+ * This is 10-second diagnostic accumulation, not TX functional state.  Keep
+ * it in LPDDR so optional observability does not consume the tightly bounded
+ * internal SRAM used by the per-frame slots and completion path.
+ */
+static screen_block_stats_t screen_block_stats
+	__attribute__((section(".lpddr.data.screen_block_stats"))) = {
 	.tx_buffer_min = UINT32_MAX,
 	.send_window_min = UINT32_MAX,
 	.send_window_available_min = UINT32_MAX,
@@ -425,8 +443,7 @@ void carbox_screen_tx_allocation(void *pointer, size_t length)
 	uint32_t i;
 
 	if ((pointer == NULL) ||
-	    (length < SCREEN_TX_HEADER_BYTES +
-		SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES)) {
+	    (length <= SCREEN_TX_HEADER_BYTES)) {
 		return;
 	}
 	task = xTaskGetCurrentTaskHandle();
@@ -460,6 +477,7 @@ void carbox_screen_tx_allocation(void *pointer, size_t length)
 		.owner = task,
 		.wire_base = pointer,
 		.wire_length = length,
+		.frame_start_us = hal_read_curtime_us(),
 		.state = SCREEN_TX_DIRECT_CANDIDATE
 	};
 	screen_tx_stats.allocations++;
@@ -589,7 +607,9 @@ static int screen_tx_copy_defer(void *destination, const void *source,
 {
 	TaskHandle_t task = xTaskGetCurrentTaskHandle();
 	screen_tx_direct_slot_t *slot;
+	uint32_t now_us = hal_read_curtime_us();
 	int defer = 0;
+	void *header_to_patch = NULL;
 
 	taskENTER_CRITICAL();
 	slot = screen_tx_find_task_locked(task);
@@ -597,24 +617,35 @@ static int screen_tx_copy_defer(void *destination, const void *source,
 		if ((slot->state == SCREEN_TX_DIRECT_CANDIDATE) &&
 		    (destination == slot->wire_base) &&
 		    (length == SCREEN_TX_HEADER_BYTES)) {
+			slot->header_hook_us = now_us;
 			slot->state = SCREEN_TX_DIRECT_HEADER;
 			screen_tx_stats.headers++;
 		} else if ((slot->state == SCREEN_TX_DIRECT_HEADER) &&
 			   (destination == (void *)((uintptr_t)slot->wire_base +
 				SCREEN_TX_HEADER_BYTES)) &&
 			   (source != NULL) && (destination != source) &&
-			   (length >= SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES) &&
 			   screen_tx_wire_size_matches(slot->wire_length, length)) {
-			slot->source = source;
-			slot->destination = destination;
-			slot->payload_length = length;
-			slot->state = SCREEN_TX_DIRECT_DEFERRED;
-			screen_tx_stats.attempts++;
-			screen_tx_stats.deferred++;
-			defer = 1;
+			/* Timestamp rebasing is independent of the direct-crypto size
+			 * threshold.  Small normal frames still need the iPhone cadence,
+			 * but retain the customer's original payload-copy/crypto path. */
+			header_to_patch = slot->wire_base;
+			if (length >= SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES) {
+				slot->payload_hook_us = now_us;
+				slot->source = source;
+				slot->destination = destination;
+				slot->payload_length = length;
+				slot->state = SCREEN_TX_DIRECT_DEFERRED;
+				screen_tx_stats.attempts++;
+				screen_tx_stats.deferred++;
+				defer = 1;
+			}
 		}
 	}
 	taskEXIT_CRITICAL();
+	if (header_to_patch != NULL) {
+		(void)carbox_screen_timestamp_patch_normal_header(
+			header_to_patch, SCREEN_TX_HEADER_BYTES);
+	}
 	return defer;
 }
 
@@ -729,6 +760,7 @@ void carbox_screen_tx_crypto_complete(void *destination, size_t length,
 	slot = screen_tx_find_destination_locked(task, destination, length);
 	if ((slot != NULL) && (slot->state == SCREEN_TX_DIRECT_ACTIVE) &&
 	    (slot->crypto_kind == kind)) {
+		slot->crypto_end_us = now_us;
 #if CONFIG_SCREEN_FPS_PROFILE
 		{
 			uint32_t elapsed_us = now_us - slot->crypto_start_us;
@@ -793,6 +825,134 @@ void carbox_screen_tx_before_write(const void *buffer, size_t length)
 	if (stale) {
 		screen_tx_disable("wire-write-before-valid-crypto", buffer);
 	}
+}
+
+void carbox_screen_tx_write_begin(const void *buffer)
+{
+#if CONFIG_SCREEN_FPS_PROFILE
+	TaskHandle_t task = xTaskGetCurrentTaskHandle();
+	uint32_t now_us = hal_read_curtime_us();
+	uint32_t i;
+
+	taskENTER_CRITICAL();
+	/* owned_begin runs immediately before this hook and marks the current
+	 * buffer tcp_owned.  The active-transaction task lookup intentionally
+	 * excludes such slots, so correlate this boundary by exact wire pointer. */
+	for (i = 0U; i < SCREEN_TX_DIRECT_SLOTS; ++i) {
+		screen_tx_direct_slot_t *slot = &screen_tx_slots[i];
+
+		if ((slot->owner == task) && (slot->wire_base == buffer) &&
+		    (slot->state == SCREEN_TX_DIRECT_READY)) {
+			slot->write_start_us = now_us;
+			break;
+		}
+	}
+	taskEXIT_CRITICAL();
+#else
+	(void)buffer;
+#endif
+}
+
+void carbox_screen_tx_after_write(const void *buffer, size_t requested,
+				  int result)
+{
+#if CONFIG_SCREEN_FPS_PROFILE
+	TaskHandle_t task = xTaskGetCurrentTaskHandle();
+	screen_tx_direct_slot_t *slot = NULL;
+	uint32_t now_us;
+	uint32_t prepare_us;
+	uint32_t alloc_to_header_us;
+	uint32_t header_to_payload_us;
+	uint32_t payload_to_crypto_us;
+	uint32_t crypto_us;
+	uint32_t post_crypto_us;
+	uint32_t crypto_to_write_us;
+	uint32_t write_call_us;
+	uint32_t service_us;
+	uint32_t i;
+
+	if ((buffer == NULL) || (result < 0)) return;
+	now_us = hal_read_curtime_us();
+	taskENTER_CRITICAL();
+	for (i = 0U; i < SCREEN_TX_DIRECT_SLOTS; ++i) {
+		if ((screen_tx_slots[i].owner == task) &&
+		    (screen_tx_slots[i].wire_base == buffer)) {
+			slot = &screen_tx_slots[i];
+			break;
+		}
+	}
+	if ((slot == NULL) || (slot->header_hook_us == 0U) ||
+	    (slot->payload_hook_us == 0U) || (slot->crypto_end_us == 0U) ||
+	    (slot->write_start_us == 0U)) {
+		screen_tx_stage_stats.unmatched_writes++;
+		taskEXIT_CRITICAL();
+		return;
+	}
+	if ((size_t)result != requested) {
+		screen_tx_stage_stats.partial_writes++;
+		taskEXIT_CRITICAL();
+		return;
+	}
+	if (slot->stage_reported) {
+		taskEXIT_CRITICAL();
+		return;
+	}
+	slot->stage_reported = 1U;
+	prepare_us = slot->crypto_start_us - slot->frame_start_us;
+	alloc_to_header_us = slot->header_hook_us - slot->frame_start_us;
+	header_to_payload_us = slot->payload_hook_us - slot->header_hook_us;
+	payload_to_crypto_us = slot->crypto_start_us - slot->payload_hook_us;
+	crypto_us = slot->crypto_end_us - slot->crypto_start_us;
+	post_crypto_us = now_us - slot->crypto_end_us;
+	crypto_to_write_us = slot->write_start_us - slot->crypto_end_us;
+	write_call_us = now_us - slot->write_start_us;
+	service_us = now_us - slot->frame_start_us;
+	screen_tx_stage_stats.frames++;
+	screen_tx_stage_stats.full_writes++;
+	screen_tx_stage_stats.prepare_sum_us += prepare_us;
+	if (prepare_us > screen_tx_stage_stats.prepare_max_us) {
+		screen_tx_stage_stats.prepare_max_us = prepare_us;
+	}
+	screen_tx_stage_stats.alloc_to_header_sum_us += alloc_to_header_us;
+	if (alloc_to_header_us > screen_tx_stage_stats.alloc_to_header_max_us) {
+		screen_tx_stage_stats.alloc_to_header_max_us = alloc_to_header_us;
+	}
+	screen_tx_stage_stats.header_to_payload_sum_us += header_to_payload_us;
+	if (header_to_payload_us > screen_tx_stage_stats.header_to_payload_max_us) {
+		screen_tx_stage_stats.header_to_payload_max_us = header_to_payload_us;
+	}
+	screen_tx_stage_stats.payload_to_crypto_sum_us += payload_to_crypto_us;
+	if (payload_to_crypto_us > screen_tx_stage_stats.payload_to_crypto_max_us) {
+		screen_tx_stage_stats.payload_to_crypto_max_us = payload_to_crypto_us;
+	}
+	screen_tx_stage_stats.crypto_sum_us += crypto_us;
+	if (crypto_us > screen_tx_stage_stats.crypto_max_us) {
+		screen_tx_stage_stats.crypto_max_us = crypto_us;
+	}
+	screen_tx_stage_stats.post_crypto_sum_us += post_crypto_us;
+	if (post_crypto_us > screen_tx_stage_stats.post_crypto_max_us) {
+		screen_tx_stage_stats.post_crypto_max_us = post_crypto_us;
+	}
+	screen_tx_stage_stats.crypto_to_write_sum_us += crypto_to_write_us;
+	if (crypto_to_write_us > screen_tx_stage_stats.crypto_to_write_max_us) {
+		screen_tx_stage_stats.crypto_to_write_max_us = crypto_to_write_us;
+	}
+	screen_tx_stage_stats.write_call_sum_us += write_call_us;
+	if (write_call_us > screen_tx_stage_stats.write_call_max_us) {
+		screen_tx_stage_stats.write_call_max_us = write_call_us;
+	}
+	screen_tx_stage_stats.service_sum_us += service_us;
+	if (service_us > screen_tx_stage_stats.service_max_us) {
+		screen_tx_stage_stats.service_max_us = service_us;
+	}
+	screen_tx_stage_stats.service_over_16ms += service_us > 16667U;
+	screen_tx_stage_stats.service_over_33ms += service_us > 33333U;
+	taskEXIT_CRITICAL();
+#else
+	(void)buffer;
+	(void)requested;
+	(void)result;
+#endif
 }
 
 void carbox_screen_block_profile_write(int socket, size_t requested, int result)
@@ -1121,6 +1281,25 @@ void carbox_screen_crypto_latency_report(uint32_t sequence)
 #endif
 }
 
+int carbox_screen_tx_stage_snapshot(carbox_screen_tx_stage_snapshot_t *snapshot)
+{
+#if CONFIG_SCREEN_FPS_PROFILE
+	if (snapshot == NULL) {
+		return 0;
+	}
+
+	taskENTER_CRITICAL();
+	*snapshot = screen_tx_stage_stats;
+	screen_tx_stage_stats = (screen_tx_stage_stats_t){ 0 };
+	taskEXIT_CRITICAL();
+	return snapshot->frames != 0U || snapshot->partial_writes != 0U ||
+		snapshot->unmatched_writes != 0U;
+#else
+	(void)snapshot;
+	return 0;
+#endif
+}
+
 void carbox_screen_tx_direct_crypto_report(uint32_t sequence)
 {
 	screen_tx_direct_stats_t stats;
@@ -1219,18 +1398,22 @@ int __wrap_lwip_write(int socket, const void *buffer, size_t bytes)
 	paced_bytes = carbox_screen_tx_pacer_allowance(bytes);
 #endif
 #if CONFIG_TCP_OWNED_WRITE
-	if (carbox_screen_tx_owned_begin(buffer, paced_bytes)) {
+	int owned = carbox_screen_tx_owned_begin(buffer, paced_bytes);
+	carbox_screen_tx_write_begin(buffer);
+	if (owned) {
 		result = lwip_write_owned(socket, buffer, paced_bytes,
 			carbox_screen_tx_owned_complete, (void *)(uintptr_t)buffer);
 	} else {
 		result = __real_lwip_write(socket, buffer, paced_bytes);
 	}
 #else
+	carbox_screen_tx_write_begin(buffer);
 	result = __real_lwip_write(socket, buffer, paced_bytes);
 #endif
 #if CONFIG_SCREEN_TX_PACER_ACTIVE
 	carbox_screen_tx_pacer_complete(paced_bytes, result);
 #endif
+	carbox_screen_tx_after_write(buffer, paced_bytes, result);
 	carbox_screen_block_profile_write(socket, bytes, result);
 	return result;
 }
@@ -1296,6 +1479,14 @@ void carbox_screen_tx_before_write(const void *buffer, size_t length)
 	(void)buffer;
 	(void)length;
 }
+void carbox_screen_tx_write_begin(const void *buffer) { (void)buffer; }
+void carbox_screen_tx_after_write(const void *buffer, size_t requested,
+				  int result)
+{
+	(void)buffer;
+	(void)requested;
+	(void)result;
+}
 void carbox_screen_block_profile_write(int socket, size_t requested, int result)
 {
 	(void)socket;
@@ -1316,6 +1507,15 @@ void carbox_screen_tx_direct_crypto_report(uint32_t sequence)
 	(void)sequence;
 }
 void carbox_screen_crypto_latency_report(uint32_t sequence)
+{
+	(void)sequence;
+}
+int carbox_screen_tx_stage_snapshot(carbox_screen_tx_stage_snapshot_t *snapshot)
+{
+	(void)snapshot;
+	return 0;
+}
+void carbox_screen_tx_stage_report(uint32_t sequence)
 {
 	(void)sequence;
 }

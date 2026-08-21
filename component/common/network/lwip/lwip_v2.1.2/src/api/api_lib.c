@@ -69,6 +69,12 @@
 #include "lwip/priv/tcp_priv.h"
 #include "lwip/priv/tcpip_priv.h"
 
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE && \
+    defined(CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE) && \
+    CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE
+#include "screen_tcp_write_profiler.h"
+#endif
+
 #ifdef LWIP_HOOK_FILENAME
 #include LWIP_HOOK_FILENAME
 #endif
@@ -1089,6 +1095,17 @@ netconn_write_vectors_partly(struct netconn *conn, struct netvector *vectors,
 #if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
   API_MSG_VAR_REF(msg).msg.w.owned = owner;
 #endif
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE && \
+    defined(CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE) && \
+    CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE
+  API_MSG_VAR_REF(msg).msg.w.profile_submit_us = 0;
+  API_MSG_VAR_REF(msg).msg.w.profile_tcpip_start_us = 0;
+  API_MSG_VAR_REF(msg).msg.w.profile_tcp_write_us = 0;
+  API_MSG_VAR_REF(msg).msg.w.profile_tcp_output_us = 0;
+  API_MSG_VAR_REF(msg).msg.w.profile_signal_us = 0;
+  API_MSG_VAR_REF(msg).msg.w.profile_tcp_write_calls = 0;
+  API_MSG_VAR_REF(msg).msg.w.profile_tcp_output_calls = 0;
+#endif
 #if LWIP_SO_SNDTIMEO
   if (conn->send_timeout != 0) {
     /* get the time we started, which is later compared to
@@ -1102,7 +1119,31 @@ netconn_write_vectors_partly(struct netconn *conn, struct netvector *vectors,
   /* For locking the core: this _can_ be delayed on low memory/low send buffer,
      but if it is, this is done inside api_msg.c:do_write(), so we can use the
      non-blocking version here. */
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE && \
+    defined(CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE) && \
+    CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE
+  if (owner != NULL) {
+    API_MSG_VAR_REF(msg).msg.w.profile_submit_us =
+      carbox_screen_tcp_write_now_us();
+  }
+#endif
   err = netconn_apimsg(lwip_netconn_do_write, &API_MSG_VAR_REF(msg));
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE && \
+    defined(CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE) && \
+    CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE
+  if (owner != NULL) {
+    u32_t profile_return_us = carbox_screen_tcp_write_now_us();
+    carbox_screen_tcp_write_profile_record(size, err,
+      API_MSG_VAR_REF(msg).msg.w.profile_submit_us,
+      API_MSG_VAR_REF(msg).msg.w.profile_tcpip_start_us,
+      API_MSG_VAR_REF(msg).msg.w.profile_tcp_write_us,
+      API_MSG_VAR_REF(msg).msg.w.profile_tcp_output_us,
+      API_MSG_VAR_REF(msg).msg.w.profile_signal_us,
+      profile_return_us,
+      API_MSG_VAR_REF(msg).msg.w.profile_tcp_write_calls,
+      API_MSG_VAR_REF(msg).msg.w.profile_tcp_output_calls);
+  }
+#endif
   if (err == ERR_OK) {
     if (bytes_written != NULL) {
       *bytes_written = API_MSG_VAR_REF(msg).msg.w.offset;

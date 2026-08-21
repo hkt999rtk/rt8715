@@ -53,6 +53,11 @@
 #include "lwip/dns.h"
 #include "lwip/mld6.h"
 #include "lwip/priv/tcpip_priv.h"
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE && \
+    defined(CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE) && \
+    CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE
+#include "screen_tcp_write_profiler.h"
+#endif
 #if defined(CONFIG_PLATFORM_8195BHP)
 #include "lwip_intf.h"
 #endif
@@ -1817,8 +1822,20 @@ lwip_netconn_do_writemore(struct netconn *conn  WRITE_DELAYED_PARAM)
       }
 #if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE
       if (conn->current_msg->msg.w.owned != NULL) {
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE && \
+    defined(CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE) && \
+    CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE
+        u32_t profile_start_us = carbox_screen_tcp_write_now_us();
+#endif
         err = tcp_write_owned(conn->pcb.tcp, dataptr, len, apiflags,
                               conn->current_msg->msg.w.owned);
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE && \
+    defined(CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE) && \
+    CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE
+        conn->current_msg->msg.w.profile_tcp_write_us +=
+          carbox_screen_tcp_write_now_us() - profile_start_us;
+        conn->current_msg->msg.w.profile_tcp_write_calls++;
+#endif
       } else
 #endif
       {
@@ -1860,7 +1877,21 @@ err_mem:
         /* return sent length (caller reads length from msg.w.offset) */
         write_finished = 1;
       }
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE && \
+    defined(CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE) && \
+    CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE
+      if (conn->current_msg->msg.w.owned != NULL) {
+        u32_t profile_start_us = carbox_screen_tcp_write_now_us();
+        out_err = tcp_output(conn->pcb.tcp);
+        conn->current_msg->msg.w.profile_tcp_output_us +=
+          carbox_screen_tcp_write_now_us() - profile_start_us;
+        conn->current_msg->msg.w.profile_tcp_output_calls++;
+      } else {
+        out_err = tcp_output(conn->pcb.tcp);
+      }
+#else
       out_err = tcp_output(conn->pcb.tcp);
+#endif
       if (out_err == ERR_RTE) {
         /* If tcp_output fails because no route is found,
            don't try writing any more but return the error
@@ -1875,7 +1906,22 @@ err_mem:
          will remain non-writable until sent_tcp/poll_tcp is called */
 
       /* tcp_write returned ERR_MEM, try tcp_output anyway */
-      err_t out_err = tcp_output(conn->pcb.tcp);
+      err_t out_err;
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE && \
+    defined(CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE) && \
+    CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE
+      if (conn->current_msg->msg.w.owned != NULL) {
+        u32_t profile_start_us = carbox_screen_tcp_write_now_us();
+        out_err = tcp_output(conn->pcb.tcp);
+        conn->current_msg->msg.w.profile_tcp_output_us +=
+          carbox_screen_tcp_write_now_us() - profile_start_us;
+        conn->current_msg->msg.w.profile_tcp_output_calls++;
+      } else {
+        out_err = tcp_output(conn->pcb.tcp);
+      }
+#else
+      out_err = tcp_output(conn->pcb.tcp);
+#endif
       if (out_err == ERR_RTE) {
         /* If tcp_output fails because no route is found,
            don't try writing any more but return the error
@@ -1899,6 +1945,14 @@ err_mem:
        and back to application task */
     sys_sem_t *op_completed_sem = LWIP_API_MSG_SEM(conn->current_msg);
     conn->current_msg->err = err;
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE && \
+    defined(CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE) && \
+    CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE
+    if (conn->current_msg->msg.w.owned != NULL) {
+      conn->current_msg->msg.w.profile_signal_us =
+        carbox_screen_tcp_write_now_us();
+    }
+#endif
     conn->current_msg = NULL;
     conn->state = NETCONN_NONE;
 #if LWIP_TCPIP_CORE_LOCKING
@@ -1927,6 +1981,15 @@ void
 lwip_netconn_do_write(void *m)
 {
   struct api_msg *msg = (struct api_msg *)m;
+
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE && \
+    defined(CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE) && \
+    CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE
+  if ((msg->msg.w.owned != NULL) &&
+      (msg->msg.w.profile_tcpip_start_us == 0U)) {
+    msg->msg.w.profile_tcpip_start_us = carbox_screen_tcp_write_now_us();
+  }
+#endif
 
   err_t err = netconn_err(msg->conn);
   if (err == ERR_OK) {
@@ -1968,6 +2031,13 @@ lwip_netconn_do_write(void *m)
     }
   }
   msg->err = err;
+#if defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE && \
+    defined(CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE) && \
+    CONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE
+  if (msg->msg.w.owned != NULL) {
+    msg->msg.w.profile_signal_us = carbox_screen_tcp_write_now_us();
+  }
+#endif
   TCPIP_APIMSG_ACK(msg);
 }
 

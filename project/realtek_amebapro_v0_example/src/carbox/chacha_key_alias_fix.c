@@ -8,7 +8,9 @@
 #include "hal_timer.h"
 #include "diag.h"
 #include "chacha_key_alias_fix.h"
+#include "crypto_priority_lock.h"
 #include "screen_rx_record_profiler.h"
+#include "screen_rx_stage_profiler.h"
 
 #ifndef CONFIG_SCREEN_FPS_PROFILE
 #define CONFIG_SCREEN_FPS_PROFILE 0
@@ -84,10 +86,26 @@ typedef struct {
   uint32_t slot_miss;
 } carbox_chacha_rx_latency_stats;
 
+typedef struct {
+  uint32_t errors;
+  int32_t first_error;
+  int32_t last_error;
+  uint32_t first_error_at_us;
+  uint32_t last_error_at_us;
+  uint32_t first_error_bytes;
+  uint32_t last_error_bytes;
+  uint32_t first_error_record_us;
+  uint32_t last_error_record_us;
+  carbox_crypto_irq_snapshot_t first_error_irq;
+  carbox_crypto_irq_snapshot_t last_error_irq;
+} carbox_chacha_rx_fault_stats;
+
 static carbox_chacha_rx_profile_slot g_rx_profile_slots[
   CARBOX_CHACHA_RX_PROFILE_SLOTS
 ];
 static carbox_chacha_rx_latency_stats g_rx_latency;
+static carbox_chacha_rx_fault_stats g_rx_fault
+  __attribute__((section(".lpddr.bss.chacha_rx_fault")));
 static TaskHandle_t g_rx_task;
 
 static int chacha_rx_is_screen_task(void) {
@@ -124,19 +142,24 @@ static carbox_chacha_rx_profile_slot *chacha_rx_profile_find(
 static uint32_t chacha_rx_decrypt_begin(void *state, size_t len) {
   carbox_chacha_rx_profile_slot *slot;
   uint32_t now_us;
+  int first = 0;
 
   if (!chacha_rx_is_screen_task()) return 0u;
   now_us = hal_read_curtime_us();
   taskENTER_CRITICAL();
   slot = chacha_rx_profile_find(state, 1);
   if (slot) {
-    if (slot->decrypt_calls == 0u) slot->start_us = now_us;
+    if (slot->decrypt_calls == 0u) {
+      slot->start_us = now_us;
+      first = 1;
+    }
     slot->decrypt_calls++;
     slot->bytes += (uint32_t)len;
   } else {
     g_rx_latency.slot_miss++;
   }
   taskEXIT_CRITICAL();
+  if (first) carbox_screen_rx_stage_crypto_begin();
   return slot ? now_us : 0u;
 }
 
@@ -173,10 +196,18 @@ static void chacha_rx_verify_end(void *state, uint32_t start_us,
   uint32_t now_us;
   uint32_t verify_us;
   uint32_t record_us;
+  int failed;
+  int32_t error_code;
+  carbox_crypto_irq_snapshot_t irq_snapshot;
 
   if (start_us == 0u) return;
   now_us = hal_read_curtime_us();
   verify_us = now_us - start_us;
+  failed = error == NULL || *error != 0;
+  error_code = error ? *error : INT32_MIN;
+  if (failed) {
+    carbox_crypto_irq_controller_snapshot(&irq_snapshot);
+  }
   taskENTER_CRITICAL();
   slot = chacha_rx_profile_find(state, 0);
   if (!slot) {
@@ -186,7 +217,7 @@ static void chacha_rx_verify_end(void *state, uint32_t start_us,
   }
   record_us = now_us - slot->start_us;
   g_rx_latency.records++;
-  g_rx_latency.errors += error == NULL || *error != 0;
+  g_rx_latency.errors += failed;
   g_rx_latency.bytes += slot->bytes;
   g_rx_latency.verify_us += verify_us;
   if (verify_us > g_rx_latency.verify_max_us) {
@@ -198,8 +229,24 @@ static void chacha_rx_verify_end(void *state, uint32_t start_us,
   }
   g_rx_latency.record_over_16ms += record_us > 16667u;
   g_rx_latency.record_over_33ms += record_us > 33333u;
+  if (failed) {
+    g_rx_fault.errors++;
+    if (g_rx_fault.errors == 1u) {
+      g_rx_fault.first_error = error_code;
+      g_rx_fault.first_error_at_us = now_us;
+      g_rx_fault.first_error_bytes = slot->bytes;
+      g_rx_fault.first_error_record_us = record_us;
+      g_rx_fault.first_error_irq = irq_snapshot;
+    }
+    g_rx_fault.last_error = error_code;
+    g_rx_fault.last_error_at_us = now_us;
+    g_rx_fault.last_error_bytes = slot->bytes;
+    g_rx_fault.last_error_record_us = record_us;
+    g_rx_fault.last_error_irq = irq_snapshot;
+  }
   memset(slot, 0, sizeof(*slot));
   taskEXIT_CRITICAL();
+  carbox_screen_rx_stage_crypto_end(failed);
 }
 #endif
 
@@ -376,13 +423,41 @@ size_t __wrap_chacha20_poly1305_verify(
 
 void carbox_chacha_rx_latency_report(uint32_t sequence) {
 #if CONFIG_SCREEN_FPS_PROFILE
+  static uint32_t reported_irq_timeouts;
   carbox_chacha_rx_latency_stats stats;
+  carbox_chacha_rx_fault_stats fault;
+  carbox_crypto_irq_snapshot_t irq;
   uint32_t mbps_x100;
+  uint32_t now_us;
 
   taskENTER_CRITICAL();
   stats = g_rx_latency;
   memset(&g_rx_latency, 0, sizeof(g_rx_latency));
+  fault = g_rx_fault;
+  memset(&g_rx_fault, 0, sizeof(g_rx_fault));
   taskEXIT_CRITICAL();
+  carbox_crypto_irq_controller_snapshot(&irq);
+  if (irq.timeout_count != 0u) {
+    now_us = hal_read_curtime_us();
+    rt_printf(
+      "[CRYPTOFAULT][%lu] timeout delta/total=%lu/%lu "
+      "last_at_ms/age_ms/gen=%lu/%lu/%lu kind=%s "
+      "owner_task/p=%08lx/%lu resets=%lu\r\n",
+      (unsigned long)sequence,
+      (unsigned long)(irq.timeout_count - reported_irq_timeouts),
+      (unsigned long)irq.timeout_count,
+      (unsigned long)(irq.last_timeout_at_us / 1000u),
+      (unsigned long)((now_us - irq.last_timeout_at_us) / 1000u),
+      (unsigned long)irq.last_timeout_generation,
+      irq.last_timeout_kind == CARBOX_CRYPTO_KIND_AES ? "AES" :
+        irq.last_timeout_kind == CARBOX_CRYPTO_KIND_CHACHA ?
+          "CHACHA" : "OTHER",
+      (unsigned long)irq.last_timeout_task,
+      (unsigned long)irq.last_timeout_priority,
+      (unsigned long)irq.reset_count
+    );
+  }
+  reported_irq_timeouts = irq.timeout_count;
   if (stats.decrypt_calls == 0u && stats.records == 0u) return;
   /* Use complete-record latency for throughput.  Hardware-only mode defers
    * the actual crypto work from update/decrypt to verify/finalize, so using
@@ -415,6 +490,33 @@ void carbox_chacha_rx_latency_report(uint32_t sequence) {
     (unsigned long)(mbps_x100 % 100u),
     (unsigned long)stats.slot_miss
   );
+  if (fault.errors != 0u) {
+    rt_printf(
+      "[CHACHARXFAULT][%lu] errors=%lu "
+      "first err/at_ms/bytes/record_us=%ld/%lu/%lu/%lu "
+      "irq timeout/reset/gen/last_timeout_gen=%lu/%lu/%lu/%lu "
+      "last err/at_ms/bytes/record_us=%ld/%lu/%lu/%lu "
+      "irq timeout/reset/gen/last_timeout_gen=%lu/%lu/%lu/%lu\r\n",
+      (unsigned long)sequence,
+      (unsigned long)fault.errors,
+      (long)fault.first_error,
+      (unsigned long)(fault.first_error_at_us / 1000u),
+      (unsigned long)fault.first_error_bytes,
+      (unsigned long)fault.first_error_record_us,
+      (unsigned long)fault.first_error_irq.timeout_count,
+      (unsigned long)fault.first_error_irq.reset_count,
+      (unsigned long)fault.first_error_irq.generation,
+      (unsigned long)fault.first_error_irq.last_timeout_generation,
+      (long)fault.last_error,
+      (unsigned long)(fault.last_error_at_us / 1000u),
+      (unsigned long)fault.last_error_bytes,
+      (unsigned long)fault.last_error_record_us,
+      (unsigned long)fault.last_error_irq.timeout_count,
+      (unsigned long)fault.last_error_irq.reset_count,
+      (unsigned long)fault.last_error_irq.generation,
+      (unsigned long)fault.last_error_irq.last_timeout_generation
+    );
+  }
 #else
   (void)sequence;
 #endif

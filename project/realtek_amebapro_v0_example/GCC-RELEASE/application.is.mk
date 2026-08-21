@@ -763,7 +763,11 @@ SRC_C += ../src/carbox/usb_hcd_profiler.c
 SRC_C += ../src/carbox/gcd_sync_profiler.c
 SRC_C += ../src/carbox/screen_queue_profiler.c
 SRC_C += ../src/carbox/screen_rx_record_profiler.c
+SRC_C += ../src/carbox/screen_rx_stage_profiler.c
+SRC_C += ../src/carbox/screen_tx_stage_report.c
+SRC_C += ../src/carbox/screen_tcp_write_profiler.c
 SRC_C += ../src/carbox/screen_rx_rate_limit.c
+SRC_C += ../src/carbox/screen_timestamp_rebase.c
 SRC_C += ../src/carbox/audio_decode_profiler.c
 SRC_C += ../src/carbox/memcheck.c
 SRC_C += ../src/carbox/carbox_stubs.c
@@ -810,6 +814,7 @@ SRAM_C += ../src/carbox/crypto_priority_lock.c
 SRAM_C += ../src/carbox/memcpy_task_profiler.c
 SRAM_C += ../src/carbox/large_memcpy_gdma.c
 SRAM_C += ../src/carbox/video_handover_zero_copy.c
+SRAM_C += ../src/carbox/screen_queue_wait.c
 SRAM_C += ../src/carbox/screen_tx_direct_crypto.c
 # The customer archive leaves the NCM TX builder unresolved.  Keep the source
 # ABI, but use the hardware-validated immediate NTH16/NDP16 wire format.  The
@@ -892,27 +897,36 @@ WLAN_RX_DMA_SKB ?= 1
 # disturbance. Keep the implementation available and default it off for soak.
 WLAN_RX_DMA_PROFILE ?= 0
 TCP_PHASE_PROFILE ?= 0
+# Exact owned-screen-write split across caller task, TCP_IP, tcp_write_owned(),
+# tcp_output(), and the completion semaphore wakeup.  One aggregate line is
+# emitted by the existing 10-second profiler.
+SCREEN_TCP_WRITE_PHASE_PROFILE ?= 1
 # Detailed 10-second breakdown of tcp_input() processing. This is independent
 # of the compact 5-second TCP_PERF throughput/checksum summary above.
 TCP_CORE_PHASE_PROFILE ?= 0
 # Ten-second breakdown of tcp_output() and its synchronous WLAN transmit path.
 # This distinguishes ACK/data traffic and separates lwIP preparation/checksum/IP
 # time from skb allocation, scatter-gather copy, and closed-driver submission.
-TCP_OUTPUT_PROFILE ?= 0
+TCP_OUTPUT_PROFILE ?= 1
 # Ten-second timing of the en3 CDC-NCM transmit path.  The closed NCM library
 # waits synchronously for USB completion, so measure that wait separately from
 # any lwIP pbuf-chain flattening done by ethernetif.c.
 NCM_TX_PROFILE ?= 0
 # Move the closed synchronous NCM send/wait out of TCP_IP.
 NCM_TX_ASYNC ?= 1
-# Combine at most this many already-queued Ethernet frames into one NCM NTB in
-# the owner task. No batching delay is added. Set to 1 for validated
-# single-immediate behavior; 2 selects the first hardware-validated batching
-# milestone. The negotiated device limit is reported by NCMTXCFG.
+# Combine at most this many Ethernet frames into one NCM NTB in the owner task.
+# The negotiated device limit is reported by NCMTXCFG.
 NCM_TX_BATCH_MAX ?= 16
+# When USB already has work in flight, briefly coalesce toward this many frames.
+# The deadline follows the recent within-burst packet spacing, but is always
+# clamped to this explicit lower/upper range.  USB-idle traffic is sent at once.
+NCM_TX_BATCH_MIN ?= 4
+NCM_TX_BATCH_TIMEOUT_LOWER_US ?= 100
+NCM_TX_BATCH_TIMEOUT_UPPER_US ?= 1000
 # Keep one 16-KiB NTB in USB, one ready, and a third available to the builder
 # while the customer HAL synchronously waits for bulk OUT completion.
-# Queue arrival drives assembly; no aggregation timer or artificial delay.
+# Queue arrival drives assembly.  The adaptive one-shot timer is used only
+# while USB already owns work; it never delays the first NTB after an idle gap.
 NCM_TX_PIPELINE ?= 1
 # Assemble the selected pbuf segments into the contiguous USB NTB with the
 # existing cache-safe linked-GDMA copyv helper.  The NCM builder falls back to
@@ -922,7 +936,7 @@ NCM_TX_LINKED_GDMA ?= 1
 NCM_TX_ASYNC_PROFILE ?= 0
 # Compiler command-line changes are not tracked by ordinary source timestamps.
 # Force the sole consumer to rebuild whenever the observation mode changes.
-NCM_TX_PROFILE_STAMP := $(OBJ_DIR)/.ncm_tx_profile_$(NCM_TX_PROFILE)-async$(NCM_TX_ASYNC_PROFILE)-batch$(NCM_TX_BATCH_MAX)-pipe$(NCM_TX_PIPELINE)-gdma$(NCM_TX_LINKED_GDMA)
+NCM_TX_PROFILE_STAMP := $(OBJ_DIR)/.ncm_tx_profile_$(NCM_TX_PROFILE)-async$(NCM_TX_ASYNC_PROFILE)-batch$(NCM_TX_BATCH_MAX)-min$(NCM_TX_BATCH_MIN)-wait$(NCM_TX_BATCH_TIMEOUT_LOWER_US)-$(NCM_TX_BATCH_TIMEOUT_UPPER_US)-pipe$(NCM_TX_PIPELINE)-gdma$(NCM_TX_LINKED_GDMA)
 $(NCM_TX_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.ncm_tx_profile_*
@@ -1028,6 +1042,11 @@ SCREEN_QUEUE_PROFILE ?= 0
 # lwIP-write wrappers and records counters/timestamps only; unlike the full
 # SCREEN_QUEUE_PROFILE it does not scan frames or retain histogram samples.
 SCREEN_FPS_PROFILE ?= 1
+# Replace only the closed ScreenThread loop's fixed vTaskDelay(10) with a
+# queue-arrival semaphore wait.  Keep this independent of handover zero-copy
+# and direct crypto so every supported A/B combination either installs both
+# the relocation and notification wrappers, or installs neither.
+SCREEN_QUEUE_EVENT_WAIT ?= 1
 # Keep the screen RX profiler aware of the selected backend.  In mode 2 the
 # decrypt/update API only queues record data and the hardware work is performed
 # by verify/finalize, so labelling the first phase as software throughput is
@@ -1043,7 +1062,11 @@ SCREEN_DATAPATH_PROFILE ?= 0
 # bitrate of zero means unlimited and compiles the limiter, task, wrappers,
 # token accounting, and TX-pressure feedback out of the build.
 SCREEN_RX_RATE_LIMIT ?= 1
-SCREEN_RX_RATE_LIMIT_BPS ?= 0
+# Pace only the iPhone-to-accessory screen TCP receive window.  Eight megabits
+# per second is the production ceiling; the limiter returns from recv()
+# normally and withholds tcp_recved() credit asynchronously, so it does not
+# sleep or stall AirPlayScreenReceiver.
+SCREEN_RX_RATE_LIMIT_BPS ?= 8000000
 SCREEN_RX_RATE_LIMIT_ACTIVE := $(if $(filter 0,$(SCREEN_RX_RATE_LIMIT_BPS)),0,$(SCREEN_RX_RATE_LIMIT))
 SCREEN_RX_RATE_LIMIT_INTERVAL_MS ?= 10
 SCREEN_RX_RATE_LIMIT_BUCKET_BYTES ?= 32768
@@ -1126,13 +1149,28 @@ VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES ?= 4096
 # callback and naturally close the upstream TCP window toward the iPhone.
 VIDEO_HANDOVER_BACKPRESSURE ?= 1
 VIDEO_HANDOVER_MAX_INFLIGHT ?= 2
-VIDEO_HANDOVER_GATE_POLL_TICKS ?= 1
 # Closed AirPlay normal-frame sender optimization. Its payload memcpy is
 # deferred only after object-local allocation/header/layout validation, then
 # AES or ChaCha writes ciphertext directly into wireBuffer + 128.
 # The direct path has passed frame correctness, ownership and long-run tests.
 SCREEN_TX_DIRECT_CRYPTO ?= 1
 SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES ?= 4096
+# Preserve the iPhone's frame cadence without importing its absolute session
+# clock: anchor the first RX NTP value to local TX NTP, then reuse RX deltas.
+SCREEN_TIMESTAMP_REBASE ?= 0
+SCREEN_TIMESTAMP_REBASE_PROFILE ?= 0
+# RX timestamps are useful for cadence diagnosis, but the outgoing header
+# belongs to the receiver's local AirPlay session clock.  Apply only the
+# bounded local-clock slew below; full RX-clock replacement remains disabled.
+SCREEN_TIMESTAMP_REBASE_APPLY ?= 0
+# Keep the outgoing clock in the customer's local AirPlay time domain.  The
+# RX-derived theory is clamped to +/-8 ms; excess phase relaxes by 1/8/frame.
+SCREEN_TIMESTAMP_REBASE_BOUNDED ?= 1
+ifeq ($(SCREEN_TIMESTAMP_REBASE),1)
+ifneq ($(SCREEN_TX_DIRECT_CRYPTO),1)
+$(error SCREEN_TIMESTAMP_REBASE requires SCREEN_TX_DIRECT_CRYPTO=1)
+endif
+endif
 # AES and ChaCha use the same mode numbering: 0=software only,
 # 1=software-authoritative with hardware shadow comparison, 2=hardware only.
 AES_MODE ?= 2
@@ -1193,7 +1231,7 @@ NET_QUEUE_PROFILE ?= 0
 # Make the RX/queue/TX diagnostic switches safe for incremental builds. These
 # options affect both the wrappers and lwIP internals, so changing one must
 # recompile every consumer instead of silently retaining yesterday's objects.
-SCREEN_FLOW_PROFILE_STAMP := $(OBJ_DIR)/.screen_flow_profile_q$(SCREEN_QUEUE_PROFILE)-fps$(SCREEN_FPS_PROFILE)-dp$(SCREEN_DATAPATH_PROFILE)-fmt$(SCREEN_FRAME_FORMAT_PROFILE)-buf$(SCREEN_TCP_BUFFER_PROFILE)-block$(SCREEN_BLOCK_PROFILE)-screenusb$(SCREEN_USB_PROBE)-ack$(SCREEN_TCP_ACK_PROFILE)
+SCREEN_FLOW_PROFILE_STAMP := $(OBJ_DIR)/.screen_flow_profile_q$(SCREEN_QUEUE_PROFILE)-fps$(SCREEN_FPS_PROFILE)-dp$(SCREEN_DATAPATH_PROFILE)-fmt$(SCREEN_FRAME_FORMAT_PROFILE)-buf$(SCREEN_TCP_BUFFER_PROFILE)-block$(SCREEN_BLOCK_PROFILE)-screenusb$(SCREEN_USB_PROBE)-ack$(SCREEN_TCP_ACK_PROFILE)-rxlim$(SCREEN_RX_RATE_LIMIT_ACTIVE)-rxbps$(SCREEN_RX_RATE_LIMIT_BPS)-rxvmax$(SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS)-tsrebase$(SCREEN_TIMESTAMP_REBASE)-tsprof$(SCREEN_TIMESTAMP_REBASE_PROFILE)-tsapply$(SCREEN_TIMESTAMP_REBASE_APPLY)-tsbound$(SCREEN_TIMESTAMP_REBASE_BOUNDED)
 $(SCREEN_FLOW_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.screen_flow_profile_*
@@ -1201,12 +1239,15 @@ $(SCREEN_FLOW_PROFILE_STAMP):
 ../src/carbox/pc_profiler.o \
 	../src/carbox/screen_queue_profiler.o \
 	../src/carbox/screen_rx_rate_limit.o \
+	../src/carbox/screen_timestamp_rebase.o \
+	../src/carbox/screen_rx_stage_profiler.o \
 	../src/carbox/screen_tx_direct_crypto.o \
 	../src/carbox/video_handover_zero_copy.o \
 	../src/carbox/chacha_key_alias_fix.o \
 	../src/carbox/large_memcpy_gdma.o \
 	../src/carbox/ncm/ncm_tx.o \
 	../../../component/common/network/lwip/lwip_v2.1.2/src/api/sockets.o \
+	../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp.o \
 	../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_in.o: \
 	$(SCREEN_FLOW_PROFILE_STAMP)
 # These switches affect several standalone profiler/wrapper objects.  Track
@@ -1363,12 +1404,16 @@ GCCFLAGS += -DCONFIG_WLAN_RX_SWAP_BRINGUP_PROFILE=$(WLAN_RX_SWAP_BRINGUP_PROFILE
 GCCFLAGS += -DCONFIG_WLAN_RX_RING_SWAP=$(WLAN_RX_RING_SWAP)
 GCCFLAGS += -DCONFIG_WLAN_RX_DMA_SKB=$(WLAN_RX_DMA_SKB)
 GCCFLAGS += -DCONFIG_TCP_PHASE_PROFILE=$(TCP_PHASE_PROFILE)
+GCCFLAGS += -DCONFIG_SCREEN_TCP_WRITE_PHASE_PROFILE=$(SCREEN_TCP_WRITE_PHASE_PROFILE)
 GCCFLAGS += -DCONFIG_TCP_CORE_PHASE_PROFILE=$(TCP_CORE_PHASE_PROFILE)
 GCCFLAGS += -DCONFIG_TCP_OUTPUT_PROFILE=$(TCP_OUTPUT_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_TX_PROFILE=$(NCM_TX_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_TX_ASYNC=$(NCM_TX_ASYNC)
 GCCFLAGS += -DCONFIG_NCM_TX_ASYNC_PROFILE=$(NCM_TX_ASYNC_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_TX_BATCH_MAX=$(NCM_TX_BATCH_MAX)
+GCCFLAGS += -DCONFIG_NCM_TX_BATCH_MIN=$(NCM_TX_BATCH_MIN)
+GCCFLAGS += -DCONFIG_NCM_TX_BATCH_TIMEOUT_LOWER_US=$(NCM_TX_BATCH_TIMEOUT_LOWER_US)
+GCCFLAGS += -DCONFIG_NCM_TX_BATCH_TIMEOUT_UPPER_US=$(NCM_TX_BATCH_TIMEOUT_UPPER_US)
 GCCFLAGS += -DCONFIG_NCM_TX_PIPELINE=$(NCM_TX_PIPELINE)
 GCCFLAGS += -DCONFIG_NCM_TX_LINKED_GDMA=$(NCM_TX_LINKED_GDMA)
 GCCFLAGS += -DCONFIG_PC_PROFILER=$(PC_PROFILER)
@@ -1452,10 +1497,10 @@ GCCFLAGS += -DAAC_DECODER_BENCHMARK_TASK_PRIORITY=$(AAC_DECODER_BENCHMARK_TASK_P
 GCCFLAGS += -DAAC_DECODER_BENCHMARK_RUN_PRIORITY=$(AAC_DECODER_BENCHMARK_RUN_PRIORITY)
 GCCFLAGS += -DAAC_DECODER_BENCHMARK_TASK_STACK=$(AAC_DECODER_BENCHMARK_TASK_STACK)
 GCCFLAGS += -DCONFIG_VIDEO_HANDOVER_ZERO_COPY=$(VIDEO_HANDOVER_ZERO_COPY)
+GCCFLAGS += -DCONFIG_SCREEN_QUEUE_EVENT_WAIT=$(SCREEN_QUEUE_EVENT_WAIT)
 GCCFLAGS += -DVIDEO_HANDOVER_ZERO_COPY_MIN_BYTES=$(VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES)
 GCCFLAGS += -DCONFIG_VIDEO_HANDOVER_BACKPRESSURE=$(VIDEO_HANDOVER_BACKPRESSURE)
 GCCFLAGS += -DVIDEO_HANDOVER_MAX_INFLIGHT=$(VIDEO_HANDOVER_MAX_INFLIGHT)
-GCCFLAGS += -DVIDEO_HANDOVER_GATE_POLL_TICKS=$(VIDEO_HANDOVER_GATE_POLL_TICKS)
 GCCFLAGS += -DCONFIG_SCREEN_TX_DIRECT_CRYPTO=$(SCREEN_TX_DIRECT_CRYPTO)
 GCCFLAGS += -DCONFIG_AES_MODE=$(AES_MODE)
 GCCFLAGS += -DSCREEN_TX_DIRECT_CRYPTO_MIN_BYTES=$(SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES)
@@ -1464,6 +1509,10 @@ GCCFLAGS += -DCONFIG_TCP_OWNED_AGE_PROFILE=$(TCP_OWNED_AGE_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_FRAME_FORMAT_PROFILE=$(SCREEN_FRAME_FORMAT_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TCP_BUFFER_PROFILE=$(SCREEN_TCP_BUFFER_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_PROFILE=$(SCREEN_TIMESTAMP_PROFILE)
+GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_REBASE=$(SCREEN_TIMESTAMP_REBASE)
+GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_REBASE_PROFILE=$(SCREEN_TIMESTAMP_REBASE_PROFILE)
+GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_REBASE_APPLY=$(SCREEN_TIMESTAMP_REBASE_APPLY)
+GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_REBASE_BOUNDED=$(SCREEN_TIMESTAMP_REBASE_BOUNDED)
 GCCFLAGS += -DCONFIG_USB_HCD_PROFILE=$(USB_HCD_PROFILE)
 GCCFLAGS += -DCONFIG_USB_HCD_CHANNEL_PROFILE=$(USB_HCD_CHANNEL_PROFILE)
 GCCFLAGS += -DCONFIG_USB_TX_LIFETIME_PROFILE=$(USB_TX_LIFETIME_PROFILE)
@@ -1570,12 +1619,26 @@ LFLAGS += -Wl,--wrap=lwip_recv
 endif
 LFLAGS += -Wl,--wrap=lwip_close
 endif
-ifeq ($(VIDEO_HANDOVER_ZERO_COPY),1)
-# In a non-profile build, retain only the two functional wrappers required for
-# exact transaction scoping and atomic CVector pointer publication.
+ifeq ($(SCREEN_TIMESTAMP_REBASE),1)
+ifeq ($(SCREEN_QUEUE_PROFILE)$(SCREEN_RX_RATE_LIMIT_ACTIVE),00)
+LFLAGS += -Wl,--wrap=lwip_recv -Wl,--wrap=lwip_close
+endif
+endif
+ifeq ($(SCREEN_FPS_PROFILE),1)
+ifeq ($(SCREEN_QUEUE_PROFILE)$(SCREEN_RX_RATE_LIMIT_ACTIVE),00)
+LFLAGS += -Wl,--wrap=lwip_recv
+endif
+endif
+ifeq ($(SCREEN_QUEUE_EVENT_WAIT),1)
 ifeq ($(SCREEN_QUEUE_PROFILE),0)
 LFLAGS += -Wl,--wrap=AirPlayScreen_SendVideo
-LFLAGS += -Wl,--wrap=CVector_push_back
+LFLAGS += -Wl,--wrap=CVector_push_back -Wl,--wrap=CVector_erase
+endif
+else ifeq ($(VIDEO_HANDOVER_ZERO_COPY),1)
+# With event wait disabled, retain only the production zero-copy hooks.  The
+# erase wrapper is still needed when the lightweight FPS profiler is enabled.
+ifeq ($(SCREEN_QUEUE_PROFILE),0)
+LFLAGS += -Wl,--wrap=AirPlayScreen_SendVideo -Wl,--wrap=CVector_push_back
 ifeq ($(SCREEN_FPS_PROFILE),1)
 LFLAGS += -Wl,--wrap=CVector_erase
 endif
@@ -1800,6 +1863,13 @@ CHACHA_TRANSACTION_TRACE ?= 0
 # stamp so switching mode/config automatically rebuilds the derived archive.
 CARBOX_CHACHA_CONFIG_STAMP := $(CARBOX_CARPLAY_CHACHA_DIR)/build/.carbox_chacha_config_mode$(CHACHA_MODE)-min$(CHACHA_HW_MIN_LEN)-direct$(SCREEN_TX_DIRECT_CRYPTO)-stats$(CHACHA_STATS_INTERVAL_MS)-selftest$(CHACHA_HW_SELFTEST)-partialtest$(CHACHA_COMBINED_PARTIAL_SELFTEST)-trace$(CHACHA_TRANSACTION_TRACE)-privverify$(CHACHA_PRIVATE_SW_VERIFY)-prio$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
 CARBOX_VIDEO_HANDOVER_PATCH := $(CARBOX_SMART_CARPLAY_LIB_DIR)/patch_video_handover_archive.sh
+CARBOX_SCREEN_WAIT_RELOC_PATCH := ../src/carbox/tools/patch_screen_wait_relocation.py
+CARBOX_REDUNDANT_COPY_PATCH := ../src/carbox/tools/patch_airplay_redundant_copy.py
+CARBOX_ACCESSORY_PATCH_STAMP := $(OBJ_DIR)/.accessory_patch_v2-zc$(VIDEO_HANDOVER_ZERO_COPY)-direct$(SCREEN_TX_DIRECT_CRYPTO)-wait$(SCREEN_QUEUE_EVENT_WAIT)
+$(CARBOX_ACCESSORY_PATCH_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.accessory_patch_*
+	@touch $@
 CARBOX_ACCESSORY2_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2.a
 CARBOX_ACCESSORY2_HANDOVER_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2_handover.a
 CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_Accessory2_vendor_private_mem.a
@@ -1877,37 +1947,43 @@ $(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) vendor-private-sw
 application: $(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE)
 endif
-ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO)),)
+ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO) $(SCREEN_QUEUE_EVENT_WAIT)),)
 $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
-		$(CARBOX_VIDEO_HANDOVER_PATCH)
-	sh $(CARBOX_VIDEO_HANDOVER_PATCH) accessory $(AR) $(OBJCOPY) \
-		$(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) $@ AirPlayScreen.o
+		$(CARBOX_VIDEO_HANDOVER_PATCH) $(CARBOX_SCREEN_WAIT_RELOC_PATCH) \
+		$(CARBOX_REDUNDANT_COPY_PATCH) \
+		$(CARBOX_ACCESSORY_PATCH_STAMP)
+	sh $(CARBOX_VIDEO_HANDOVER_PATCH) \
+		$(if $(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO)),accessory,accessory-wait) \
+		$(AR) $(OBJCOPY) $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) $@ \
+		AirPlayScreen.o $(SCREEN_QUEUE_EVENT_WAIT)
 application: $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
 endif
 ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
 $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
-		$(CARBOX_VIDEO_HANDOVER_PATCH)
+		$(CARBOX_VIDEO_HANDOVER_PATCH) $(CARBOX_SCREEN_WAIT_RELOC_PATCH) \
+		$(CARBOX_ACCESSORY_PATCH_STAMP)
 	sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
-		$(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) $@ AirPlayScreen.o
+		$(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) $@ AirPlayScreen.o \
+		$(SCREEN_QUEUE_EVENT_WAIT)
 application: $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE)
 endif
 ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW)),)
 $(CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE): $(CARBOX_SYSTEMLIB_VENDOR_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH)
 	sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
-		$(CARBOX_SYSTEMLIB_VENDOR_ARCHIVE) $@ "Accessory.o Image.o"
+		$(CARBOX_SYSTEMLIB_VENDOR_ARCHIVE) $@ "Accessory.o Image.o" 0
 application: $(CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE)
 $(CARBOX_UILIB_PRIVATE_MEM_ARCHIVE): $(CARBOX_UILIB_VENDOR_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH)
 	sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
-		$(CARBOX_UILIB_VENDOR_ARCHIVE) $@ "Surface.o ImageView.o"
+		$(CARBOX_UILIB_VENDOR_ARCHIVE) $@ "Surface.o ImageView.o" 0
 application: $(CARBOX_UILIB_PRIVATE_MEM_ARCHIVE)
 endif
 ifeq ($(VIDEO_HANDOVER_ZERO_COPY),1)
 $(CARBOX_CARPLAY_HANDOVER_ARCHIVE): $(CARBOX_CARPLAY_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH)
 	sh $(CARBOX_VIDEO_HANDOVER_PATCH) receiver $(AR) $(OBJCOPY) \
-		$(CARBOX_CARPLAY_ARCHIVE) $@ AirPlayReceiverSessionScreen.o
+		$(CARBOX_CARPLAY_ARCHIVE) $@ AirPlayReceiverSessionScreen.o 0
 
 application: $(CARBOX_CARPLAY_HANDOVER_ARCHIVE)
 endif
@@ -1934,7 +2010,7 @@ LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_zlib.a
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_AndroidAuto.a
 ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
 LIBFLAGS += $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE)
-else ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO)),)
+else ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO) $(SCREEN_QUEUE_EVENT_WAIT)),)
 LIBFLAGS += $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
 else
 LIBFLAGS += $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE)

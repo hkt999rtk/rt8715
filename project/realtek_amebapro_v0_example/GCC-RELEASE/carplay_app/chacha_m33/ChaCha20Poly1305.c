@@ -46,6 +46,7 @@ static void carbox_screen_tx_crypto_complete(
 }
 #endif
 #include "ChaCha20Poly1305_rtl8195b.h"
+#include "crypto_priority_lock.h"
 #if !defined(__arm__) && !defined(__thumb__)
 #include <time.h>
 #endif
@@ -1633,6 +1634,213 @@ static CHACHA_UNUSED void chacha_auth_software(
   CHACHA_CLEAR(&state, sizeof(state));
 }
 
+#if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+/*
+ * A crypto IRQ timeout is rare, so pay no normal-record copy cost.  The first
+ * RX record that starts after a timeout retains its ciphertext and computes
+ * three software tags at verify time: caller nonce, nonce+1 and nonce-1.
+ * This distinguishes an incompletely reset engine from a session counter
+ * that moved by one while the failed record was discarded.
+ */
+typedef struct {
+  uint32_t seen_timeout_count;
+  uint32_t attempts;
+  uint32_t completed;
+  uint32_t reported_completed;
+  uint32_t alloc_failures;
+  uint32_t length_mismatches;
+  uint32_t active;
+  void *state;
+  uint8_t *ciphertext;
+  size_t ciphertext_len;
+  size_t ciphertext_capacity;
+  uint32_t armed_timeout_count;
+  uint32_t armed_timeout_generation;
+  uint32_t armed_reset_count;
+  uint32_t observed_timeout_count;
+  uint32_t completed_at_ms;
+  uint32_t data_len;
+  uint32_t aad_len;
+  int32_t hardware_error;
+  uint8_t hardware_submitted;
+  uint8_t software_same_ok;
+  uint8_t software_plus_one_ok;
+  uint8_t software_minus_one_ok;
+  uint8_t capture_ok;
+} chacha_post_timeout_diag_t;
+
+static chacha_post_timeout_diag_t g_chacha_post_timeout_diag
+  __attribute__((section(".lpddr.bss.chacha_post_timeout_diag")));
+
+static uint32_t chacha_post_timeout_time_ms(void) {
+#if defined(__arm__) || defined(__thumb__)
+  extern uint32_t rtw_get_current_time(void);
+  return rtw_get_current_time();
+#else
+  return (uint32_t)(((uint64_t)clock() * 1000u) / CLOCKS_PER_SEC);
+#endif
+}
+
+static void chacha_nonce_step(uint8_t nonce[8], int increment) {
+  unsigned i;
+
+  for (i = 0u; i < 8u; ++i) {
+    uint8_t before = nonce[i];
+    nonce[i] = (uint8_t)(before + (increment ? 1u : 0xffu));
+    if (increment ? (nonce[i] != 0u) : (before != 0u)) break;
+  }
+}
+
+static void chacha_post_timeout_capture(
+  void *state, const uint8_t *ciphertext, size_t len
+) {
+  carbox_crypto_irq_snapshot_t irq;
+  uint8_t *capture;
+  size_t new_len;
+
+  carbox_crypto_irq_controller_snapshot(&irq);
+  if (!g_chacha_post_timeout_diag.active &&
+      irq.timeout_count > g_chacha_post_timeout_diag.seen_timeout_count) {
+    g_chacha_post_timeout_diag.seen_timeout_count = irq.timeout_count;
+    g_chacha_post_timeout_diag.attempts++;
+    g_chacha_post_timeout_diag.active = 1u;
+    g_chacha_post_timeout_diag.state = state;
+    g_chacha_post_timeout_diag.ciphertext_len = 0u;
+    g_chacha_post_timeout_diag.armed_timeout_count = irq.timeout_count;
+    g_chacha_post_timeout_diag.armed_timeout_generation =
+      irq.last_timeout_generation;
+    g_chacha_post_timeout_diag.armed_reset_count = irq.reset_count;
+  }
+  if (!g_chacha_post_timeout_diag.active ||
+      g_chacha_post_timeout_diag.state != state || len == 0u) return;
+  if (g_chacha_post_timeout_diag.ciphertext_len > SIZE_MAX - len) {
+    g_chacha_post_timeout_diag.length_mismatches++;
+    return;
+  }
+  new_len = g_chacha_post_timeout_diag.ciphertext_len + len;
+  if (new_len > g_chacha_post_timeout_diag.ciphertext_capacity) {
+    capture = (uint8_t *)realloc(
+      g_chacha_post_timeout_diag.ciphertext, new_len
+    );
+    if (!capture) {
+      g_chacha_post_timeout_diag.alloc_failures++;
+      return;
+    }
+    g_chacha_post_timeout_diag.ciphertext = capture;
+    g_chacha_post_timeout_diag.ciphertext_capacity = new_len;
+  }
+  chacha_copy_bytes(
+    g_chacha_post_timeout_diag.ciphertext +
+      g_chacha_post_timeout_diag.ciphertext_len,
+    ciphertext, len
+  );
+  g_chacha_post_timeout_diag.ciphertext_len = new_len;
+}
+
+static void chacha_post_timeout_finish(
+  void *state, const uint8_t key[32], const uint8_t nonce[8],
+  const void *aad, size_t aad_len, size_t data_len,
+  const uint8_t supplied_tag[16], int32_t hardware_error,
+  int hardware_submitted
+) {
+  chacha_post_timeout_diag_t *diag = &g_chacha_post_timeout_diag;
+  carbox_crypto_irq_snapshot_t irq;
+  uint8_t nonce_plus[8];
+  uint8_t nonce_minus[8];
+  uint8_t software_tag[16];
+
+  if (!diag->active || diag->state != state) return;
+  carbox_crypto_irq_controller_snapshot(&irq);
+  diag->observed_timeout_count = irq.timeout_count;
+  diag->completed_at_ms = chacha_post_timeout_time_ms();
+  diag->data_len = (uint32_t)data_len;
+  diag->aad_len = (uint32_t)aad_len;
+  diag->hardware_error = hardware_error;
+  diag->hardware_submitted = hardware_submitted ? 1u : 0u;
+  diag->capture_ok =
+    diag->ciphertext != NULL && diag->ciphertext_len == data_len;
+  diag->software_same_ok = 0u;
+  diag->software_plus_one_ok = 0u;
+  diag->software_minus_one_ok = 0u;
+  if (diag->capture_ok) {
+    chacha_auth_software(
+      key, nonce, aad, aad_len, diag->ciphertext, data_len, software_tag
+    );
+    diag->software_same_ok =
+      chacha20_poly1305_tag_equal(software_tag, supplied_tag) ? 1u : 0u;
+
+    chacha_copy_bytes(nonce_plus, nonce, sizeof(nonce_plus));
+    chacha_nonce_step(nonce_plus, 1);
+    chacha_auth_software(
+      key, nonce_plus, aad, aad_len,
+      diag->ciphertext, data_len, software_tag
+    );
+    diag->software_plus_one_ok =
+      chacha20_poly1305_tag_equal(software_tag, supplied_tag) ? 1u : 0u;
+
+    chacha_copy_bytes(nonce_minus, nonce, sizeof(nonce_minus));
+    chacha_nonce_step(nonce_minus, 0);
+    chacha_auth_software(
+      key, nonce_minus, aad, aad_len,
+      diag->ciphertext, data_len, software_tag
+    );
+    diag->software_minus_one_ok =
+      chacha20_poly1305_tag_equal(software_tag, supplied_tag) ? 1u : 0u;
+    chacha_secure_clear(nonce_plus, sizeof(nonce_plus));
+    chacha_secure_clear(nonce_minus, sizeof(nonce_minus));
+    chacha_secure_clear(software_tag, sizeof(software_tag));
+  } else {
+    diag->length_mismatches++;
+  }
+  if (diag->ciphertext) free(diag->ciphertext);
+  diag->ciphertext = NULL;
+  diag->ciphertext_capacity = 0u;
+  diag->state = NULL;
+  diag->active = 0u;
+  diag->completed++;
+}
+
+static void chacha_post_timeout_report(unsigned window_index) {
+  chacha_post_timeout_diag_t *diag = &g_chacha_post_timeout_diag;
+  uint32_t delta;
+
+  if (diag->attempts == 0u) return;
+  delta = diag->completed - diag->reported_completed;
+  printf(
+    "[CHACHARECOVER][%u] probe delta/complete/attempt=%lu/%lu/%lu "
+    "state=%s timeout armed/observed/gen/reset=%lu/%lu/%lu/%lu "
+    "route_hw/hw_error=%u/%ld sw_tag same/+1/-1=%u/%u/%u "
+    "capture ok/bytes/expected=%u/%lu/%lu alloc_fail/len_mismatch=%lu/%lu "
+    "at_ms=%lu\n",
+    window_index,
+    (unsigned long)delta,
+    (unsigned long)diag->completed,
+    (unsigned long)diag->attempts,
+    diag->active ? "pending" : "complete",
+    (unsigned long)diag->armed_timeout_count,
+    (unsigned long)diag->observed_timeout_count,
+    (unsigned long)diag->armed_timeout_generation,
+    (unsigned long)diag->armed_reset_count,
+    (unsigned)diag->hardware_submitted,
+    (long)diag->hardware_error,
+    (unsigned)diag->software_same_ok,
+    (unsigned)diag->software_plus_one_ok,
+    (unsigned)diag->software_minus_one_ok,
+    (unsigned)diag->capture_ok,
+    (unsigned long)diag->ciphertext_len,
+    (unsigned long)diag->data_len,
+    (unsigned long)diag->alloc_failures,
+    (unsigned long)diag->length_mismatches,
+    (unsigned long)diag->completed_at_ms
+  );
+  diag->reported_completed = diag->completed;
+}
+#else
+static void chacha_post_timeout_report(unsigned window_index) {
+  (void)window_index;
+}
+#endif
+
 #if (CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY) || \
     (CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_SPLIT_RX_SW_TX_HW)
 /*
@@ -1905,6 +2113,7 @@ void chacha_crypto_transaction_report(unsigned window_index) {
   reported_tx_errors = tx_errors;
   reported_rx = rx;
   reported_rx_errors = rx_errors;
+  chacha_post_timeout_report(window_index);
 }
 
 static CHACHA_UNUSED int chacha_hardware_auth_standalone_locked(
@@ -2319,6 +2528,7 @@ size_t chacha20_poly1305_decrypt(
     state, CHACHA_RTL_DIRECTION_DECRYPT, src, len, dst
   );
 #if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+  chacha_post_timeout_capture(state, (const uint8_t *)src, len);
   written = chacha_deferred_copy(
     state, (const uint8_t *)src, len, (uint8_t *)dst
   );
@@ -2538,6 +2748,7 @@ size_t chacha20_poly1305_verify(
 #endif
   chacha_export_key_nonce(state, key, nonce);
 #if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+  int diagnostic_hardware_submitted = 0;
   total_len = (size_t)state->data_len;
   written = state->chacha_leftover;
   if ((uint8_t *)dst != state->rtl_output_next) eligible = 0;
@@ -2561,6 +2772,7 @@ size_t chacha20_poly1305_verify(
        * path. Never software-fallback after hardware_submitted becomes true.
        */
       hardware_submitted = 1;
+      diagnostic_hardware_submitted = 1;
       status = chacha_hardware_decrypt_auto(
         key, nonce, aad, aad_len,
         output_base, total_len, output_base, calculated, &backend
@@ -2607,6 +2819,10 @@ size_t chacha20_poly1305_verify(
       total_len, total_len >= (size_t)CARBOX_CHACHA_HW_MIN_LEN
     );
   }
+  chacha_post_timeout_finish(
+    state, key, nonce, aad, aad_len, total_len, tag, *out_error,
+    diagnostic_hardware_submitted
+  );
   memset(state, 0, sizeof(*state));
 #else
   total_len = (size_t)(state->data_len + state->chacha_leftover);

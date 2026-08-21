@@ -6,6 +6,7 @@
 #include "task.h"
 #include "osdep_service.h"
 #include "hal_crypto.h"
+#include "hal_timer.h"
 #include "rtl8195bhp_crypto_ctrl.h"
 
 #ifndef CARBOX_CRYPTO_OWNER_BOOST_PRIORITY
@@ -49,6 +50,13 @@ static volatile uint32_t crypto_irq_spurious CARBOX_CRYPTO_IRQ_STATS;
 static volatile uint32_t crypto_irq_drained CARBOX_CRYPTO_IRQ_STATS;
 static volatile uint32_t crypto_irq_resets CARBOX_CRYPTO_IRQ_STATS;
 static volatile uint32_t crypto_irq_vendor_restores CARBOX_CRYPTO_IRQ_STATS;
+static volatile uint32_t crypto_irq_last_timeout_at_us CARBOX_CRYPTO_IRQ_STATS;
+static volatile uint32_t crypto_irq_last_timeout_generation
+	CARBOX_CRYPTO_IRQ_STATS;
+static volatile uint32_t crypto_irq_last_timeout_kind CARBOX_CRYPTO_IRQ_STATS;
+static volatile uintptr_t crypto_irq_last_timeout_task CARBOX_CRYPTO_IRQ_STATS;
+static volatile uint32_t crypto_irq_last_timeout_priority
+	CARBOX_CRYPTO_IRQ_STATS;
 
 static int crypto_irq_pre_exec(void *adapter)
 {
@@ -71,6 +79,10 @@ static int crypto_irq_pre_exec(void *adapter)
 static int crypto_irq_wait_done(void *adapter)
 {
 	hal_crypto_adapter_t *rtl_adapter = (hal_crypto_adapter_t *)adapter;
+	TaskHandle_t owner;
+	unsigned owner_kind;
+	UBaseType_t owner_priority;
+	uint32_t timeout_at_us;
 
 	if (!rtl_adapter->isIntMode) return -1;
 	__sync_fetch_and_add(&crypto_irq_waits, 1u);
@@ -84,6 +96,17 @@ static int crypto_irq_wait_done(void *adapter)
 	crypto_irq_active = 0u;
 	crypto_irq_last_timeout = 1u;
 	__sync_fetch_and_add(&crypto_irq_timeouts, 1u);
+	owner = xTaskGetCurrentTaskHandle();
+	owner_kind = carbox_crypto_priority_current_kind();
+	owner_priority = owner ? uxTaskPriorityGet(owner) : 0u;
+	timeout_at_us = hal_read_curtime_us();
+	taskENTER_CRITICAL();
+	crypto_irq_last_timeout_at_us = timeout_at_us;
+	crypto_irq_last_timeout_generation = crypto_irq_generation;
+	crypto_irq_last_timeout_kind = owner_kind;
+	crypto_irq_last_timeout_task = (uintptr_t)owner;
+	crypto_irq_last_timeout_priority = (uint32_t)owner_priority;
+	taskEXIT_CRITICAL();
 	printf(
 		"[CRYPTOIRQ][TIMEOUT] generation=%lu waited_ms=%lu "
 		"irq/completed/spurious=%lu/%lu/%lu\n",
@@ -190,6 +213,23 @@ void carbox_crypto_irq_controller_engine_reset(void)
 int carbox_crypto_irq_controller_last_timed_out(void)
 {
 	return crypto_irq_last_timeout != 0u;
+}
+
+void carbox_crypto_irq_controller_snapshot(
+	carbox_crypto_irq_snapshot_t *snapshot
+)
+{
+	if (!snapshot) return;
+	taskENTER_CRITICAL();
+	snapshot->timeout_count = crypto_irq_timeouts;
+	snapshot->reset_count = crypto_irq_resets;
+	snapshot->generation = crypto_irq_generation;
+	snapshot->last_timeout_at_us = crypto_irq_last_timeout_at_us;
+	snapshot->last_timeout_generation = crypto_irq_last_timeout_generation;
+	snapshot->last_timeout_kind = crypto_irq_last_timeout_kind;
+	snapshot->last_timeout_task = crypto_irq_last_timeout_task;
+	snapshot->last_timeout_priority = crypto_irq_last_timeout_priority;
+	taskEXIT_CRITICAL();
 }
 
 void carbox_crypto_irq_controller_report(unsigned window_index)

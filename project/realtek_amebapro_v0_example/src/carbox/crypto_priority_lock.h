@@ -39,6 +39,22 @@ void carbox_crypto_irq_controller_engine_reset(void);
 int carbox_crypto_irq_controller_last_timed_out(void);
 void carbox_crypto_irq_controller_report(unsigned window_index);
 
+typedef struct carbox_crypto_irq_snapshot_s {
+	uint32_t timeout_count;
+	uint32_t reset_count;
+	uint32_t generation;
+	uint32_t last_timeout_at_us;
+	uint32_t last_timeout_generation;
+	uint32_t last_timeout_kind;
+	uintptr_t last_timeout_task;
+	uint32_t last_timeout_priority;
+} carbox_crypto_irq_snapshot_t;
+
+/* Cheap, read-only context for error-only profilers. */
+void carbox_crypto_irq_controller_snapshot(
+	carbox_crypto_irq_snapshot_t *snapshot
+);
+
 #define CARBOX_CRYPTO_KIND_NONE   0u
 #define CARBOX_CRYPTO_KIND_AES    1u
 #define CARBOX_CRYPTO_KIND_CHACHA 2u

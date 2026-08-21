@@ -101,7 +101,8 @@ $(OUTPUT_DIR) $(OBJ_DIR):
 	mkdir -p $@
 
 $(OBJ_DIR)/ChaCha20Poly1305.o: ChaCha20Poly1305.c ChaCha20Poly1305.h Makefile \
-	$(SDK_ROOT)/project/realtek_amebapro_v0_example/src/carbox/screen_tx_direct_crypto.h | $(OBJ_DIR)
+	$(SDK_ROOT)/project/realtek_amebapro_v0_example/src/carbox/screen_tx_direct_crypto.h \
+	$(SDK_ROOT)/project/realtek_amebapro_v0_example/src/carbox/crypto_priority_lock.h | $(OBJ_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 	@if [ "$(CHACHA_PRIVATE_MEMORY)" = 1 ]; then \
 		$(OBJCOPY) --redefine-sym memcpy=carbox_vendor_chacha_memcpy \
