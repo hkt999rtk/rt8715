@@ -10,18 +10,17 @@ endif
 
 CC := $(CROSS_COMPILE)gcc
 # GNU ar only manages the archive container; it does not generate target
-# machine code.  Fall back to host ar for customer toolchains that omit the
-# cross binary, and override stale recursive command-line values.
-CROSS_AR := $(strip $(shell if [ -x "$(CROSS_COMPILE)ar" ]; then \
-	printf '%s' "$(CROSS_COMPILE)ar"; else \
-	command -v "$(CROSS_COMPILE)ar" 2>/dev/null; fi))
-ifeq ($(CROSS_AR),)
-override AR := $(strip $(shell command -v ar 2>/dev/null))
+# machine code.  Prefer host ar so incomplete customer cross-toolchains cannot
+# fail after parse-time detection, and override stale recursive values.
+HOST_AR := $(strip $(shell command -v ar 2>/dev/null))
+ifeq ($(HOST_AR),)
+override AR := $(strip $(shell if [ -x "$(CROSS_COMPILE)ar" ]; then \
+	printf '%s' "$(CROSS_COMPILE)ar"; fi))
 ifeq ($(AR),)
 $(error Neither $(CROSS_COMPILE)ar nor a host GNU ar was found)
 endif
 else
-override AR := $(CROSS_AR)
+override AR := $(HOST_AR)
 endif
 NM := $(CROSS_COMPILE)nm
 OBJCOPY := $(CROSS_COMPILE)objcopy
