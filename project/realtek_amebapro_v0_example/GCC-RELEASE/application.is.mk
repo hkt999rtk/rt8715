@@ -34,8 +34,9 @@ CROSS_COMPILE = $(ARM_GCC_TOOLCHAIN)/arm-none-eabi-
 # nm and objcopy but omit arm-none-eabi-ar.  GNU ar archives are target
 # independent containers, so host GNU ar is safe for both creating archives
 # and replacing/extracting ARM object members.  Prefer the cross tool when it
-# exists, while keeping an explicit AR=... supplied by the caller unchanged.
-ifeq ($(filter command line environment environment override,$(origin AR)),)
+# exists.  Preserve only an explicit `make AR=...`; stale AR values exported
+# by vendor setup scripts must not bypass detection in a recursive make.
+ifneq ($(origin AR),command line)
 CROSS_AR := $(strip $(shell command -v "$(CROSS_COMPILE)ar" 2>/dev/null))
 ifeq ($(CROSS_AR),)
 AR := $(strip $(shell command -v ar 2>/dev/null))
@@ -783,7 +784,6 @@ SRC_C += ../src/carbox/screen_rx_stage_profiler.c
 SRC_C += ../src/carbox/screen_tx_stage_report.c
 SRC_C += ../src/carbox/screen_tcp_write_profiler.c
 SRC_C += ../src/carbox/screen_rx_rate_limit.c
-SRC_C += ../src/carbox/screen_timestamp_rebase.c
 SRC_C += ../src/carbox/audio_decode_profiler.c
 SRC_C += ../src/carbox/memcheck.c
 SRC_C += ../src/carbox/carbox_stubs.c
@@ -1171,22 +1171,6 @@ VIDEO_HANDOVER_MAX_INFLIGHT ?= 2
 # The direct path has passed frame correctness, ownership and long-run tests.
 SCREEN_TX_DIRECT_CRYPTO ?= 1
 SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES ?= 4096
-# Preserve the iPhone's frame cadence without importing its absolute session
-# clock: anchor the first RX NTP value to local TX NTP, then reuse RX deltas.
-SCREEN_TIMESTAMP_REBASE ?= 0
-SCREEN_TIMESTAMP_REBASE_PROFILE ?= 0
-# RX timestamps are useful for cadence diagnosis, but the outgoing header
-# belongs to the receiver's local AirPlay session clock.  Apply only the
-# bounded local-clock slew below; full RX-clock replacement remains disabled.
-SCREEN_TIMESTAMP_REBASE_APPLY ?= 0
-# Keep the outgoing clock in the customer's local AirPlay time domain.  The
-# RX-derived theory is clamped to +/-8 ms; excess phase relaxes by 1/8/frame.
-SCREEN_TIMESTAMP_REBASE_BOUNDED ?= 1
-ifeq ($(SCREEN_TIMESTAMP_REBASE),1)
-ifneq ($(SCREEN_TX_DIRECT_CRYPTO),1)
-$(error SCREEN_TIMESTAMP_REBASE requires SCREEN_TX_DIRECT_CRYPTO=1)
-endif
-endif
 # AES and ChaCha use the same mode numbering: 0=software only,
 # 1=software-authoritative with hardware shadow comparison, 2=hardware only.
 AES_MODE ?= 2
@@ -1247,7 +1231,7 @@ NET_QUEUE_PROFILE ?= 0
 # Make the RX/queue/TX diagnostic switches safe for incremental builds. These
 # options affect both the wrappers and lwIP internals, so changing one must
 # recompile every consumer instead of silently retaining yesterday's objects.
-SCREEN_FLOW_PROFILE_STAMP := $(OBJ_DIR)/.screen_flow_profile_q$(SCREEN_QUEUE_PROFILE)-fps$(SCREEN_FPS_PROFILE)-dp$(SCREEN_DATAPATH_PROFILE)-fmt$(SCREEN_FRAME_FORMAT_PROFILE)-buf$(SCREEN_TCP_BUFFER_PROFILE)-block$(SCREEN_BLOCK_PROFILE)-screenusb$(SCREEN_USB_PROBE)-ack$(SCREEN_TCP_ACK_PROFILE)-rxlim$(SCREEN_RX_RATE_LIMIT_ACTIVE)-rxbps$(SCREEN_RX_RATE_LIMIT_BPS)-rxvmax$(SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS)-tsrebase$(SCREEN_TIMESTAMP_REBASE)-tsprof$(SCREEN_TIMESTAMP_REBASE_PROFILE)-tsapply$(SCREEN_TIMESTAMP_REBASE_APPLY)-tsbound$(SCREEN_TIMESTAMP_REBASE_BOUNDED)
+SCREEN_FLOW_PROFILE_STAMP := $(OBJ_DIR)/.screen_flow_profile_q$(SCREEN_QUEUE_PROFILE)-fps$(SCREEN_FPS_PROFILE)-dp$(SCREEN_DATAPATH_PROFILE)-fmt$(SCREEN_FRAME_FORMAT_PROFILE)-buf$(SCREEN_TCP_BUFFER_PROFILE)-block$(SCREEN_BLOCK_PROFILE)-screenusb$(SCREEN_USB_PROBE)-ack$(SCREEN_TCP_ACK_PROFILE)-rxlim$(SCREEN_RX_RATE_LIMIT_ACTIVE)-rxbps$(SCREEN_RX_RATE_LIMIT_BPS)-rxvmax$(SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS)
 $(SCREEN_FLOW_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.screen_flow_profile_*
@@ -1255,7 +1239,6 @@ $(SCREEN_FLOW_PROFILE_STAMP):
 ../src/carbox/pc_profiler.o \
 	../src/carbox/screen_queue_profiler.o \
 	../src/carbox/screen_rx_rate_limit.o \
-	../src/carbox/screen_timestamp_rebase.o \
 	../src/carbox/screen_rx_stage_profiler.o \
 	../src/carbox/screen_tx_direct_crypto.o \
 	../src/carbox/video_handover_zero_copy.o \
@@ -1525,10 +1508,6 @@ GCCFLAGS += -DCONFIG_TCP_OWNED_AGE_PROFILE=$(TCP_OWNED_AGE_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_FRAME_FORMAT_PROFILE=$(SCREEN_FRAME_FORMAT_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TCP_BUFFER_PROFILE=$(SCREEN_TCP_BUFFER_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_PROFILE=$(SCREEN_TIMESTAMP_PROFILE)
-GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_REBASE=$(SCREEN_TIMESTAMP_REBASE)
-GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_REBASE_PROFILE=$(SCREEN_TIMESTAMP_REBASE_PROFILE)
-GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_REBASE_APPLY=$(SCREEN_TIMESTAMP_REBASE_APPLY)
-GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_REBASE_BOUNDED=$(SCREEN_TIMESTAMP_REBASE_BOUNDED)
 GCCFLAGS += -DCONFIG_USB_HCD_PROFILE=$(USB_HCD_PROFILE)
 GCCFLAGS += -DCONFIG_USB_HCD_CHANNEL_PROFILE=$(USB_HCD_CHANNEL_PROFILE)
 GCCFLAGS += -DCONFIG_USB_TX_LIFETIME_PROFILE=$(USB_TX_LIFETIME_PROFILE)
@@ -1634,11 +1613,6 @@ ifeq ($(SCREEN_QUEUE_PROFILE),0)
 LFLAGS += -Wl,--wrap=lwip_recv
 endif
 LFLAGS += -Wl,--wrap=lwip_close
-endif
-ifeq ($(SCREEN_TIMESTAMP_REBASE),1)
-ifeq ($(SCREEN_QUEUE_PROFILE)$(SCREEN_RX_RATE_LIMIT_ACTIVE),00)
-LFLAGS += -Wl,--wrap=lwip_recv -Wl,--wrap=lwip_close
-endif
 endif
 ifeq ($(SCREEN_FPS_PROFILE),1)
 ifeq ($(SCREEN_QUEUE_PROFILE)$(SCREEN_RX_RATE_LIMIT_ACTIVE),00)
@@ -2426,6 +2400,14 @@ $(DTCM_O): %.o : %.c
 	@mv $(notdir $*.i) $(INFO_DIR)
 	@mv $(notdir $*.s) $(INFO_DIR)
 	@chmod 777 $(OBJ_DIR)/$(notdir $@)
+
+# One-release migration aid for existing build directories: dependency files
+# generated before the timestamp experiment was removed still name this old
+# header.  The empty target lets those objects rebuild once without restoring
+# the header or any timestamp-altering code; their regenerated .d files then
+# drop the dependency.
+../src/carbox/screen_timestamp_rebase.h:
+	@:
 
 -include $(DEPENDENCY_LIST)
 

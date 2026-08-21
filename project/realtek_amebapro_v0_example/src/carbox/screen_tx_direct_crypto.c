@@ -1,6 +1,5 @@
 #include "screen_tx_direct_crypto.h"
 #include "usb_hcd_profiler.h"
-#include "screen_timestamp_rebase.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -609,7 +608,6 @@ static int screen_tx_copy_defer(void *destination, const void *source,
 	screen_tx_direct_slot_t *slot;
 	uint32_t now_us = hal_read_curtime_us();
 	int defer = 0;
-	void *header_to_patch = NULL;
 
 	taskENTER_CRITICAL();
 	slot = screen_tx_find_task_locked(task);
@@ -625,10 +623,6 @@ static int screen_tx_copy_defer(void *destination, const void *source,
 				SCREEN_TX_HEADER_BYTES)) &&
 			   (source != NULL) && (destination != source) &&
 			   screen_tx_wire_size_matches(slot->wire_length, length)) {
-			/* Timestamp rebasing is independent of the direct-crypto size
-			 * threshold.  Small normal frames still need the iPhone cadence,
-			 * but retain the customer's original payload-copy/crypto path. */
-			header_to_patch = slot->wire_base;
 			if (length >= SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES) {
 				slot->payload_hook_us = now_us;
 				slot->source = source;
@@ -642,10 +636,6 @@ static int screen_tx_copy_defer(void *destination, const void *source,
 		}
 	}
 	taskEXIT_CRITICAL();
-	if (header_to_patch != NULL) {
-		(void)carbox_screen_timestamp_patch_normal_header(
-			header_to_patch, SCREEN_TX_HEADER_BYTES);
-	}
 	return defer;
 }
 

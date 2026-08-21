@@ -2,7 +2,6 @@
 #include "screen_rx_record_profiler.h"
 #include "screen_queue_wait.h"
 #include "screen_rx_stage_profiler.h"
-#include "screen_timestamp_rebase.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -1005,7 +1004,6 @@ typedef struct video_handover_frame_item_s {
 
 void __wrap_AirPlayScreen_SendVideo(const void *data, int bytes)
 {
-	carbox_screen_timestamp_send_begin(data, bytes);
 #if CONFIG_SCREEN_FPS_PROFILE
 	uint32_t start_us = screen_fps_begin(bytes);
 	carbox_screen_rx_stage_handover_begin();
@@ -1017,7 +1015,6 @@ void __wrap_AirPlayScreen_SendVideo(const void *data, int bytes)
 	__real_AirPlayScreen_SendVideo(data, bytes);
 	carbox_screen_queue_publish_end();
 	carbox_video_handover_end();
-	carbox_screen_timestamp_send_end();
 #if CONFIG_SCREEN_FPS_PROFILE
 	carbox_screen_rx_stage_handover_end();
 	screen_fps_end(start_us);
@@ -1032,7 +1029,6 @@ void __wrap_CVector_push_back(void *vector, const void *element)
 	video_handover_frame_item_t replacement;
 	int size_before = 0;
 	int prepared = 0;
-	int valid_item = 0;
 #if CONFIG_SCREEN_FPS_PROFILE
 	uint32_t profile_start_us = 0U;
 	uint32_t profile_arrival_us = 0U;
@@ -1044,7 +1040,6 @@ void __wrap_CVector_push_back(void *vector, const void *element)
 	 * unrelated CVector item as AirPlay's {pointer, length} pair. */
 	if ((view != NULL) && (element != NULL) &&
 	    (view->element_size == (int)sizeof(video_handover_frame_item_t))) {
-		valid_item = 1;
 		original = *(const video_handover_frame_item_t *)element;
 		replacement = original;
 		size_before = view->size;
@@ -1066,13 +1061,6 @@ void __wrap_CVector_push_back(void *vector, const void *element)
 
 		carbox_video_handover_finish_push(original.data, pushed);
 	}
-	if (valid_item) {
-		int pushed = view->size == size_before + 1;
-		const void *published = prepared ? replacement.data : original.data;
-
-		carbox_screen_timestamp_queue_push(vector, published,
-			original.bytes, pushed);
-	}
 #if CONFIG_SCREEN_FPS_PROFILE
 	if (profile_measured) {
 		screen_fps_push_end(profile_start_us, profile_arrival_us,
@@ -1086,15 +1074,6 @@ void __wrap_CVector_erase(void *vector, int index)
 {
 	video_handover_vector_view_t *view =
 		(video_handover_vector_view_t *)vector;
-	video_handover_frame_item_t item = { NULL, 0 };
-
-	if ((view != NULL) && (index == 0) && (view->size > 0) &&
-	    (view->data != NULL) &&
-	    (view->element_size == (int)sizeof(video_handover_frame_item_t))) {
-		item = ((video_handover_frame_item_t *)view->data)[0];
-		carbox_screen_timestamp_queue_erase(vector, index, item.data,
-			item.bytes);
-	}
 #if CONFIG_SCREEN_FPS_PROFILE
 	uint32_t arrival_us = 0U;
 	int valid = (view != NULL) && (view->size > 0);

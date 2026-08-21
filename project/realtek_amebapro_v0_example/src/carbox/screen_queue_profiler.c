@@ -3,7 +3,6 @@
 #include "screen_rx_stage_profiler.h"
 #include "screen_rx_rate_limit.h"
 #include "screen_tx_direct_crypto.h"
-#include "screen_timestamp_rebase.h"
 #include "video_handover_zero_copy.h"
 #include "screen_queue_wait.h"
 
@@ -1129,7 +1128,6 @@ static void screenprof_record_class_completion(uint32_t frame_class,
 void __wrap_AirPlayScreen_SendVideo(const void *data, int bytes)
 {
 	TaskHandle_t current = xTaskGetCurrentTaskHandle();
-	carbox_screen_timestamp_send_begin(data, bytes);
 	carbox_screen_rx_stage_handover_begin();
 	carbox_screen_rx_record_send_video(data, bytes);
 	screenprof_active_input_t input;
@@ -1202,7 +1200,6 @@ void __wrap_AirPlayScreen_SendVideo(const void *data, int bytes)
 	__real_AirPlayScreen_SendVideo(data, bytes);
 	carbox_screen_queue_publish_end();
 	carbox_video_handover_end();
-	carbox_screen_timestamp_send_end();
 	carbox_screen_rx_stage_handover_end();
 	if (marked) {
 		screenprof_unmark_active(current);
@@ -1342,10 +1339,7 @@ void __wrap_CVector_push_back(void *vector, const void *element)
 	}
 	if (is_screen) {
 		screenprof_vector_view_t *view = (screenprof_vector_view_t *)vector;
-		int pushed = (view != NULL) && (view->size == size_before + 1);
 
-		carbox_screen_timestamp_queue_push(vector, item.data, item.bytes,
-			pushed);
 		taskENTER_CRITICAL();
 		screenprof_progress.enqueue_tick = xTaskGetTickCount();
 		screenprof_progress.seen |= SCREENPROF_PROGRESS_ENQUEUE;
@@ -1408,8 +1402,6 @@ void __wrap_CVector_erase(void *vector, int index)
 			(screenprof_frame_item_t *)view->data;
 		if ((item != NULL) && (item[0].bytes > 0)) {
 			bytes = (uint32_t)item[0].bytes;
-			carbox_screen_timestamp_queue_erase(vector, index,
-				item[0].data, item[0].bytes);
 		}
 		taskENTER_CRITICAL();
 		if (!screenprof_frame_tracking_invalid &&
@@ -1489,7 +1481,6 @@ void __wrap_CVector_delete(void *vector)
 		screenprof_frame_tracking_invalid = 0;
 		taskEXIT_CRITICAL();
 	}
-	carbox_screen_timestamp_queue_delete(vector);
 	__real_CVector_delete(vector);
 }
 
@@ -1589,7 +1580,6 @@ ssize_t __wrap_lwip_recv(int socket, void *buffer, size_t bytes, int flags)
 #endif
 	start_us = measured ? hal_read_curtime_us() : 0U;
 	ssize_t result = __real_lwip_recv(socket, buffer, bytes, flags);
-	carbox_screen_timestamp_rx_header(socket, buffer, bytes, (int)result);
 	carbox_screen_rx_stage_recv(buffer, bytes, (int)result);
 	carbox_screen_rx_record_recv(buffer, bytes, (int)result);
 	carbox_screen_rx_rate_limit_observe(socket, buffer, bytes, (int)result);

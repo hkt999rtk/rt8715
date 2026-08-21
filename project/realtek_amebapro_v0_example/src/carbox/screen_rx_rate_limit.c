@@ -1,6 +1,5 @@
 #include "screen_rx_rate_limit.h"
 #include "screen_rx_stage_profiler.h"
-#include "screen_timestamp_rebase.h"
 
 #include <string.h>
 
@@ -32,10 +31,6 @@
 #ifndef CONFIG_SCREEN_QUEUE_PROFILE
 #define CONFIG_SCREEN_QUEUE_PROFILE 0
 #endif
-#ifndef CONFIG_SCREEN_TIMESTAMP_REBASE
-#define CONFIG_SCREEN_TIMESTAMP_REBASE 0
-#endif
-
 #if CONFIG_SCREEN_RX_RATE_LIMIT
 
 static TaskHandle_t screen_rx_task;
@@ -179,7 +174,6 @@ extern ssize_t __real_lwip_recv(int socket, void *buffer, size_t bytes,
 ssize_t __wrap_lwip_recv(int socket, void *buffer, size_t bytes, int flags)
 {
 	ssize_t result = __real_lwip_recv(socket, buffer, bytes, flags);
-	carbox_screen_timestamp_rx_header(socket, buffer, bytes, (int)result);
 	carbox_screen_rx_stage_recv(buffer, bytes, (int)result);
 
 	if (screen_rx_socket < 0) {
@@ -197,7 +191,6 @@ int __wrap_lwip_close(int socket)
 	int result = __real_lwip_close(socket);
 
 	if (result == 0) {
-		carbox_screen_timestamp_close(socket);
 		carbox_screen_rx_rate_limit_close(socket);
 	}
 	return result;
@@ -224,30 +217,4 @@ void carbox_screen_rx_rate_limit_report(uint32_t sequence)
 	(void)sequence;
 }
 
-#endif
-
-#if !CONFIG_SCREEN_QUEUE_PROFILE && !CONFIG_SCREEN_RX_RATE_LIMIT && \
-	CONFIG_SCREEN_TIMESTAMP_REBASE
-extern ssize_t __real_lwip_recv(int socket, void *buffer, size_t bytes,
-				int flags);
-
-ssize_t __wrap_lwip_recv(int socket, void *buffer, size_t bytes, int flags)
-{
-	ssize_t result = __real_lwip_recv(socket, buffer, bytes, flags);
-
-	carbox_screen_timestamp_rx_header(socket, buffer, bytes, (int)result);
-	return result;
-}
-
-extern int __real_lwip_close(int socket);
-
-int __wrap_lwip_close(int socket)
-{
-	int result = __real_lwip_close(socket);
-
-	if (result == 0) {
-		carbox_screen_timestamp_close(socket);
-	}
-	return result;
-}
 #endif

@@ -29,7 +29,7 @@ CROSS_COMPILE = $(ARM_GCC_TOOLCHAIN)/arm-none-eabi-
 # Compilation tools
 # Keep customer builds working with legacy toolchain bundles that omit the
 # cross ar binary.  GNU ar archives do not encode a host architecture.
-ifeq ($(filter command line environment environment override,$(origin AR)),)
+ifneq ($(origin AR),command line)
 CROSS_AR := $(strip $(shell command -v "$(CROSS_COMPILE)ar" 2>/dev/null))
 ifeq ($(CROSS_AR),)
 AR := $(strip $(shell command -v ar 2>/dev/null))

@@ -5,7 +5,6 @@
 #include "gcd_sync_profiler.h"
 #include "screen_queue_profiler.h"
 #include "screen_rx_rate_limit.h"
-#include "screen_timestamp_rebase.h"
 #include "screen_rx_record_profiler.h"
 #include "chacha_key_alias_fix.h"
 #include "usb_hcd_profiler.h"
@@ -1590,7 +1589,6 @@ static void pcprof_task(void *arg)
 		if (chacha_crypto_transaction_report != NULL) {
 			chacha_crypto_transaction_report(sequence);
 		}
-		carbox_screen_timestamp_report(sequence);
 #if CONFIG_SCREEN_FPS_PROFILE
 		carbox_screen_fps_report(sequence);
 		carbox_screen_queue_wait_report(sequence);
