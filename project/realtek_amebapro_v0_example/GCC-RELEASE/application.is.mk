@@ -769,13 +769,16 @@ SRC_C += ../src/carbox/carbox_diag.c
 SRC_C += ../src/carbox/pc_profiler.c
 SRC_C += ../src/carbox/lpddr_margin_test.c
 SRC_C += ../src/carbox/touch_path_profiler.c
+SRC_C += ../src/carbox/touch_frame_profiler.c
 SRC_C += ../src/carbox/i2c_bitbang_pacing.c
 SRC_C += ../src/carbox/ota_local_upload_page.c
 SRC_C += ../src/carbox/ota/carplay_ota_compat.c
 SRC_C += ../src/carbox/irq_profiler.c
 SRC_C += ../src/carbox/usb_hcd_profiler.c
 SRC_C += ../src/carbox/gcd_sync_profiler.c
+SRC_C += ../src/carbox/airplay_mutex_profiler.c
 SRC_C += ../src/carbox/screen_queue_profiler.c
+SRC_C += ../src/carbox/screen_hw_timestamp.c
 SRC_C += ../src/carbox/screen_rx_record_profiler.c
 SRC_C += ../src/carbox/screen_rx_stage_profiler.c
 SRC_C += ../src/carbox/screen_tx_stage_report.c
@@ -1040,7 +1043,7 @@ GDMA_RESERVE_MULTIBLOCK_CHANNELS ?= 1
 GCD_SYNC_PROFILE ?= 0
 # Diagnostic A/B switch.  The production default preserves DispatchLite's
 # requested worker priority; set this to a non-negative value only for testing.
-GCD_WORK_PRIORITY ?= -1
+GCD_WORK_PRIORITY ?= 4
 # The closed USB HCD bottom half is short and must run immediately after the
 # top-half ISR masks USB_IRQn.  Keep it above all normal networking tasks.
 USBH_ISR_TASK_PRIORITY ?= 11
@@ -1048,13 +1051,17 @@ USBH_ISR_TASK_PRIORITY ?= 11
 # CPU-heavy decode cannot delay USB completion handling and the next transfer.
 # It remains below TCP/IP and NCM (priority 10) and the USB ISR worker (11).
 USBH_MAIN_TASK_PRIORITY ?= 6
+# The CarPlay control/event socket is latency-sensitive.  Keep TCPClient above
+# the priority-4 screen/GCD workers while leaving USB and TCP/IP workers above it.
+# Set to -1 to preserve the priority requested by the closed CarPlay library.
+TCP_CLIENT_PRIORITY ?= 5
 # Overnight UI-freeze diagnosis: trace the CarPlay screen RX, handover queue,
 # and TX stages in the existing 10-second profiler report.
-SCREEN_QUEUE_PROFILE ?= 0
+SCREEN_QUEUE_PROFILE ?= 1
 # Lightweight 30/60-fps latency probe.  It reuses the production handover and
 # lwIP-write wrappers and records counters/timestamps only; unlike the full
 # SCREEN_QUEUE_PROFILE it does not scan frames or retain histogram samples.
-SCREEN_FPS_PROFILE ?= 1
+SCREEN_FPS_PROFILE ?= 0
 # Replace only the closed ScreenThread loop's fixed vTaskDelay(10) with a
 # queue-arrival semaphore wait.  Keep this independent of handover zero-copy
 # and direct crypto so every supported A/B combination either installs both
@@ -1071,6 +1078,13 @@ endif
 # Production switch for the temporary RX/TX investigation reports. Keep the
 # limiter, pacer, handover gate, and pressure feedback active when this is off.
 SCREEN_DATAPATH_PROFILE ?= 0
+# Lightweight limiter/source-cadence diagnostics. Keep this independent of
+# the full screen datapath profiler so it can be left on for focused A/B runs.
+SCREEN_RX_RATE_LIMIT_PROFILE ?= 1
+# Focused iPhone video-ingress probe.  This correlates source NTP cadence with
+# socket readiness, fixed-header arrival, record assembly, and the local TCP
+# receive window without enabling the heavyweight screen queue profiler.
+VIDEO_INGRESS_PROFILE ?= 0
 # Optional receive-window pacing for the iPhone screen TCP connection. A
 # bitrate of zero means unlimited and compiles the limiter, task, wrappers,
 # token accounting, and TX-pressure feedback out of the build.
@@ -1079,7 +1093,7 @@ SCREEN_RX_RATE_LIMIT ?= 1
 # per second is the production ceiling; the limiter returns from recv()
 # normally and withholds tcp_recved() credit asynchronously, so it does not
 # sleep or stall AirPlayScreenReceiver.
-SCREEN_RX_RATE_LIMIT_BPS ?= 8000000
+SCREEN_RX_RATE_LIMIT_BPS ?= 0
 SCREEN_RX_RATE_LIMIT_ACTIVE := $(if $(filter 0,$(SCREEN_RX_RATE_LIMIT_BPS)),0,$(SCREEN_RX_RATE_LIMIT))
 SCREEN_RX_RATE_LIMIT_INTERVAL_MS ?= 10
 SCREEN_RX_RATE_LIMIT_BUCKET_BYTES ?= 32768
@@ -1093,7 +1107,9 @@ SCREEN_RX_RATE_LIMIT_CLOSE_STEP_BPS ?= 500000
 SCREEN_RX_RATE_LIMIT_OPEN_HOLD_MS ?= 100
 SCREEN_RX_RATE_LIMIT_CLOSE_HOLD_MS ?= 150
 SCREEN_RX_RATE_LIMIT_TASK_PRIORITY ?= 5
-SCREEN_RX_RATE_LIMIT_TASK_STACK ?= 512
+# xTaskCreate stack depth is in 32-bit words.  The limiter's lwIP window
+# update path reached a 2-word HWM at 512, so retain 2 KiB of extra margin.
+SCREEN_RX_RATE_LIMIT_TASK_STACK ?= 1024
 # Optional ScreenThread-to-USB TX ceiling. A bitrate of zero explicitly means
 # unlimited and compiles the pacing path out; a nonzero value enables pacing.
 SCREEN_TX_PACER ?= 1
@@ -1192,9 +1208,19 @@ SCREEN_FRAME_FORMAT_PROFILE ?= 0
 SCREEN_TCP_BUFFER_PROFILE ?= 0
 # When SCREEN_QUEUE_PROFILE is enabled, correlate the local tick used to
 # generate each outgoing screen NTP timestamp with that frame's receive time.
-SCREEN_TIMESTAMP_PROFILE ?= 0
+SCREEN_TIMESTAMP_PROFILE ?= 1
+# Generate AirPlay screen wire timestamps from the microsecond hardware system
+# timer. FreeRTOS's 64-bit tick epoch is used only to resolve 32-bit HW wraps.
+SCREEN_HW_TIMESTAMP ?= 1
+# Keep the generic select() timing probe separate from frame/timestamp
+# profiling. It touches pre-session control sockets and is not needed for the
+# iPhone-NTP to outgoing-wire-NTP comparison.
+SCREEN_SELECT_PROFILE ?= 0
 USB_HCD_PROFILE ?= 0
 USB_HCD_CHANNEL_PROFILE ?= 0
+# Focused channel-4 bulk-IN lifecycle probe: submit, completion observation,
+# NCM parse, and re-arm. It leaves the USB ISR and vendor state machine intact.
+USB_NCM_RX_PROFILE ?= 0
 # Correlate customer NCM send, HCD bulk-OUT attempts, observed URB completion,
 # return, and the source pbuf release.  Counters only; customer flow is intact.
 USB_TX_LIFETIME_PROFILE ?= 0
@@ -1203,11 +1229,79 @@ USB_TX_LIFETIME_PROFILE ?= 0
 # can be restored without changing USB behaviour.
 USB_PROFILE_REPORT ?= 0
 ifeq ($(SCREEN_USB_PROBE),1)
-ifneq ($(USB_HCD_PROFILE)$(USB_HCD_CHANNEL_PROFILE)$(USB_TX_LIFETIME_PROFILE),000)
+ifneq ($(USB_HCD_PROFILE)$(USB_HCD_CHANNEL_PROFILE)$(USB_NCM_RX_PROFILE)$(USB_TX_LIFETIME_PROFILE),0000)
 $(error SCREEN_USB_PROBE is the lightweight USB wrapper; disable the full USB profiles)
 endif
 endif
-TOUCH_PATH_PROFILE ?= 0
+ifneq ($(words $(filter 1,$(USB_HCD_PROFILE) $(USB_HCD_CHANNEL_PROFILE) $(USB_NCM_RX_PROFILE) $(USB_TX_LIFETIME_PROFILE))),1)
+ifneq ($(filter 1,$(USB_HCD_PROFILE) $(USB_HCD_CHANNEL_PROFILE) $(USB_NCM_RX_PROFILE) $(USB_TX_LIFETIME_PROFILE)),)
+$(error Enable at most one HCD/NCM USB profiler)
+endif
+endif
+# Isolated vehicle-event -> iPhone HID bridge latency profile. This remains
+# independent of the screen, USB and crypto profilers.
+TOUCH_PATH_PROFILE ?= 1
+# Profile the private vendor airplay_mutex without changing its locking
+# behaviour. The touch wrapper discovers the mutex address on first use.
+AIRPLAY_MUTEX_PROFILE ?= 1
+ifeq ($(AIRPLAY_MUTEX_PROFILE),1)
+ifneq ($(TOUCH_PATH_PROFILE),1)
+$(error AIRPLAY_MUTEX_PROFILE requires TOUCH_PATH_PROFILE=1)
+endif
+endif
+# Sequence-level vehicle 200 OK local-send, peer-ACK and RTO correlation.
+# Keep this independent so the deeper TCP hook can be removed after diagnosis
+# without disabling the rest of the touch path report.
+CAR_ACK_TCP_PROFILE ?= 0
+ifeq ($(CAR_ACK_TCP_PROFILE),1)
+ifneq ($(TOUCH_PATH_PROFILE),1)
+$(error CAR_ACK_TCP_PROFILE requires TOUCH_PATH_PROFILE=1)
+endif
+endif
+# Split the iPhone HID HTTP response latency at the lwIP recvmbox boundary.
+# This identifies whether a slow 200 response was late on the wire or whether
+# the priority-4 DispatchLite worker was late to consume already-arrived data.
+IPHONE_HTTP_RX_PROFILE ?= 1
+ifeq ($(IPHONE_HTTP_RX_PROFILE),1)
+ifneq ($(TOUCH_PATH_PROFILE),1)
+$(error IPHONE_HTTP_RX_PROFILE requires TOUCH_PATH_PROFILE=1)
+endif
+endif
+# Allow one request to wait for its response while one later HID request is
+# already on the wire.  Writes remain serialized on HTTPClient's own dispatch
+# queue, so the transport cipher stream order is unchanged.
+AIRPLAY_HID_HTTP_PIPELINE_DEPTH ?= 0
+ifneq ($(AIRPLAY_HID_HTTP_PIPELINE_DEPTH),0)
+ifneq ($(TOUCH_PATH_PROFILE),1)
+$(error AIRPLAY_HID_HTTP_PIPELINE_DEPTH requires TOUCH_PATH_PROFILE=1)
+endif
+endif
+# Fully bypass HTTPClient's request/response state machine for fire-and-forget
+# HID commands. The wrapper owns ordered writes and drains decrypted response
+# bytes without interpreting the HTTP response.
+AIRPLAY_HID_HTTP_BYPASS ?= 1
+ifeq ($(AIRPLAY_HID_HTTP_BYPASS),1)
+ifneq ($(TOUCH_PATH_PROFILE),1)
+$(error AIRPLAY_HID_HTTP_BYPASS requires TOUCH_PATH_PROFILE=1)
+endif
+endif
+# A/B experiment for the vehicle's roughly 50 Hz absolute-touch stream.
+# Pass the first contact and every release immediately; sample subsequent
+# move reports at the configured rate before they enter the AirPlay channel.
+# Set to 0 to restore the unmodified one-report-in/one-report-out behaviour.
+TOUCH_MOVE_SAMPLE_HZ ?= 0
+ifneq ($(TOUCH_MOVE_SAMPLE_HZ),0)
+ifneq ($(TOUCH_PATH_PROFILE),1)
+$(error TOUCH_MOVE_SAMPLE_HZ requires TOUCH_PATH_PROFILE=1)
+endif
+endif
+# Lightweight correlation of outgoing HID timing, its synchronous GCD wait,
+# and the following iPhone source-frame cadence. It is intentionally separate
+# from the full vehicle/HTTP touch-path profiler.
+TOUCH_FRAME_PROFILE ?= 0
+ifeq ($(TOUCH_PATH_PROFILE)$(TOUCH_FRAME_PROFILE),11)
+$(error TOUCH_PATH_PROFILE and TOUCH_FRAME_PROFILE are mutually exclusive)
+endif
 SCREEN_RX_RECORD_PROFILE ?= 0
 ifeq ($(SCREEN_RX_RECORD_PROFILE),1)
 ifneq ($(CHACHA_KEY_ALIAS_FIX),1)
@@ -1217,7 +1311,7 @@ ifneq ($(CHACHA_API_TRACE)$(CHACHA_VENDOR_TRACE)$(CHACHA_PRE_RX_VENDOR),000)
 $(error SCREEN_RX_RECORD_PROFILE requires the normal key-alias ChaCha route)
 endif
 endif
-USB_PROFILE_STAMP := $(OBJ_DIR)/.usb_profile_h$(USB_HCD_PROFILE)-c$(USB_HCD_CHANNEL_PROFILE)-life$(USB_TX_LIFETIME_PROFILE)-screenusb$(SCREEN_USB_PROBE)-report$(USB_PROFILE_REPORT)
+USB_PROFILE_STAMP := $(OBJ_DIR)/.usb_profile_h$(USB_HCD_PROFILE)-c$(USB_HCD_CHANNEL_PROFILE)-rx$(USB_NCM_RX_PROFILE)-life$(USB_TX_LIFETIME_PROFILE)-screenusb$(SCREEN_USB_PROBE)-report$(USB_PROFILE_REPORT)
 $(USB_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.usb_profile_*
@@ -1228,7 +1322,7 @@ NET_QUEUE_PROFILE ?= 0
 # Make the RX/queue/TX diagnostic switches safe for incremental builds. These
 # options affect both the wrappers and lwIP internals, so changing one must
 # recompile every consumer instead of silently retaining yesterday's objects.
-SCREEN_FLOW_PROFILE_STAMP := $(OBJ_DIR)/.screen_flow_profile_q$(SCREEN_QUEUE_PROFILE)-fps$(SCREEN_FPS_PROFILE)-dp$(SCREEN_DATAPATH_PROFILE)-fmt$(SCREEN_FRAME_FORMAT_PROFILE)-buf$(SCREEN_TCP_BUFFER_PROFILE)-block$(SCREEN_BLOCK_PROFILE)-screenusb$(SCREEN_USB_PROBE)-ack$(SCREEN_TCP_ACK_PROFILE)-rxlim$(SCREEN_RX_RATE_LIMIT_ACTIVE)-rxbps$(SCREEN_RX_RATE_LIMIT_BPS)-rxvmax$(SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS)
+SCREEN_FLOW_PROFILE_STAMP := $(OBJ_DIR)/.screen_flow_profile_q$(SCREEN_QUEUE_PROFILE)-fps$(SCREEN_FPS_PROFILE)-dp$(SCREEN_DATAPATH_PROFILE)-rxlimprof$(SCREEN_RX_RATE_LIMIT_PROFILE)-ingress$(VIDEO_INGRESS_PROFILE)-fmt$(SCREEN_FRAME_FORMAT_PROFILE)-buf$(SCREEN_TCP_BUFFER_PROFILE)-block$(SCREEN_BLOCK_PROFILE)-screenusb$(SCREEN_USB_PROBE)-ack$(SCREEN_TCP_ACK_PROFILE)-stamp$(SCREEN_TIMESTAMP_PROFILE)-hwstamp$(SCREEN_HW_TIMESTAMP)-select$(SCREEN_SELECT_PROFILE)-rxlim$(SCREEN_RX_RATE_LIMIT_ACTIVE)-rxbps$(SCREEN_RX_RATE_LIMIT_BPS)-rxvmax$(SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS)-rxstack$(SCREEN_RX_RATE_LIMIT_TASK_STACK)
 $(SCREEN_FLOW_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.screen_flow_profile_*
@@ -1240,26 +1334,45 @@ $(SCREEN_FLOW_PROFILE_STAMP):
 	../src/carbox/screen_tx_direct_crypto.o \
 	../src/carbox/video_handover_zero_copy.o \
 	../src/carbox/chacha_key_alias_fix.o \
+	../src/carbox/screen_hw_timestamp.o \
 	../src/carbox/large_memcpy_gdma.o \
 	../src/carbox/ncm/ncm_tx.o \
+	../../../component/common/network/lwip/lwip_v2.1.2/src/api/api_msg.o \
 	../../../component/common/network/lwip/lwip_v2.1.2/src/api/sockets.o \
 	../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp.o \
 	../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_in.o: \
 	$(SCREEN_FLOW_PROFILE_STAMP)
 # These switches affect several standalone profiler/wrapper objects.  Track
 # them explicitly so a diagnostic override cannot reuse release-mode objects.
-CRYPTO_ENGINE_PROFILE ?= 1
-DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-platform$(PC_PROFILER_PLATFORM_REPORT)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)-touch$(TOUCH_PATH_PROFILE)-rxrec$(SCREEN_RX_RECORD_PROFILE)-crypto$(CRYPTO_ENGINE_PROFILE)
+CRYPTO_ENGINE_PROFILE ?= 0
+DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-platform$(PC_PROFILER_PLATFORM_REPORT)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)-touch$(TOUCH_PATH_PROFILE)-airmutex$(AIRPLAY_MUTEX_PROFILE)-carack$(CAR_ACK_TCP_PROFILE)-iphonerx$(IPHONE_HTTP_RX_PROFILE)-hidpipe$(AIRPLAY_HID_HTTP_PIPELINE_DEPTH)-hidbypass$(AIRPLAY_HID_HTTP_BYPASS)-touchsample$(TOUCH_MOVE_SAMPLE_HZ)-touchframe$(TOUCH_FRAME_PROFILE)-gcd$(GCD_SYNC_PROFILE)-gcdprio$(GCD_WORK_PRIORITY)-uisr$(USBH_ISR_TASK_PRIORITY)-umain$(USBH_MAIN_TASK_PRIORITY)-tcpclient$(TCP_CLIENT_PRIORITY)-rxrec$(SCREEN_RX_RECORD_PROFILE)-crypto$(CRYPTO_ENGINE_PROFILE)-cryptotmo$(CARBOX_CRYPTO_IRQ_TIMEOUT_MS)
 $(DIAGNOSTIC_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.diagnostic_profile_*
 	@touch $@
+# The deep ACK/RTO switch also changes lwIP core sources.  Track it separately
+# so toggling only this profiler cannot reuse TCP objects built with the
+# opposite setting.
+CAR_ACK_TCP_PROFILE_STAMP := $(OBJ_DIR)/.car_ack_tcp_profile_$(CAR_ACK_TCP_PROFILE)
+$(CAR_ACK_TCP_PROFILE_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.car_ack_tcp_profile_*
+	@touch $@
+../../../component/common/network/lwip/lwip_v2.1.2/src/api/sockets.o \
+	../../../component/common/network/lwip/lwip_v2.1.2/src/api/api_msg.o \
+	../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp.o \
+	../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_in.o: \
+	$(CAR_ACK_TCP_PROFILE_STAMP)
 ../src/carbox/pc_profiler.o \
 	../src/carbox/irq_profiler.o \
 	../src/carbox/usb_hcd_profiler.o \
 	../src/carbox/audio_decode_profiler.o \
 	../src/carbox/crypto_engine_profiler.o \
+	../src/carbox/gcd_sync_profiler.o \
+	../src/carbox/airplay_mutex_profiler.o \
 	../src/carbox/touch_path_profiler.o \
+	../src/carbox/touch_frame_profiler.o \
+	../src/carbox/crypto_priority_lock.o \
 	../src/carbox/screen_rx_record_profiler.o \
 	../src/carbox/chacha_key_alias_fix.o \
 	../src/carbox/libusb_ref_compat/libusb_ref_compat_os.o: \
@@ -1281,6 +1394,7 @@ TCPIP_RX_BATCH_TIMEOUT_US ?= 1000
 # Diagnostic counters/logs only; aggregation remains enabled when this is 0.
 TCPIP_RX_BATCH_PROFILE ?= 0
 CARBOX_CRYPTO_OWNER_BOOST_PRIORITY ?= 11
+CARBOX_CRYPTO_IRQ_TIMEOUT_MS ?= 20
 # Public clock selection.  Use only SYSTEM_CLOCK_PROFILE on normal builds;
 # SYS_PLL_OVERCLOCK and SYS_PLL_TARGET_HZ are derived implementation details.
 # Supported release profiles:
@@ -1449,10 +1563,14 @@ GCCFLAGS += -DCONFIG_GCD_SYNC_PROFILE=$(GCD_SYNC_PROFILE)
 GCCFLAGS += -DCONFIG_GCD_WORK_PRIORITY=$(GCD_WORK_PRIORITY)
 GCCFLAGS += -DCONFIG_USBH_ISR_TASK_PRIORITY=$(USBH_ISR_TASK_PRIORITY)
 GCCFLAGS += -DCONFIG_USBH_MAIN_TASK_PRIORITY=$(USBH_MAIN_TASK_PRIORITY)
+GCCFLAGS += -DCONFIG_TCP_CLIENT_PRIORITY=$(TCP_CLIENT_PRIORITY)
 GCCFLAGS += -DCONFIG_SCREEN_QUEUE_PROFILE=$(SCREEN_QUEUE_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_FPS_PROFILE=$(SCREEN_FPS_PROFILE)
 GCCFLAGS += -DCONFIG_CHACHA_MODE=$(CHACHA_MODE)
 GCCFLAGS += -DCONFIG_SCREEN_DATAPATH_PROFILE=$(SCREEN_DATAPATH_PROFILE)
+GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_PROFILE=$(SCREEN_RX_RATE_LIMIT_PROFILE)
+GCCFLAGS += -DCONFIG_VIDEO_INGRESS_PROFILE=$(VIDEO_INGRESS_PROFILE)
+GCCFLAGS += -DCONFIG_SCREEN_SELECT_PROFILE=$(SCREEN_SELECT_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT=$(SCREEN_RX_RATE_LIMIT_ACTIVE)
 GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_BPS=$(SCREEN_RX_RATE_LIMIT_BPS)
 GCCFLAGS += -DCONFIG_SCREEN_RX_RATE_LIMIT_INTERVAL_MS=$(SCREEN_RX_RATE_LIMIT_INTERVAL_MS)
@@ -1505,11 +1623,20 @@ GCCFLAGS += -DCONFIG_TCP_OWNED_AGE_PROFILE=$(TCP_OWNED_AGE_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_FRAME_FORMAT_PROFILE=$(SCREEN_FRAME_FORMAT_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TCP_BUFFER_PROFILE=$(SCREEN_TCP_BUFFER_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_PROFILE=$(SCREEN_TIMESTAMP_PROFILE)
+GCCFLAGS += -DCONFIG_SCREEN_HW_TIMESTAMP=$(SCREEN_HW_TIMESTAMP)
 GCCFLAGS += -DCONFIG_USB_HCD_PROFILE=$(USB_HCD_PROFILE)
 GCCFLAGS += -DCONFIG_USB_HCD_CHANNEL_PROFILE=$(USB_HCD_CHANNEL_PROFILE)
+GCCFLAGS += -DCONFIG_USB_NCM_RX_PROFILE=$(USB_NCM_RX_PROFILE)
 GCCFLAGS += -DCONFIG_USB_TX_LIFETIME_PROFILE=$(USB_TX_LIFETIME_PROFILE)
 GCCFLAGS += -DCONFIG_USB_PROFILE_REPORT=$(USB_PROFILE_REPORT)
 GCCFLAGS += -DCONFIG_TOUCH_PATH_PROFILE=$(TOUCH_PATH_PROFILE)
+GCCFLAGS += -DCONFIG_AIRPLAY_MUTEX_PROFILE=$(AIRPLAY_MUTEX_PROFILE)
+GCCFLAGS += -DCONFIG_CAR_ACK_TCP_PROFILE=$(CAR_ACK_TCP_PROFILE)
+GCCFLAGS += -DCONFIG_IPHONE_HTTP_RX_PROFILE=$(IPHONE_HTTP_RX_PROFILE)
+GCCFLAGS += -DCONFIG_AIRPLAY_HID_HTTP_PIPELINE_DEPTH=$(AIRPLAY_HID_HTTP_PIPELINE_DEPTH)
+GCCFLAGS += -DCONFIG_AIRPLAY_HID_HTTP_BYPASS=$(AIRPLAY_HID_HTTP_BYPASS)
+GCCFLAGS += -DCONFIG_TOUCH_MOVE_SAMPLE_HZ=$(TOUCH_MOVE_SAMPLE_HZ)
+GCCFLAGS += -DCONFIG_TOUCH_FRAME_PROFILE=$(TOUCH_FRAME_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_RX_RECORD_PROFILE=$(SCREEN_RX_RECORD_PROFILE)
 GCCFLAGS += -DCONFIG_NET_QUEUE_PROFILE=$(NET_QUEUE_PROFILE)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_STAGE1=$(TCPIP_RX_BATCH_STAGE1)
@@ -1520,7 +1647,9 @@ GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_MAX_PACKETS=$(TCPIP_RX_BATCH_MAX_PACKETS)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_TIMEOUT_US=$(TCPIP_RX_BATCH_TIMEOUT_US)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_PROFILE=$(TCPIP_RX_BATCH_PROFILE)
 GCCFLAGS += -DCONFIG_CRYPTO_ENGINE_PROFILE=$(CRYPTO_ENGINE_PROFILE)
+GCCFLAGS += -DCONFIG_CHACHA_RUNTIME_PROFILE=$(CHACHA_RUNTIME_PROFILE)
 GCCFLAGS += -DCARBOX_CRYPTO_OWNER_BOOST_PRIORITY=$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
+GCCFLAGS += -DCARBOX_CRYPTO_IRQ_TIMEOUT_MS=$(CARBOX_CRYPTO_IRQ_TIMEOUT_MS)
 GCCFLAGS += -DCONFIG_SYS_PLL_OVERCLOCK=$(SYS_PLL_OVERCLOCK)
 GCCFLAGS += -DCONFIG_SYS_PLL_TARGET_HZ=$(SYS_PLL_TARGET_HZ)
 # Avoid FreeRTOS-Plus-POSIX vs newlib type conflicts (mode_t, clockid_t, timer_t)
@@ -1589,10 +1718,14 @@ endif
 ifeq ($(IRQ_PROFILE_USB_CH4_NCM),1)
 LFLAGS += -Wl,--wrap=usbh_ctrl_request -Wl,--wrap=ncm_receive_buf_size
 endif
-ifeq ($(GCD_SYNC_PROFILE),1)
+ifneq ($(filter 1,$(GCD_SYNC_PROFILE) $(TOUCH_PATH_PROFILE) $(TOUCH_FRAME_PROFILE)),)
 LFLAGS += -Wl,--wrap=dispatch_sync_f
 endif
-ifneq ($(strip $(filter-out -1,$(GCD_WORK_PRIORITY) $(USBH_ISR_TASK_PRIORITY) $(USBH_MAIN_TASK_PRIORITY))),)
+ifeq ($(AIRPLAY_MUTEX_PROFILE),1)
+LFLAGS += -Wl,--wrap=pthread_mutex_lock -Wl,--wrap=pthread_mutex_unlock
+LFLAGS += -Wl,--wrap=lib_carplay_hid_report
+endif
+ifneq ($(strip $(filter-out -1,$(GCD_WORK_PRIORITY) $(USBH_ISR_TASK_PRIORITY) $(USBH_MAIN_TASK_PRIORITY) $(TCP_CLIENT_PRIORITY))),)
 LFLAGS += -Wl,--wrap=xTaskCreate
 endif
 ifeq ($(SCREEN_QUEUE_PROFILE),1)
@@ -1600,10 +1733,12 @@ LFLAGS += -Wl,--wrap=AirPlayScreen_SendVideo
 LFLAGS += -Wl,--wrap=CVector_push_back -Wl,--wrap=CVector_erase
 LFLAGS += -Wl,--wrap=CVector_delete
 LFLAGS += -Wl,--wrap=lwip_recv -Wl,--wrap=lwip_write
+ifeq ($(SCREEN_SELECT_PROFILE),1)
 LFLAGS += -Wl,--wrap=lwip_select
-ifeq ($(SCREEN_TIMESTAMP_PROFILE),1)
-LFLAGS += -Wl,--wrap=UpTicksToNTP
 endif
+endif
+ifneq ($(filter 1,$(SCREEN_TIMESTAMP_PROFILE) $(SCREEN_HW_TIMESTAMP)),)
+LFLAGS += -Wl,--wrap=UpTicksToNTP
 endif
 ifeq ($(SCREEN_RX_RATE_LIMIT_ACTIVE),1)
 ifeq ($(SCREEN_QUEUE_PROFILE),0)
@@ -1672,6 +1807,12 @@ LFLAGS += -Wl,--wrap=usbh_hcd_hc_submit_request
 LFLAGS += -Wl,--wrap=usbh_hcd_hc_get_urb_state
 LFLAGS += -Wl,--wrap=usbh_hcd_hc_get_transfer_size
 endif
+ifeq ($(USB_NCM_RX_PROFILE),1)
+LFLAGS += -Wl,--wrap=usbh_hcd_hc_submit_request
+LFLAGS += -Wl,--wrap=usbh_hcd_hc_get_urb_state
+LFLAGS += -Wl,--wrap=usbh_hcd_hc_get_transfer_size
+LFLAGS += -Wl,--wrap=ncm_proc_data
+endif
 ifeq ($(USB_HCD_CHANNEL_PROFILE),1)
 ifneq ($(USB_HCD_PROFILE),1)
 ifneq ($(USB_TX_LIFETIME_PROFILE),1)
@@ -1694,8 +1835,26 @@ endif
 endif
 endif
 ifeq ($(TOUCH_PATH_PROFILE),1)
+LFLAGS += -Wl,--wrap=AirPlayResponse_GetInfoType
+LFLAGS += -Wl,--wrap=AirPlayResponse_GetInfoHIDReportCommand
+LFLAGS += -Wl,--wrap=HIDTouchScreenSingleCreateDescriptor
+LFLAGS += -Wl,--wrap=AirPlayInfoArrayAddHIDDevice
+LFLAGS += -Wl,--wrap=acc_carplay_cb_send_touch
 LFLAGS += -Wl,--wrap=lib_carplay_touch
+LFLAGS += -Wl,--wrap=HTTPClientSendMessage
+LFLAGS += -Wl,--wrap=HTTPMessageWriteMessage
+LFLAGS += -Wl,--wrap=HTTPMessageReadMessage
+ifeq ($(IPHONE_HTTP_RX_PROFILE),1)
+LFLAGS += -Wl,--wrap=lwip_read
+endif
+endif
+ifneq ($(filter 1,$(TOUCH_PATH_PROFILE) $(TOUCH_FRAME_PROFILE)),)
 LFLAGS += -Wl,--wrap=AirPlayReceiverSessionSendHIDReport
+endif
+ifeq ($(TOUCH_FRAME_PROFILE),1)
+LFLAGS += -Wl,--wrap=HTTPClientSendMessage
+LFLAGS += -Wl,--wrap=HTTPMessageWriteMessage
+LFLAGS += -Wl,--wrap=lwip_writev
 endif
 ifeq ($(CRYPTO_ENGINE_PROFILE),1)
 LFLAGS += -Wl,--wrap=device_mutex_lock -Wl,--wrap=device_mutex_unlock
@@ -1840,7 +1999,8 @@ CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/li
 #   2 = hardware only for RX and TX
 #   3 = screen RX software, TX hardware (reliability isolation build)
 CHACHA_HW_MIN_LEN ?= 4096
-CHACHA_STATS_INTERVAL_MS ?= 10000
+CHACHA_STATS_INTERVAL_MS ?= 0
+CHACHA_RUNTIME_PROFILE ?= 0
 CHACHA_HW_SELFTEST ?= 0
 # Destructive ROM capability probe only.  It must never run on the first live
 # PairSetup/PairVerify crypto transaction: partial decrypt is rejected by ROM
@@ -1850,7 +2010,7 @@ CHACHA_TRANSACTION_TRACE ?= 0
 # GNU Make does not normally treat command-line option changes as target
 # dependencies. Include every exposed archive-affecting ChaCha option in a
 # stamp so switching mode/config automatically rebuilds the derived archive.
-CARBOX_CHACHA_CONFIG_STAMP := $(CARBOX_CARPLAY_CHACHA_DIR)/build/.carbox_chacha_config_mode$(CHACHA_MODE)-min$(CHACHA_HW_MIN_LEN)-direct$(SCREEN_TX_DIRECT_CRYPTO)-stats$(CHACHA_STATS_INTERVAL_MS)-selftest$(CHACHA_HW_SELFTEST)-partialtest$(CHACHA_COMBINED_PARTIAL_SELFTEST)-trace$(CHACHA_TRANSACTION_TRACE)-privverify$(CHACHA_PRIVATE_SW_VERIFY)-prio$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
+CARBOX_CHACHA_CONFIG_STAMP := $(CARBOX_CARPLAY_CHACHA_DIR)/build/.carbox_chacha_config_mode$(CHACHA_MODE)-min$(CHACHA_HW_MIN_LEN)-direct$(SCREEN_TX_DIRECT_CRYPTO)-stats$(CHACHA_STATS_INTERVAL_MS)-runtimeprof$(CHACHA_RUNTIME_PROFILE)-selftest$(CHACHA_HW_SELFTEST)-partialtest$(CHACHA_COMBINED_PARTIAL_SELFTEST)-trace$(CHACHA_TRANSACTION_TRACE)-privverify$(CHACHA_PRIVATE_SW_VERIFY)-prio$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
 CARBOX_VIDEO_HANDOVER_PATCH := $(CARBOX_SMART_CARPLAY_LIB_DIR)/patch_video_handover_archive.sh
 CARBOX_SCREEN_WAIT_RELOC_PATCH := ../src/carbox/tools/patch_screen_wait_relocation.py
 CARBOX_REDUNDANT_COPY_PATCH := ../src/carbox/tools/patch_airplay_redundant_copy.py
@@ -1903,6 +2063,7 @@ $(CARBOX_CARPLAY_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 		CHACHA_MODE=$(CHACHA_MODE) CHACHA_HW_MIN_LEN=$(CHACHA_HW_MIN_LEN) \
 		SCREEN_TX_DIRECT_CRYPTO=$(SCREEN_TX_DIRECT_CRYPTO) \
 		CHACHA_STATS_INTERVAL_MS=$(CHACHA_STATS_INTERVAL_MS) \
+		CHACHA_RUNTIME_PROFILE=$(CHACHA_RUNTIME_PROFILE) \
 		CHACHA_HW_SELFTEST=$(CHACHA_HW_SELFTEST) \
 		CHACHA_COMBINED_PARTIAL_SELFTEST=$(CHACHA_COMBINED_PARTIAL_SELFTEST) \
 		CHACHA_TRANSACTION_TRACE=$(CHACHA_TRANSACTION_TRACE) \

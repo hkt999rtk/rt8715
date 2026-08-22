@@ -91,6 +91,10 @@ static struct pbuf *recv_data;
 
 struct tcp_pcb *tcp_input_pcb;
 
+#if defined(CONFIG_CAR_ACK_TCP_PROFILE) && CONFIG_CAR_ACK_TCP_PROFILE
+void lwip_diag_car_ack_received(struct tcp_pcb *pcb, u32_t ackno);
+#endif
+
 #if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
 struct tcp_screen_ack_profile_stats {
   u32_t ack_packets;
@@ -2106,6 +2110,9 @@ tcp_receive(struct tcp_pcb *pcb)
                                   screen_ack_old_window,
                                   screen_ack_window_updated,
                                   screen_ack_rtt_ms);
+#endif
+#if defined(CONFIG_CAR_ACK_TCP_PROFILE) && CONFIG_CAR_ACK_TCP_PROFILE
+    lwip_diag_car_ack_received(pcb, ackno);
 #endif
   }
 

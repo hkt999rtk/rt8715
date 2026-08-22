@@ -62,6 +62,15 @@ void chacha20_xor(
 #define CARBOX_CHACHA_STATS_INTERVAL_MS 5000u
 #endif
 
+/* Per-window scratch/transaction counters; recovery diagnostics are separate. */
+#ifndef CARBOX_CHACHA_RUNTIME_PROFILE
+#define CARBOX_CHACHA_RUNTIME_PROFILE 0
+#endif
+#if (CARBOX_CHACHA_RUNTIME_PROFILE != 0) && \
+    (CARBOX_CHACHA_RUNTIME_PROFILE != 1)
+#error "CARBOX_CHACHA_RUNTIME_PROFILE must be 0 or 1"
+#endif
+
 /*
  * Diagnostic customer build only. Run the RTL8195B Poly1305 streaming and
  * ChaCha in-place capability tests once, immediately before the first real
@@ -152,6 +161,14 @@ size_t chacha20_poly1305_verify(
   chacha20_poly1305_state *state, void *dst,
   const uint8_t tag[CHACHA20_POLY1305_TAG_BYTES], int32_t *out_error
 );
+
+/* Internal bridge used by the closed NetTransport ABI wrapper.  A positive
+ * return requests one little-endian increment of its persistent RX nonce.
+ * The request is emitted only after the post-timeout record authenticates
+ * exactly with nonce+1 and has been safely re-decrypted in software. */
+int chacha20_poly1305_take_rx_nonce_resync(const void *state);
+void chacha20_poly1305_rx_nonce_resync_applied(int applied);
+void chacha20_poly1305_rx_nonce_resync_observe(int32_t verify_error);
 void chacha20_poly1305_encrypt_all_64x64(
   const uint8_t key[32], const uint8_t nonce[8],
   const void *aad, size_t aad_len,

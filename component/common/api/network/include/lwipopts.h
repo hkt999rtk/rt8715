@@ -168,6 +168,8 @@
 /* ---------- TCP options ---------- */
 #define LWIP_TCP                1
 #define TCP_TTL                 255
+/* CarPlay is latency-sensitive: disable Nagle on every new TCP PCB. */
+#define LWIP_TCP_NODELAY_DEFAULT 1
 
 /* Controls if TCP should queue segments that arrive out of
    order. Define to 0 if your device is low on memory. */
@@ -383,12 +385,12 @@ extern unsigned int sys_now(void);
 #define MEMP_NUM_TCP_SEG TCP_SND_QUEUELEN
 
 /*
- * Keep the upstream receive window close to one video frame.  Together with
- * the bounded handover this makes downstream congestion close the window
- * toward the iPhone promptly instead of buffering another 262 KiB.
+ * Allow the iPhone to burst a complete large video frame without stopping on
+ * receive credit.  100 KiB holds about three typical 32-33 KiB frames or two
+ * 50 KiB frames, while the bounded application handover remains unchanged.
  */
 #undef TCP_WND
-#define TCP_WND (32 * 1024)
+#define TCP_WND (100 * 1024)
 
 /*
  * CONFIG_ETHERNET lowered MEMP_NUM_NETCONN to 10 above;

@@ -680,6 +680,12 @@ struct lwip_screen_rx_rate_limit_diag {
   u32_t open_adjusts;
   u32_t close_adjusts;
   u32_t pressure_events;
+  u32_t total_ticks;
+  u32_t pending_ticks;
+  u32_t token_limited_ticks;
+  u32_t valve_limited_ticks;
+  u32_t zero_grant_ticks;
+  u32_t pending_sum_bytes;
 };
 int lwip_screen_rx_rate_limit_enable(int s);
 int lwip_screen_rx_rate_limit_tick(void);
@@ -694,7 +700,8 @@ int lwip_inet_pton(int af, const char *src, void *dst);
 #if (defined(CONFIG_SCREEN_TCP_BUFFER_PROFILE) && CONFIG_SCREEN_TCP_BUFFER_PROFILE) || \
     (defined(CONFIG_SCREEN_BLOCK_PROFILE) && CONFIG_SCREEN_BLOCK_PROFILE) || \
     (defined(CONFIG_SCREEN_USB_PROBE) && CONFIG_SCREEN_USB_PROBE) || \
-    (defined(CONFIG_SCREEN_FPS_PROFILE) && CONFIG_SCREEN_FPS_PROFILE)
+    (defined(CONFIG_SCREEN_FPS_PROFILE) && CONFIG_SCREEN_FPS_PROFILE) || \
+    (defined(CONFIG_VIDEO_INGRESS_PROFILE) && CONFIG_VIDEO_INGRESS_PROFILE)
 /* Read-only TCP queue snapshot used by the CarPlay diagnostic profiler. */
 struct lwip_tcp_buffer_diag {
   u32_t rx_pending_bytes;
@@ -719,6 +726,62 @@ int lwip_diag_tcp_buffer_state(int s, struct lwip_tcp_buffer_diag *diag);
 #if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
 int lwip_diag_screen_tcp_ack_track(int s);
 void lwip_diag_screen_tcp_ack_report(unsigned int sequence);
+#endif
+#if defined(CONFIG_CAR_ACK_TCP_PROFILE) && CONFIG_CAR_ACK_TCP_PROFILE
+/* Per-response TCP acknowledgement profile for the vehicle event channel.
+ * A response is marked after HTTPMessageWriteMessage has accepted it.  The
+ * matching ACK is observed in tcp_input when snd_una crosses that response's
+ * buffered sequence boundary. */
+struct lwip_car_ack_diag {
+  u32_t marked;
+  u32_t acked;
+  u32_t already_acked;
+  u32_t pending;
+  u32_t pending_max;
+  u32_t queue_overflow;
+  u32_t nodelay_set;
+  u32_t nodelay_missing;
+  u32_t sent_immediate;
+  u32_t locally_buffered;
+  u32_t unsent_bytes_max;
+  u32_t unsent_segments_max;
+  u32_t ack_samples;
+  unsigned long long ack_us_sum;
+  u32_t ack_us_max;
+  u32_t ack_le_100us;
+  u32_t ack_le_1ms;
+  u32_t ack_le_5ms;
+  u32_t ack_le_20ms;
+  u32_t ack_gt_20ms;
+  u32_t pending_oldest_us;
+  u32_t snd_nxt;
+  u32_t snd_lbb;
+  u32_t snd_una;
+  u32_t unsent_bytes;
+  u32_t unacked_bytes;
+  u32_t rto_expired;
+  u32_t rto_retransmit;
+  u32_t rto_with_pending;
+  u32_t rto_ms;
+  s32_t rtime_ms;
+  u32_t rto_remaining_ms;
+  u8_t nrtx;
+  u8_t nrtx_max;
+  u8_t dupacks;
+  u8_t in_rto;
+  u8_t pcb_nodelay;
+};
+int lwip_diag_car_ack_mark(int s, u32_t mark_us);
+int lwip_diag_car_ack_snapshot(int s, struct lwip_car_ack_diag *diag,
+                               int reset, u32_t now_us);
+#endif
+#if defined(CONFIG_IPHONE_HTTP_RX_PROFILE) && CONFIG_IPHONE_HTTP_RX_PROFILE
+struct lwip_rx_post_diag {
+  u32_t post_us;
+  u32_t generation;
+  u32_t bytes;
+};
+int lwip_diag_rx_post_snapshot(int s, struct lwip_rx_post_diag *diag);
 #endif
 
 #if LWIP_COMPAT_SOCKETS

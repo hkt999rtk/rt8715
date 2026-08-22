@@ -57,13 +57,18 @@
     (defined(CONFIG_SCREEN_BLOCK_PROFILE) && CONFIG_SCREEN_BLOCK_PROFILE) || \
     (defined(CONFIG_SCREEN_USB_PROBE) && CONFIG_SCREEN_USB_PROBE) || \
     (defined(CONFIG_SCREEN_FPS_PROFILE) && CONFIG_SCREEN_FPS_PROFILE) || \
-    (defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE)
+    (defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE) || \
+    (defined(CONFIG_CAR_ACK_TCP_PROFILE) && CONFIG_CAR_ACK_TCP_PROFILE)
 #include "lwip/priv/tcp_priv.h"
 #endif
 #include "lwip/mld6.h"
 #if defined(CONFIG_PLATFORM_8195BHP)
 #include <lwip_intf.h>
 #include "large_memcpy_gdma.h"
+#if defined(CONFIG_CAR_ACK_TCP_PROFILE) && CONFIG_CAR_ACK_TCP_PROFILE
+#include "hal_timer.h"
+#endif
+
 #endif
 
 #if LWIP_CHECKSUM_ON_COPY
@@ -75,6 +80,11 @@
 #endif
 
 #include <string.h>
+
+#if defined(CONFIG_IPHONE_HTTP_RX_PROFILE) && CONFIG_IPHONE_HTTP_RX_PROFILE
+static void lwip_diag_rx_post_attach(struct lwip_sock *sock,
+                                     const struct pbuf *p);
+#endif
 #include <stdint.h>
 
 #ifndef CONFIG_SOCKET_RECV_PROFILE
@@ -1010,7 +1020,13 @@ lwip_diag_screen_rx_rate_limit(struct lwip_screen_rx_rate_limit_diag *diag,
                                      &diag->filtered_kbps,
                                      &diag->open_adjusts,
                                      &diag->close_adjusts,
-                                     &diag->pressure_events, reset);
+                                     &diag->pressure_events,
+                                     &diag->total_ticks,
+                                     &diag->pending_ticks,
+                                     &diag->token_limited_ticks,
+                                     &diag->valve_limited_ticks,
+                                     &diag->zero_grant_ticks,
+                                     &diag->pending_sum_bytes, reset);
   UNLOCK_TCPIP_CORE();
   return 0;
 }
@@ -1798,6 +1814,9 @@ lwip_recv_tcp(struct lwip_sock *sock, void *mem, size_t len, int flags)
         }
       }
       LWIP_ASSERT("p != NULL", p != NULL);
+#if defined(CONFIG_IPHONE_HTTP_RX_PROFILE) && CONFIG_IPHONE_HTTP_RX_PROFILE
+      lwip_diag_rx_post_attach(sock, p);
+#endif
       sock->lastdata.pbuf = p;
     }
 
@@ -4895,6 +4914,299 @@ lwip_ioctl(int s, long cmd, void *argp)
   return -1;
 }
 
+#if defined(CONFIG_IPHONE_HTTP_RX_PROFILE) && CONFIG_IPHONE_HTTP_RX_PROFILE
+#define IPHONE_RX_SOCKET_SLOTS 32U
+struct iphone_rx_socket_slot {
+  const struct lwip_sock *sock;
+  struct lwip_rx_post_diag post;
+};
+static struct iphone_rx_socket_slot iphone_rx_socket_slots[
+  IPHONE_RX_SOCKET_SLOTS];
+
+extern int lwip_diag_rx_post_consume(const void *message, u32_t *post_us,
+                                      u32_t *generation, u32_t *bytes);
+
+static void
+lwip_diag_rx_post_attach(struct lwip_sock *sock, const struct pbuf *p)
+{
+  struct lwip_rx_post_diag post;
+  struct iphone_rx_socket_slot *slot;
+  int found;
+
+  LOCK_TCPIP_CORE();
+  found = lwip_diag_rx_post_consume(p, &post.post_us, &post.generation,
+                                     &post.bytes);
+  UNLOCK_TCPIP_CORE();
+  if (found != 0) {
+    return;
+  }
+  slot = &iphone_rx_socket_slots[((mem_ptr_t)sock >> 4) &
+                                 (IPHONE_RX_SOCKET_SLOTS - 1U)];
+  slot->sock = sock;
+  slot->post = post;
+}
+
+int
+lwip_diag_rx_post_snapshot(int s, struct lwip_rx_post_diag *diag)
+{
+  struct lwip_sock *sock;
+  int result = -1;
+
+  if (diag == NULL) {
+    return -1;
+  }
+  sock = get_socket(s);
+  if ((sock == NULL) || (sock->conn == NULL) ||
+      (NETCONNTYPE_GROUP(netconn_type(sock->conn)) != NETCONN_TCP)) {
+    if (sock != NULL) {
+      done_socket(sock);
+    }
+    return -1;
+  }
+  {
+    const struct iphone_rx_socket_slot *slot =
+      &iphone_rx_socket_slots[((mem_ptr_t)sock >> 4) &
+                              (IPHONE_RX_SOCKET_SLOTS - 1U)];
+    if (slot->sock == sock) {
+      *diag = slot->post;
+      result = 0;
+    }
+  }
+  done_socket(sock);
+  return result;
+}
+#endif
+
+#if defined(CONFIG_CAR_ACK_TCP_PROFILE) && CONFIG_CAR_ACK_TCP_PROFILE
+#define CAR_ACK_PENDING_SLOTS 64U
+
+struct car_ack_pending_slot {
+  u32_t boundary;
+  u32_t mark_us;
+};
+
+static struct tcp_pcb *car_ack_pcb;
+static struct car_ack_pending_slot car_ack_pending[CAR_ACK_PENDING_SLOTS];
+static u32_t car_ack_pending_head;
+static u32_t car_ack_pending_count;
+static struct lwip_car_ack_diag car_ack_stats;
+
+static void
+car_ack_reset_for_pcb(struct tcp_pcb *pcb)
+{
+  car_ack_pcb = pcb;
+  car_ack_pending_head = 0U;
+  car_ack_pending_count = 0U;
+  memset(car_ack_pending, 0, sizeof(car_ack_pending));
+  memset(&car_ack_stats, 0, sizeof(car_ack_stats));
+}
+
+static void
+car_ack_record_latency(u32_t elapsed_us)
+{
+  car_ack_stats.ack_samples++;
+  car_ack_stats.ack_us_sum += elapsed_us;
+  if (elapsed_us > car_ack_stats.ack_us_max) {
+    car_ack_stats.ack_us_max = elapsed_us;
+  }
+  if (elapsed_us <= 100U) {
+    car_ack_stats.ack_le_100us++;
+  } else if (elapsed_us <= 1000U) {
+    car_ack_stats.ack_le_1ms++;
+  } else if (elapsed_us <= 5000U) {
+    car_ack_stats.ack_le_5ms++;
+  } else if (elapsed_us <= 20000U) {
+    car_ack_stats.ack_le_20ms++;
+  } else {
+    car_ack_stats.ack_gt_20ms++;
+  }
+}
+
+/* Called by tcp_input with the TCPIP core locked. */
+void
+lwip_diag_car_ack_received(struct tcp_pcb *pcb, u32_t ackno)
+{
+  u32_t now_us;
+
+  if ((pcb != car_ack_pcb) || (car_ack_pending_count == 0U) ||
+      !TCP_SEQ_GEQ(ackno, car_ack_pending[car_ack_pending_head].boundary)) {
+    return;
+  }
+  now_us = hal_read_curtime_us();
+  while ((pcb == car_ack_pcb) && (car_ack_pending_count != 0U)) {
+    struct car_ack_pending_slot *slot =
+      &car_ack_pending[car_ack_pending_head];
+
+    if (!TCP_SEQ_GEQ(ackno, slot->boundary)) {
+      break;
+    }
+    car_ack_stats.acked++;
+    car_ack_record_latency(now_us - slot->mark_us);
+    car_ack_pending_head =
+      (car_ack_pending_head + 1U) % CAR_ACK_PENDING_SLOTS;
+    car_ack_pending_count--;
+  }
+}
+
+/* Called by tcp_slowtmr with the TCPIP core locked.  committed is false when
+ * the timer expires and true after tcp_rexmit_rto_commit really schedules the
+ * retransmission. */
+void
+lwip_diag_car_ack_rto(struct tcp_pcb *pcb, u8_t committed)
+{
+  if (pcb != car_ack_pcb) {
+    return;
+  }
+  if (!committed) {
+    car_ack_stats.rto_expired++;
+    if (car_ack_pending_count != 0U) {
+      car_ack_stats.rto_with_pending++;
+    }
+  } else {
+    car_ack_stats.rto_retransmit++;
+    if (pcb->nrtx > car_ack_stats.nrtx_max) {
+      car_ack_stats.nrtx_max = pcb->nrtx;
+    }
+  }
+}
+
+int
+lwip_diag_car_ack_mark(int s, u32_t mark_us)
+{
+  struct lwip_sock *sock;
+  struct tcp_pcb *pcb;
+  struct tcp_seg *seg;
+  u32_t unsent_bytes = 0U;
+  u32_t unsent_segments = 0U;
+  u32_t slot_index;
+  int result = -1;
+
+  sock = get_socket(s);
+  if ((sock == NULL) || (sock->conn == NULL) ||
+      (NETCONNTYPE_GROUP(netconn_type(sock->conn)) != NETCONN_TCP)) {
+    if (sock != NULL) {
+      done_socket(sock);
+    }
+    return -1;
+  }
+
+  LOCK_TCPIP_CORE();
+  pcb = sock->conn->pcb.tcp;
+  if (pcb != NULL) {
+    if (pcb != car_ack_pcb) {
+      car_ack_reset_for_pcb(pcb);
+    }
+    for (seg = pcb->unsent; seg != NULL; seg = seg->next) {
+      unsent_bytes += seg->len;
+      unsent_segments++;
+    }
+    car_ack_stats.marked++;
+    if ((pcb->flags & TF_NODELAY) != 0U) {
+      car_ack_stats.nodelay_set++;
+    } else {
+      car_ack_stats.nodelay_missing++;
+    }
+    if (TCP_SEQ_GEQ(pcb->snd_nxt, pcb->snd_lbb) &&
+        (unsent_segments == 0U)) {
+      car_ack_stats.sent_immediate++;
+    } else {
+      car_ack_stats.locally_buffered++;
+    }
+    if (unsent_bytes > car_ack_stats.unsent_bytes_max) {
+      car_ack_stats.unsent_bytes_max = unsent_bytes;
+    }
+    if (unsent_segments > car_ack_stats.unsent_segments_max) {
+      car_ack_stats.unsent_segments_max = unsent_segments;
+    }
+
+    if (TCP_SEQ_GEQ(pcb->lastack, pcb->snd_lbb)) {
+      car_ack_stats.acked++;
+      car_ack_stats.already_acked++;
+      car_ack_record_latency(0U);
+    } else if (car_ack_pending_count < CAR_ACK_PENDING_SLOTS) {
+      slot_index = (car_ack_pending_head + car_ack_pending_count) %
+                   CAR_ACK_PENDING_SLOTS;
+      car_ack_pending[slot_index].boundary = pcb->snd_lbb;
+      car_ack_pending[slot_index].mark_us = mark_us;
+      car_ack_pending_count++;
+      if (car_ack_pending_count > car_ack_stats.pending_max) {
+        car_ack_stats.pending_max = car_ack_pending_count;
+      }
+    } else {
+      car_ack_stats.queue_overflow++;
+    }
+    result = 0;
+  }
+  UNLOCK_TCPIP_CORE();
+  done_socket(sock);
+  return result;
+}
+
+int
+lwip_diag_car_ack_snapshot(int s, struct lwip_car_ack_diag *diag,
+                           int reset, u32_t now_us)
+{
+  struct lwip_sock *sock;
+  struct tcp_pcb *pcb;
+  struct tcp_seg *seg;
+  u32_t pending_max;
+  int result = -1;
+
+  if (diag == NULL) {
+    return -1;
+  }
+  sock = get_socket(s);
+  if ((sock == NULL) || (sock->conn == NULL) ||
+      (NETCONNTYPE_GROUP(netconn_type(sock->conn)) != NETCONN_TCP)) {
+    if (sock != NULL) {
+      done_socket(sock);
+    }
+    return -1;
+  }
+
+  LOCK_TCPIP_CORE();
+  pcb = sock->conn->pcb.tcp;
+  if (pcb != NULL) {
+    if (pcb != car_ack_pcb) {
+      car_ack_reset_for_pcb(pcb);
+    }
+    *diag = car_ack_stats;
+    diag->pending = car_ack_pending_count;
+    if (car_ack_pending_count != 0U) {
+      diag->pending_oldest_us = now_us -
+        car_ack_pending[car_ack_pending_head].mark_us;
+    }
+    diag->snd_nxt = pcb->snd_nxt;
+    diag->snd_lbb = pcb->snd_lbb;
+    diag->snd_una = pcb->lastack;
+    diag->pcb_nodelay = (pcb->flags & TF_NODELAY) != 0U;
+    diag->rto_ms = (u32_t)pcb->rto * TCP_SLOW_INTERVAL;
+    diag->rtime_ms = pcb->rtime >= 0 ?
+      (s32_t)pcb->rtime * TCP_SLOW_INTERVAL : -1;
+    diag->rto_remaining_ms = pcb->rtime >= 0 && pcb->rtime < pcb->rto ?
+      (u32_t)(pcb->rto - pcb->rtime) * TCP_SLOW_INTERVAL : 0U;
+    diag->nrtx = pcb->nrtx;
+    diag->dupacks = pcb->dupacks;
+    diag->in_rto = (pcb->flags & TF_RTO) != 0U;
+    for (seg = pcb->unsent; seg != NULL; seg = seg->next) {
+      diag->unsent_bytes += seg->len;
+    }
+    for (seg = pcb->unacked; seg != NULL; seg = seg->next) {
+      diag->unacked_bytes += seg->len;
+    }
+    if (reset) {
+      pending_max = car_ack_pending_count;
+      memset(&car_ack_stats, 0, sizeof(car_ack_stats));
+      car_ack_stats.pending_max = pending_max;
+    }
+    result = 0;
+  }
+  UNLOCK_TCPIP_CORE();
+  done_socket(sock);
+  return result;
+}
+#endif
+
 #if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
 int
 lwip_diag_screen_tcp_ack_track(int s)
@@ -4924,7 +5236,8 @@ lwip_diag_screen_tcp_ack_track(int s)
 #if (defined(CONFIG_SCREEN_TCP_BUFFER_PROFILE) && CONFIG_SCREEN_TCP_BUFFER_PROFILE) || \
     (defined(CONFIG_SCREEN_BLOCK_PROFILE) && CONFIG_SCREEN_BLOCK_PROFILE) || \
     (defined(CONFIG_SCREEN_USB_PROBE) && CONFIG_SCREEN_USB_PROBE) || \
-    (defined(CONFIG_SCREEN_FPS_PROFILE) && CONFIG_SCREEN_FPS_PROFILE)
+    (defined(CONFIG_SCREEN_FPS_PROFILE) && CONFIG_SCREEN_FPS_PROFILE) || \
+    (defined(CONFIG_VIDEO_INGRESS_PROFILE) && CONFIG_VIDEO_INGRESS_PROFILE)
 /*
  * Diagnostic-only, read-only snapshot of a TCP socket.  Keeping this inside
  * sockets.c lets the profiler use the same descriptor lifetime protection as

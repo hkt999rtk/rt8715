@@ -476,6 +476,12 @@ void             tcp_screen_rx_rate_limit_snapshot(u32_t *active,
                                                     u32_t *open_adjusts,
                                                     u32_t *close_adjusts,
                                                     u32_t *pressure_events,
+                                                    u32_t *total_ticks,
+                                                    u32_t *pending_ticks,
+                                                    u32_t *token_limited_ticks,
+                                                    u32_t *valve_limited_ticks,
+                                                    u32_t *zero_grant_ticks,
+                                                    u32_t *pending_sum_bytes,
                                                     int reset);
 #endif
 err_t            tcp_bind    (struct tcp_pcb *pcb, const ip_addr_t *ipaddr,

@@ -8,6 +8,11 @@
 #include "irq_profiler.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "hal_timer.h"
+
+#ifndef CONFIG_USB_NCM_RX_PROFILE
+#define CONFIG_USB_NCM_RX_PROFILE 0
+#endif
 
 #ifndef CONFIG_USB_HCD_PROFILE
 #define CONFIG_USB_HCD_PROFILE 0
@@ -29,7 +34,354 @@
 #define CONFIG_IRQ_PROFILE_USB_CH4_SEQUENCE 0
 #endif
 
-#if CONFIG_USB_HCD_PROFILE
+#if CONFIG_USB_NCM_RX_PROFILE
+
+/*
+ * Focused NCM bulk-IN lifecycle probe.  Channel 4 is the vendor NCM bulk-IN
+ * channel.  Keep this counter-only: in particular, do not print from the HCD
+ * poll path or change the vendor state machine while diagnosing RX re-arm.
+ */
+#define USBRX_CHANNEL 4U
+#define USBRX_EP_BULK 2U
+#define USBRX_URB_STATE_COUNT 8U
+
+typedef struct usbrx_stats_s {
+	uint32_t submit_calls;
+	uint32_t submit_errors;
+	uint32_t submit_bytes;
+	uint32_t submit_while_pending;
+	uint32_t done;
+	uint32_t done_without_pending;
+	uint32_t terminal_error;
+	uint32_t transfer_calls;
+	uint32_t transfer_bytes;
+	uint32_t transfer_zero;
+	uint32_t urb_polls;
+	uint32_t urb_state[USBRX_URB_STATE_COUNT];
+	uint32_t urb_state_other;
+	uint32_t notready_polls;
+	uint32_t notready_streak_max;
+	uint32_t submit_to_done_total_us;
+	uint32_t submit_to_done_max_us;
+	uint32_t submit_to_done_ge_1ms;
+	uint32_t submit_to_done_ge_5ms;
+	uint32_t submit_to_done_ge_10ms;
+	uint32_t submit_to_done_ge_20ms;
+	uint32_t done_to_parse_total_us;
+	uint32_t done_to_parse_max_us;
+	uint32_t done_to_parse_samples;
+	uint32_t parse_calls;
+	uint32_t parse_bytes;
+	uint32_t parse_total_us;
+	uint32_t parse_max_us;
+	uint32_t parse_ge_1ms;
+	uint32_t parse_ge_5ms;
+	uint32_t parse_ge_10ms;
+	uint32_t complete_to_rearm_total_us;
+	uint32_t complete_to_rearm_max_us;
+	uint32_t complete_to_rearm_samples;
+	uint32_t rearm_ge_125us;
+	uint32_t rearm_ge_1ms;
+	uint32_t rearm_ge_5ms;
+	uint32_t rearm_ge_10ms;
+	uint32_t parse_to_rearm_total_us;
+	uint32_t parse_to_rearm_max_us;
+	uint32_t parse_to_rearm_samples;
+	uint32_t bulk_out_submit;
+	uint32_t bulk_out_bytes;
+	uint32_t bulk_out_while_rx_pending;
+} usbrx_stats_t;
+
+static usbrx_stats_t usbrx_live;
+static usbrx_stats_t usbrx_snapshot;
+
+/* Lifecycle state spans report windows and therefore is not cleared. */
+static uint8_t usbrx_pending;
+static uint8_t usbrx_done_valid;
+static uint8_t usbrx_parse_end_valid;
+static uint32_t usbrx_submit_us;
+static uint32_t usbrx_done_us;
+static uint32_t usbrx_parse_end_us;
+static uint32_t usbrx_notready_streak;
+
+extern uint8_t __real_usbh_hcd_hc_submit_request(
+	void *hcd, uint8_t channel, uint8_t direction, uint8_t ep_type,
+	uint8_t token, uint8_t *buffer, uint16_t length);
+extern uint8_t __real_usbh_hcd_hc_get_urb_state(void *hcd, uint8_t channel);
+extern uint32_t __real_usbh_hcd_hc_get_transfer_size(void *hcd,
+						     uint8_t channel);
+extern void __real_ncm_proc_data(void *context, uint8_t *buffer,
+				 uint32_t length);
+
+static void usbrx_accumulate(uint32_t elapsed, uint32_t *total,
+			     uint32_t *maximum)
+{
+	*total += elapsed;
+	if (elapsed > *maximum) {
+		*maximum = elapsed;
+	}
+}
+
+uint8_t __wrap_usbh_hcd_hc_submit_request(
+	void *hcd, uint8_t channel, uint8_t direction, uint8_t ep_type,
+	uint8_t token, uint8_t *buffer, uint16_t length)
+{
+	uint32_t now_us = hal_read_curtime_us();
+	uint8_t result;
+
+	result = __real_usbh_hcd_hc_submit_request(
+		hcd, channel, direction, ep_type, token, buffer, length);
+
+	if (ep_type == USBRX_EP_BULK && direction == 0U) {
+		usbrx_live.bulk_out_submit++;
+		usbrx_live.bulk_out_bytes += length;
+		if (usbrx_pending != 0U) {
+			usbrx_live.bulk_out_while_rx_pending++;
+		}
+	}
+
+	if (channel != USBRX_CHANNEL || direction == 0U ||
+	    ep_type != USBRX_EP_BULK) {
+		return result;
+	}
+
+	usbrx_live.submit_calls++;
+	usbrx_live.submit_bytes += length;
+	if (result != 0U) {
+		usbrx_live.submit_errors++;
+		return result;
+	}
+	if (usbrx_pending != 0U) {
+		usbrx_live.submit_while_pending++;
+	}
+	if (usbrx_done_valid != 0U) {
+		uint32_t elapsed = now_us - usbrx_done_us;
+		usbrx_accumulate(elapsed,
+			&usbrx_live.complete_to_rearm_total_us,
+			&usbrx_live.complete_to_rearm_max_us);
+		usbrx_live.complete_to_rearm_samples++;
+		if (elapsed >= 125U) usbrx_live.rearm_ge_125us++;
+		if (elapsed >= 1000U) usbrx_live.rearm_ge_1ms++;
+		if (elapsed >= 5000U) usbrx_live.rearm_ge_5ms++;
+		if (elapsed >= 10000U) usbrx_live.rearm_ge_10ms++;
+		usbrx_done_valid = 0U;
+	}
+	if (usbrx_parse_end_valid != 0U) {
+		uint32_t elapsed = now_us - usbrx_parse_end_us;
+		usbrx_accumulate(elapsed,
+			&usbrx_live.parse_to_rearm_total_us,
+			&usbrx_live.parse_to_rearm_max_us);
+		usbrx_live.parse_to_rearm_samples++;
+		usbrx_parse_end_valid = 0U;
+	}
+	usbrx_submit_us = now_us;
+	usbrx_pending = 1U;
+	usbrx_notready_streak = 0U;
+	return result;
+}
+
+uint8_t __wrap_usbh_hcd_hc_get_urb_state(void *hcd, uint8_t channel)
+{
+	uint8_t state = __real_usbh_hcd_hc_get_urb_state(hcd, channel);
+	uint32_t now_us;
+
+	if (channel != USBRX_CHANNEL) {
+		return state;
+	}
+	usbrx_live.urb_polls++;
+	if (state < USBRX_URB_STATE_COUNT) {
+		usbrx_live.urb_state[state]++;
+	} else {
+		usbrx_live.urb_state_other++;
+	}
+	if (state == 2U) {
+		usbrx_live.notready_polls++;
+		usbrx_notready_streak++;
+		if (usbrx_notready_streak > usbrx_live.notready_streak_max) {
+			usbrx_live.notready_streak_max = usbrx_notready_streak;
+		}
+		return state;
+	}
+	if (state != 1U && state != 3U && state != 4U) {
+		return state;
+	}
+
+	now_us = hal_read_curtime_us();
+	if (usbrx_pending == 0U) {
+		if (state == 1U) {
+			usbrx_live.done_without_pending++;
+		}
+		return state;
+	}
+	if (state == 1U) {
+		uint32_t elapsed = now_us - usbrx_submit_us;
+		usbrx_live.done++;
+		usbrx_accumulate(elapsed, &usbrx_live.submit_to_done_total_us,
+				 &usbrx_live.submit_to_done_max_us);
+		if (elapsed >= 1000U) usbrx_live.submit_to_done_ge_1ms++;
+		if (elapsed >= 5000U) usbrx_live.submit_to_done_ge_5ms++;
+		if (elapsed >= 10000U) usbrx_live.submit_to_done_ge_10ms++;
+		if (elapsed >= 20000U) usbrx_live.submit_to_done_ge_20ms++;
+	} else {
+		usbrx_live.terminal_error++;
+	}
+	usbrx_pending = 0U;
+	usbrx_done_us = now_us;
+	usbrx_done_valid = 1U;
+	return state;
+}
+
+uint32_t __wrap_usbh_hcd_hc_get_transfer_size(void *hcd, uint8_t channel)
+{
+	uint32_t size = __real_usbh_hcd_hc_get_transfer_size(hcd, channel);
+	if (channel == USBRX_CHANNEL) {
+		usbrx_live.transfer_calls++;
+		usbrx_live.transfer_bytes += size;
+		if (size == 0U) usbrx_live.transfer_zero++;
+	}
+	return size;
+}
+
+void __wrap_ncm_proc_data(void *context, uint8_t *buffer, uint32_t length)
+{
+	uint32_t start_us = hal_read_curtime_us();
+	uint32_t elapsed;
+
+	if (usbrx_done_valid != 0U) {
+		uint32_t gap = start_us - usbrx_done_us;
+		usbrx_accumulate(gap, &usbrx_live.done_to_parse_total_us,
+				 &usbrx_live.done_to_parse_max_us);
+		usbrx_live.done_to_parse_samples++;
+	}
+	__real_ncm_proc_data(context, buffer, length);
+	elapsed = hal_read_curtime_us() - start_us;
+	usbrx_live.parse_calls++;
+	usbrx_live.parse_bytes += length;
+	usbrx_accumulate(elapsed, &usbrx_live.parse_total_us,
+			 &usbrx_live.parse_max_us);
+	if (elapsed >= 1000U) usbrx_live.parse_ge_1ms++;
+	if (elapsed >= 5000U) usbrx_live.parse_ge_5ms++;
+	if (elapsed >= 10000U) usbrx_live.parse_ge_10ms++;
+	usbrx_parse_end_us = start_us + elapsed;
+	usbrx_parse_end_valid = 1U;
+}
+
+void usb_hcd_profiler_isr_sema_give(int success, int task_woken)
+{
+	(void)success;
+	(void)task_woken;
+}
+
+static uint32_t usbrx_average(uint32_t total, uint32_t samples)
+{
+	return samples != 0U ? total / samples : 0U;
+}
+
+void usb_hcd_profiler_report(uint32_t sequence)
+{
+	uint32_t pending_age_us;
+
+	taskENTER_CRITICAL();
+	usbrx_snapshot = usbrx_live;
+	memset(&usbrx_live, 0, sizeof(usbrx_live));
+	pending_age_us = usbrx_pending != 0U ?
+		(hal_read_curtime_us() - usbrx_submit_us) : 0U;
+	taskEXIT_CRITICAL();
+
+	rt_printf("[USBRX][%lu] ch=4 submit/done/error=%lu/%lu/%lu "
+		  "req/actual=%lu/%luB xfer calls/zero=%lu/%lu "
+		  "pending/age_us/replaced=%u/%lu/%lu done_no_pending=%lu\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)usbrx_snapshot.submit_calls,
+		  (unsigned long)usbrx_snapshot.done,
+		  (unsigned long)(usbrx_snapshot.submit_errors +
+				  usbrx_snapshot.terminal_error),
+		  (unsigned long)usbrx_snapshot.submit_bytes,
+		  (unsigned long)usbrx_snapshot.transfer_bytes,
+		  (unsigned long)usbrx_snapshot.transfer_calls,
+		  (unsigned long)usbrx_snapshot.transfer_zero,
+		  (unsigned int)usbrx_pending,
+		  (unsigned long)pending_age_us,
+		  (unsigned long)usbrx_snapshot.submit_while_pending,
+		  (unsigned long)usbrx_snapshot.done_without_pending);
+	rt_printf("[USBRX][%lu] submit_to_done_us avg/max=%lu/%lu "
+		  "ge1/5/10/20ms=%lu/%lu/%lu/%lu complete_to_rearm_us "
+		  "samples/avg/max=%lu/%lu/%lu ge125us/1/5/10ms=%lu/%lu/%lu/%lu\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)usbrx_average(
+			usbrx_snapshot.submit_to_done_total_us,
+			usbrx_snapshot.done),
+		  (unsigned long)usbrx_snapshot.submit_to_done_max_us,
+		  (unsigned long)usbrx_snapshot.submit_to_done_ge_1ms,
+		  (unsigned long)usbrx_snapshot.submit_to_done_ge_5ms,
+		  (unsigned long)usbrx_snapshot.submit_to_done_ge_10ms,
+		  (unsigned long)usbrx_snapshot.submit_to_done_ge_20ms,
+		  (unsigned long)usbrx_snapshot.complete_to_rearm_samples,
+		  (unsigned long)usbrx_average(
+			usbrx_snapshot.complete_to_rearm_total_us,
+			usbrx_snapshot.complete_to_rearm_samples),
+		  (unsigned long)usbrx_snapshot.complete_to_rearm_max_us,
+		  (unsigned long)usbrx_snapshot.rearm_ge_125us,
+		  (unsigned long)usbrx_snapshot.rearm_ge_1ms,
+		  (unsigned long)usbrx_snapshot.rearm_ge_5ms,
+		  (unsigned long)usbrx_snapshot.rearm_ge_10ms);
+	rt_printf("[USBRX][%lu] parse calls/bytes=%lu/%lu done_to_parse_us avg/max=%lu/%lu "
+		  "parse_us avg/max=%lu/%lu ge1/5/10ms=%lu/%lu/%lu "
+		  "parse_to_rearm_us avg/max=%lu/%lu\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)usbrx_snapshot.parse_calls,
+		  (unsigned long)usbrx_snapshot.parse_bytes,
+		  (unsigned long)usbrx_average(
+			usbrx_snapshot.done_to_parse_total_us,
+			usbrx_snapshot.done_to_parse_samples),
+		  (unsigned long)usbrx_snapshot.done_to_parse_max_us,
+		  (unsigned long)usbrx_average(usbrx_snapshot.parse_total_us,
+					usbrx_snapshot.parse_calls),
+		  (unsigned long)usbrx_snapshot.parse_max_us,
+		  (unsigned long)usbrx_snapshot.parse_ge_1ms,
+		  (unsigned long)usbrx_snapshot.parse_ge_5ms,
+		  (unsigned long)usbrx_snapshot.parse_ge_10ms,
+		  (unsigned long)usbrx_average(
+			usbrx_snapshot.parse_to_rearm_total_us,
+			usbrx_snapshot.parse_to_rearm_samples),
+		  (unsigned long)usbrx_snapshot.parse_to_rearm_max_us);
+	rt_printf("[USBRX][%lu] urb states0-7=%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu "
+		  "other=%lu polls/notready/streak_max=%lu/%lu/%lu "
+		  "bulk_out submit/bytes/while_rx_pending=%lu/%lu/%lu\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)usbrx_snapshot.urb_state[0],
+		  (unsigned long)usbrx_snapshot.urb_state[1],
+		  (unsigned long)usbrx_snapshot.urb_state[2],
+		  (unsigned long)usbrx_snapshot.urb_state[3],
+		  (unsigned long)usbrx_snapshot.urb_state[4],
+		  (unsigned long)usbrx_snapshot.urb_state[5],
+		  (unsigned long)usbrx_snapshot.urb_state[6],
+		  (unsigned long)usbrx_snapshot.urb_state[7],
+		  (unsigned long)usbrx_snapshot.urb_state_other,
+		  (unsigned long)usbrx_snapshot.urb_polls,
+		  (unsigned long)usbrx_snapshot.notready_polls,
+		  (unsigned long)usbrx_snapshot.notready_streak_max,
+		  (unsigned long)usbrx_snapshot.bulk_out_submit,
+		  (unsigned long)usbrx_snapshot.bulk_out_bytes,
+		  (unsigned long)usbrx_snapshot.bulk_out_while_rx_pending);
+}
+
+void usb_tx_lifetime_ncm_begin(const void *source, uint32_t length)
+{
+	(void)source;
+	(void)length;
+}
+
+void usb_tx_lifetime_ncm_end(int result)
+{
+	(void)result;
+}
+
+void usb_tx_lifetime_source_release(void)
+{
+}
+
+#elif CONFIG_USB_HCD_PROFILE
 
 #define USBPROF_CHANNEL_COUNT 16U
 #define USBPROF_EP_TYPE_COUNT 4U
@@ -897,7 +1249,7 @@ void usb_tx_lifetime_source_release(void)
 {
 }
 
-#endif /* CONFIG_USB_HCD_PROFILE */
+#endif /* USB profiler selection */
 
 #if !CONFIG_SCREEN_USB_PROBE
 void usb_screen_probe_snapshot(usb_screen_probe_stats_t *stats)

@@ -3,8 +3,10 @@
 #include "lpddr_re_wrap.h"
 #include "lpddr_margin_test.h"
 #include "gcd_sync_profiler.h"
+#include "airplay_mutex_profiler.h"
 #include "screen_queue_profiler.h"
 #include "screen_rx_rate_limit.h"
+#include "touch_frame_profiler.h"
 #include "screen_rx_record_profiler.h"
 #include "chacha_key_alias_fix.h"
 #include "usb_hcd_profiler.h"
@@ -32,6 +34,8 @@ extern void chacha_poly_scratch_report(unsigned window_index)
 	__attribute__((weak));
 extern void chacha_crypto_transaction_report(unsigned window_index)
 	__attribute__((weak));
+extern void chacha_recovery_report(unsigned window_index)
+	__attribute__((weak));
 
 #include <stdint.h>
 #include <string.h>
@@ -42,6 +46,10 @@ extern void chacha_crypto_transaction_report(unsigned window_index)
 
 #ifndef CONFIG_USB_PROFILE_REPORT
 #define CONFIG_USB_PROFILE_REPORT 0
+#endif
+
+#ifndef CONFIG_CHACHA_RUNTIME_PROFILE
+#define CONFIG_CHACHA_RUNTIME_PROFILE 0
 #endif
 #ifndef CONFIG_SCREEN_FPS_PROFILE
 #define CONFIG_SCREEN_FPS_PROFILE 0
@@ -756,6 +764,13 @@ static volatile uint32_t pcprof_previous_cycle;
 static volatile uint32_t pcprof_caller_attributed_samples;
 static volatile uint32_t pcprof_timer_callbacks;
 static volatile uint32_t pcprof_timer_irq = UINT32_MAX;
+static volatile uint32_t pcprof_correlation_samples;
+static volatile uint32_t pcprof_correlation_idle_samples;
+static volatile uint32_t pcprof_correlation_gcd_samples;
+static TaskHandle_t volatile pcprof_idle_task;
+#define PCPROF_GCD_TASKS_MAX 4U
+static TaskHandle_t volatile pcprof_gcd_tasks[PCPROF_GCD_TASKS_MAX];
+static volatile uint32_t pcprof_gcd_task_count;
 #if CONFIG_PC_PROFILER_RTW_DUMP_PROFILE
 static volatile uint32_t pcprof_rtw_dump_reentry[2];
 static volatile uint32_t pcprof_rtw_dump_unmatched_exit[2];
@@ -768,6 +783,24 @@ static uint32_t pcprof_late_100us_cycles;
 
 extern void * volatile pxCurrentTCB;
 extern void vPortExitCritical(void);
+
+void carbox_pc_profiler_task_samples_snapshot(
+	carbox_pcprof_task_samples_t *snapshot)
+{
+	uint32_t before;
+	uint32_t after;
+
+	if (snapshot == NULL) {
+		return;
+	}
+	do {
+		before = pcprof_correlation_samples;
+		snapshot->idle = pcprof_correlation_idle_samples;
+		snapshot->gcd_work = pcprof_correlation_gcd_samples;
+		after = pcprof_correlation_samples;
+	} while (before != after);
+	snapshot->total = after;
+}
 
 #if CONFIG_PC_PROFILER_RTW_DUMP_PROFILE
 extern void __real_rtw_enter_critical(void *lock, void *irq_state);
@@ -1044,6 +1077,22 @@ pcprof_timer_callback(void *arg)
 		pcprof_records[active][index].lr = lr;
 		pcprof_records[active][index].task = (TaskHandle_t)pxCurrentTCB;
 		pcprof_record_count[active] = index + 1U;
+		if ((TaskHandle_t)pxCurrentTCB == pcprof_idle_task) {
+			pcprof_correlation_idle_samples++;
+		} else {
+			uint32_t task_index;
+			uint32_t gcd_count = pcprof_gcd_task_count;
+
+			for (task_index = 0U; task_index < gcd_count; task_index++) {
+				if ((TaskHandle_t)pxCurrentTCB ==
+				    pcprof_gcd_tasks[task_index]) {
+					pcprof_correlation_gcd_samples++;
+					break;
+				}
+			}
+		}
+		/* Increment last so a task-context snapshot can retry coherently. */
+		pcprof_correlation_samples++;
 	} else {
 		pcprof_dropped_samples++;
 	}
@@ -1324,6 +1373,16 @@ static void pcprof_report(uint32_t sequence, uint32_t buffer, uint32_t count,
 	}
 	task_count = uxTaskGetSystemState(pcprof_tasks,
 					  PCPROF_MAX_TASK_SNAPSHOT, NULL);
+	pcprof_idle_task = pcprof_task_handle("IDLE", task_count);
+	pcprof_gcd_task_count = 0U;
+	for (i = 0U; i < task_count; i++) {
+		if ((strcmp(pcprof_tasks[i].pcTaskName, "gcd-work") == 0) &&
+		    (pcprof_gcd_task_count < PCPROF_GCD_TASKS_MAX)) {
+			pcprof_gcd_tasks[pcprof_gcd_task_count] =
+				pcprof_tasks[i].xHandle;
+			pcprof_gcd_task_count++;
+		}
+	}
 #if CONFIG_PC_PROFILER_RTW_DUMP_PROFILE
 	pcprof_tcp_ip_task = pcprof_task_handle("TCP_IP", task_count);
 #endif
@@ -1583,11 +1642,16 @@ static void pcprof_task(void *arg)
 		if (chacha_rtl8195b_partial_selftest_report != NULL) {
 			chacha_rtl8195b_partial_selftest_report(sequence);
 		}
+#if CONFIG_CHACHA_RUNTIME_PROFILE
 		if (chacha_poly_scratch_report != NULL) {
 			chacha_poly_scratch_report(sequence);
 		}
 		if (chacha_crypto_transaction_report != NULL) {
 			chacha_crypto_transaction_report(sequence);
+		}
+#endif
+		if (chacha_recovery_report != NULL) {
+			chacha_recovery_report(sequence);
 		}
 #if CONFIG_SCREEN_FPS_PROFILE
 		carbox_screen_fps_report(sequence);
@@ -1636,10 +1700,12 @@ static void pcprof_task(void *arg)
 #if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
 		lwip_diag_screen_tcp_ack_report(sequence);
 #endif
-#if defined(CONFIG_SCREEN_DATAPATH_PROFILE) && \
-	CONFIG_SCREEN_DATAPATH_PROFILE && \
-	defined(CONFIG_SCREEN_RX_RATE_LIMIT) && CONFIG_SCREEN_RX_RATE_LIMIT
+#if defined(CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE) && \
+	CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE
 		carbox_screen_rx_rate_limit_report(sequence);
+#endif
+#if defined(CONFIG_TOUCH_FRAME_PROFILE) && CONFIG_TOUCH_FRAME_PROFILE
+		carbox_touch_frame_profiler_report(sequence);
 #endif
 #if defined(CONFIG_TCP_OWNED_AGE_PROFILE) && CONFIG_TCP_OWNED_AGE_PROFILE && \
 	defined(CONFIG_TCP_OWNED_WRITE) && CONFIG_TCP_OWNED_WRITE && \
@@ -1652,6 +1718,9 @@ static void pcprof_task(void *arg)
 #if defined(CONFIG_GCD_SYNC_PROFILE) && CONFIG_GCD_SYNC_PROFILE
 		gcd_sync_profiler_report(sequence);
 #endif
+#if defined(CONFIG_AIRPLAY_MUTEX_PROFILE) && CONFIG_AIRPLAY_MUTEX_PROFILE
+		airplay_mutex_profiler_report(sequence);
+#endif
 #if defined(CONFIG_SCREEN_QUEUE_PROFILE) && CONFIG_SCREEN_QUEUE_PROFILE
 		screen_queue_profiler_report(sequence);
 		carbox_video_handover_report(sequence);
@@ -1663,6 +1732,7 @@ static void pcprof_task(void *arg)
 #if CONFIG_USB_PROFILE_REPORT && \
 	((defined(CONFIG_USB_HCD_PROFILE) && CONFIG_USB_HCD_PROFILE) || \
 	(defined(CONFIG_USB_HCD_CHANNEL_PROFILE) && CONFIG_USB_HCD_CHANNEL_PROFILE) || \
+	(defined(CONFIG_USB_NCM_RX_PROFILE) && CONFIG_USB_NCM_RX_PROFILE) || \
 	(defined(CONFIG_USB_TX_LIFETIME_PROFILE) && CONFIG_USB_TX_LIFETIME_PROFILE))
 		usb_hcd_profiler_report(sequence);
 #endif
@@ -1697,6 +1767,16 @@ void carbox_pc_profiler_start(void)
 }
 
 #else
+
+void carbox_pc_profiler_task_samples_snapshot(
+	carbox_pcprof_task_samples_t *snapshot)
+{
+	if (snapshot != NULL) {
+		snapshot->total = 0U;
+		snapshot->idle = 0U;
+		snapshot->gcd_work = 0U;
+	}
+}
 
 void carbox_pc_profiler_start(void)
 {

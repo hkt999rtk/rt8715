@@ -200,8 +200,15 @@ void vApplicationStackOverflowHook( TaskHandle_t xTask, char *pcTaskName )
 	/* all tasks snapshot */
 	rt_printf("----------------------------------------\r\n");
 	rt_printf("  Task list:\r\n");
-	vTaskList(task_list_buf);
-	rt_printf("%s", task_list_buf);
+	if (__get_IPSR() == 0U) {
+		vTaskList(task_list_buf);
+		rt_printf("%s", task_list_buf);
+	} else {
+		/* Stack checks can call this hook from PendSV.  vTaskList enters a
+		 * task critical section and would trigger a second assertion there. */
+		rt_printf("  skipped in exception context (VECT=%u)\r\n",
+			  (unsigned int)__get_IPSR());
+	}
 
 	rt_printf("========================================\r\n");
 	rt_printf("  System halted. Reset required.\r\n");

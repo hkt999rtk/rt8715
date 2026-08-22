@@ -20,7 +20,7 @@
 #define CARBOX_CRYPTO_PRIORITY_SLOTS 8u
 
 #ifndef CARBOX_CRYPTO_IRQ_TIMEOUT_MS
-#define CARBOX_CRYPTO_IRQ_TIMEOUT_MS 1000u
+#define CARBOX_CRYPTO_IRQ_TIMEOUT_MS 20u
 #endif
 
 #define CARBOX_CRYPTO_IRQ_STATS \
@@ -235,11 +235,13 @@ void carbox_crypto_irq_controller_snapshot(
 void carbox_crypto_irq_controller_report(unsigned window_index)
 {
 	printf(
-		"[CRYPTOIRQ][%u] unified=1 irq_only=1 enable/install/rebind="
+		"[CRYPTOIRQ][%u] unified=1 irq_only=1 timeout_ms=%lu "
+		"enable/install/rebind="
 		"%lu/%lu/%lu pre/wait/complete/timeout=%lu/%lu/%lu/%lu "
 		"spurious/drained/reset/vendor_restore=%lu/%lu/%lu/%lu "
 		"active/gen=%u/%lu\n",
 		window_index,
+		(unsigned long)CARBOX_CRYPTO_IRQ_TIMEOUT_MS,
 		(unsigned long)crypto_irq_enable_calls,
 		(unsigned long)crypto_irq_installs,
 		(unsigned long)crypto_irq_rebinds,

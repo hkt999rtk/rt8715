@@ -277,6 +277,16 @@ static void copy_bytes(uint8_t *dst, const uint8_t *src, size_t len) {
   for (i = 0; i < len; ++i) dst[i] = src[i];
 }
 
+static void increment_nonce_le(volatile uint8_t nonce[8]) {
+  unsigned int i;
+
+  for (i = 0u; i < 8u; ++i) {
+    uint8_t value = (uint8_t)(nonce[i] + 1u);
+    nonce[i] = value;
+    if (value != 0u) break;
+  }
+}
+
 static carbox_chacha_alias_slot *find_slot(void *state) {
   unsigned int i;
   for (i = 0; i < CARBOX_CHACHA_ALIAS_SLOTS; ++i) {
@@ -332,6 +342,11 @@ extern size_t __real_chacha20_poly1305_final(
 );
 extern size_t __real_chacha20_poly1305_verify(
   void *state, void *dst, const uint8_t tag[16], int32_t *out_error
+);
+extern int chacha20_poly1305_take_rx_nonce_resync(const void *state);
+extern void chacha20_poly1305_rx_nonce_resync_applied(int applied);
+extern void chacha20_poly1305_rx_nonce_resync_observe(
+  int32_t verify_error
 );
 
 void __wrap_chacha20_poly1305_init_64x64(
@@ -408,16 +423,37 @@ size_t __wrap_chacha20_poly1305_final(
 size_t __wrap_chacha20_poly1305_verify(
   void *state, void *dst, const uint8_t tag[16], int32_t *out_error
 ) {
+  carbox_chacha_alias_slot *slot = find_slot(state);
+  int nonce_resync;
 #if CONFIG_SCREEN_FPS_PROFILE
   uint32_t profile_start_us = chacha_rx_verify_begin(state);
 #endif
   size_t written =
     __real_chacha20_poly1305_verify(state, dst, tag, out_error);
+  chacha20_poly1305_rx_nonce_resync_observe(*out_error);
+  nonce_resync = chacha20_poly1305_take_rx_nonce_resync(state);
+  if (nonce_resync > 0) {
+    int applied = slot && slot->nonce_target;
+    if (applied) {
+      if (slot->restore_nonce) {
+        increment_nonce_le(slot->nonce);
+      } else {
+        increment_nonce_le(slot->nonce_target);
+      }
+    }
+    chacha20_poly1305_rx_nonce_resync_applied(applied);
+    if (!applied) {
+      /* Do not claim authentication success unless the persistent record
+       * nonce can also be repaired for the following frame. */
+      *out_error = -1;
+      printf("[CHACHARECOVER] nonce+1 verified but persistent target missing\n");
+    }
+  }
 #if CONFIG_SCREEN_FPS_PROFILE
   chacha_rx_verify_end(state, profile_start_us, out_error);
 #endif
   carbox_screen_rx_crypto_verify(written, out_error);
-  restore_slot(find_slot(state));
+  restore_slot(slot);
   return written;
 }
 

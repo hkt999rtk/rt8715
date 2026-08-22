@@ -46,7 +46,26 @@ static void carbox_screen_tx_crypto_complete(
 }
 #endif
 #include "ChaCha20Poly1305_rtl8195b.h"
+#if defined(__arm__) || defined(__thumb__)
 #include "crypto_priority_lock.h"
+#else
+typedef struct {
+  uint32_t timeout_count;
+  uint32_t reset_count;
+  uint32_t generation;
+  uint32_t last_timeout_at_us;
+  uint32_t last_timeout_generation;
+  uint32_t last_timeout_kind;
+  uintptr_t last_timeout_task;
+  uint32_t last_timeout_priority;
+} carbox_crypto_irq_snapshot_t;
+static void carbox_crypto_irq_controller_snapshot(
+  carbox_crypto_irq_snapshot_t *snapshot
+) {
+  const carbox_crypto_irq_snapshot_t empty = { 0 };
+  *snapshot = empty;
+}
+#endif
 #if !defined(__arm__) && !defined(__thumb__)
 #include <time.h>
 #endif
@@ -1661,12 +1680,22 @@ typedef struct {
   uint32_t completed_at_ms;
   uint32_t data_len;
   uint32_t aad_len;
+  uint32_t resync_detected;
+  uint32_t resync_taken;
+  uint32_t resync_applied;
+  uint32_t resync_apply_failed;
+  uint32_t resync_current_ok;
+  uint32_t resync_next_ok;
+  uint32_t resync_next_failed;
   int32_t hardware_error;
+  void *resync_state;
   uint8_t hardware_submitted;
   uint8_t software_same_ok;
   uint8_t software_plus_one_ok;
   uint8_t software_minus_one_ok;
   uint8_t capture_ok;
+  uint8_t resync_pending;
+  uint8_t resync_await_next;
 } chacha_post_timeout_diag_t;
 
 static chacha_post_timeout_diag_t g_chacha_post_timeout_diag
@@ -1740,8 +1769,8 @@ static void chacha_post_timeout_capture(
 static void chacha_post_timeout_finish(
   void *state, const uint8_t key[32], const uint8_t nonce[8],
   const void *aad, size_t aad_len, size_t data_len,
-  const uint8_t supplied_tag[16], int32_t hardware_error,
-  int hardware_submitted
+  const uint8_t supplied_tag[16], uint8_t *plaintext,
+  int32_t *out_error, int hardware_submitted
 ) {
   chacha_post_timeout_diag_t *diag = &g_chacha_post_timeout_diag;
   carbox_crypto_irq_snapshot_t irq;
@@ -1755,7 +1784,7 @@ static void chacha_post_timeout_finish(
   diag->completed_at_ms = chacha_post_timeout_time_ms();
   diag->data_len = (uint32_t)data_len;
   diag->aad_len = (uint32_t)aad_len;
-  diag->hardware_error = hardware_error;
+  diag->hardware_error = *out_error;
   diag->hardware_submitted = hardware_submitted ? 1u : 0u;
   diag->capture_ok =
     diag->ciphertext != NULL && diag->ciphertext_len == data_len;
@@ -1786,6 +1815,22 @@ static void chacha_post_timeout_finish(
     );
     diag->software_minus_one_ok =
       chacha20_poly1305_tag_equal(software_tag, supplied_tag) ? 1u : 0u;
+    if (!diag->software_same_ok && diag->software_plus_one_ok &&
+        !diag->software_minus_one_ok && !diag->resync_pending &&
+        chacha20_poly1305_decrypt_all_64x64_software(
+          key, nonce_plus, aad, aad_len, diag->ciphertext, data_len,
+          plaintext, supplied_tag
+        ) == 0) {
+      /* NetTransport advances its persistent RX nonce only after verify
+       * succeeds.  Repair this record here, then ask the ABI wrapper to add
+       * the missed timeout record before NetTransport performs its normal
+       * success increment. */
+      *out_error = 0;
+      diag->resync_state = state;
+      diag->resync_pending = 1u;
+      diag->resync_detected++;
+      diag->resync_current_ok++;
+    }
     chacha_secure_clear(nonce_plus, sizeof(nonce_plus));
     chacha_secure_clear(nonce_minus, sizeof(nonce_minus));
     chacha_secure_clear(software_tag, sizeof(software_tag));
@@ -1800,6 +1845,48 @@ static void chacha_post_timeout_finish(
   diag->completed++;
 }
 
+int chacha20_poly1305_take_rx_nonce_resync(const void *state) {
+  chacha_post_timeout_diag_t *diag = &g_chacha_post_timeout_diag;
+
+  if (!diag->resync_pending || diag->resync_state != state) return 0;
+  diag->resync_pending = 0u;
+  diag->resync_state = NULL;
+  diag->resync_taken++;
+  return 1;
+}
+
+void chacha20_poly1305_rx_nonce_resync_applied(int applied) {
+  chacha_post_timeout_diag_t *diag = &g_chacha_post_timeout_diag;
+
+  if (applied) {
+    diag->resync_applied++;
+    diag->resync_await_next = 1u;
+    printf(
+      "[CHACHARECOVER] nonce+1 persistent resync applied; "
+      "current record recovered, awaiting next verify\n"
+    );
+  } else {
+    diag->resync_apply_failed++;
+  }
+}
+
+void chacha20_poly1305_rx_nonce_resync_observe(int32_t verify_error) {
+  chacha_post_timeout_diag_t *diag = &g_chacha_post_timeout_diag;
+
+  if (!diag->resync_await_next) return;
+  diag->resync_await_next = 0u;
+  if (verify_error == 0) {
+    diag->resync_next_ok++;
+    printf("[CHACHARECOVER] post-resync next verify=ok\n");
+  } else {
+    diag->resync_next_failed++;
+    printf(
+      "[CHACHARECOVER] post-resync next verify=failed err=%ld\n",
+      (long)verify_error
+    );
+  }
+}
+
 static void chacha_post_timeout_report(unsigned window_index) {
   chacha_post_timeout_diag_t *diag = &g_chacha_post_timeout_diag;
   uint32_t delta;
@@ -1811,6 +1898,8 @@ static void chacha_post_timeout_report(unsigned window_index) {
     "state=%s timeout armed/observed/gen/reset=%lu/%lu/%lu/%lu "
     "route_hw/hw_error=%u/%ld sw_tag same/+1/-1=%u/%u/%u "
     "capture ok/bytes/expected=%u/%lu/%lu alloc_fail/len_mismatch=%lu/%lu "
+    "resync detect/take/apply/apply_fail/current_ok/next_ok/next_fail/pending="
+    "%lu/%lu/%lu/%lu/%lu/%lu/%lu/%u "
     "at_ms=%lu\n",
     window_index,
     (unsigned long)delta,
@@ -1831,11 +1920,32 @@ static void chacha_post_timeout_report(unsigned window_index) {
     (unsigned long)diag->data_len,
     (unsigned long)diag->alloc_failures,
     (unsigned long)diag->length_mismatches,
+    (unsigned long)diag->resync_detected,
+    (unsigned long)diag->resync_taken,
+    (unsigned long)diag->resync_applied,
+    (unsigned long)diag->resync_apply_failed,
+    (unsigned long)diag->resync_current_ok,
+    (unsigned long)diag->resync_next_ok,
+    (unsigned long)diag->resync_next_failed,
+    (unsigned)diag->resync_await_next,
     (unsigned long)diag->completed_at_ms
   );
   diag->reported_completed = diag->completed;
 }
 #else
+int chacha20_poly1305_take_rx_nonce_resync(const void *state) {
+  (void)state;
+  return 0;
+}
+
+void chacha20_poly1305_rx_nonce_resync_applied(int applied) {
+  (void)applied;
+}
+
+void chacha20_poly1305_rx_nonce_resync_observe(int32_t verify_error) {
+  (void)verify_error;
+}
+
 static void chacha_post_timeout_report(unsigned window_index) {
   (void)window_index;
 }
@@ -2052,6 +2162,7 @@ static CHACHA_UNUSED int chacha_build_poly_input(
 static uint8_t g_chacha_poly_scratch[CHACHA_POLY_SCRATCH_CAPACITY]
   __attribute__((section(".lpddr.bss.chacha_poly_scratch"), aligned(32)));
 static volatile uint32_t g_chacha_poly_scratch_busy;
+#if CARBOX_CHACHA_RUNTIME_PROFILE
 static volatile uint32_t g_chacha_poly_scratch_hits;
 static volatile uint32_t g_chacha_poly_scratch_fallbacks;
 static volatile uint32_t g_chacha_poly_scratch_alloc_failures;
@@ -2060,6 +2171,9 @@ static volatile uint32_t g_chacha_multi_tx_transactions;
 static volatile uint32_t g_chacha_multi_tx_errors;
 static volatile uint32_t g_chacha_multi_rx_transactions;
 static volatile uint32_t g_chacha_multi_rx_errors;
+
+#define CHACHA_RUNTIME_ADD(counter, value) \
+  ((void)__sync_fetch_and_add(&(counter), (uint32_t)(value)))
 
 void chacha_poly_scratch_report(unsigned window_index) {
   static uint32_t reported_hits;
@@ -2113,6 +2227,15 @@ void chacha_crypto_transaction_report(unsigned window_index) {
   reported_tx_errors = tx_errors;
   reported_rx = rx;
   reported_rx_errors = rx_errors;
+}
+#else
+#define CHACHA_RUNTIME_ADD(counter, value) do { \
+  (void)sizeof(value); \
+} while (0)
+#endif
+
+/* Recovery observation remains enabled when all routine crypto profiling is off. */
+void chacha_recovery_report(unsigned window_index) {
   chacha_post_timeout_report(window_index);
 }
 
@@ -2149,13 +2272,13 @@ static CHACHA_UNUSED int chacha_hardware_auth_standalone_locked(
       poly_input = g_chacha_poly_scratch;
       poly_input_capacity = sizeof(g_chacha_poly_scratch);
       scratch_lease = 1;
-      __sync_fetch_and_add(&g_chacha_poly_scratch_hits, 1u);
+      CHACHA_RUNTIME_ADD(g_chacha_poly_scratch_hits, 1u);
     } else {
       poly_input = (uint8_t *)malloc(poly_input_len);
       poly_input_capacity = poly_input_len;
-      __sync_fetch_and_add(&g_chacha_poly_scratch_fallbacks, 1u);
+      CHACHA_RUNTIME_ADD(g_chacha_poly_scratch_fallbacks, 1u);
       if (!poly_input) {
-        __sync_fetch_and_add(&g_chacha_poly_scratch_alloc_failures, 1u);
+        CHACHA_RUNTIME_ADD(g_chacha_poly_scratch_alloc_failures, 1u);
         status = CHACHA_RTL_SKIP_MEMORY;
       }
     }
@@ -2168,7 +2291,7 @@ static CHACHA_UNUSED int chacha_hardware_auth_standalone_locked(
   }
   if (status == CHACHA_RTL_OK) {
     if (scratch_lease) {
-      __sync_fetch_and_add(&g_chacha_poly_scratch_bytes, poly_input_len);
+      CHACHA_RUNTIME_ADD(g_chacha_poly_scratch_bytes, poly_input_len);
     }
     status = chacha_rtl8195b_poly1305_locked(
       poly_key, poly_input, poly_input_len, tag
@@ -2219,7 +2342,7 @@ static CHACHA_UNUSED int chacha_hardware_encrypt_auto(
    */
   status = chacha_rtl8195b_transaction_begin();
   if (status != CHACHA_RTL_OK) return status;
-  __sync_fetch_and_add(&g_chacha_multi_tx_transactions, 1u);
+  CHACHA_RUNTIME_ADD(g_chacha_multi_tx_transactions, 1u);
   status = chacha_hardware_xor_chunks_locked(
     key, nonce, plaintext, len, ciphertext
   );
@@ -2231,7 +2354,7 @@ static CHACHA_UNUSED int chacha_hardware_encrypt_auto(
   }
   chacha_rtl8195b_transaction_end();
   if (status != CHACHA_RTL_OK) {
-    __sync_fetch_and_add(&g_chacha_multi_tx_errors, 1u);
+    CHACHA_RUNTIME_ADD(g_chacha_multi_tx_errors, 1u);
   }
   if (status != CHACHA_RTL_OK) return status;
   if (*backend == CHACHA_HW_BACKEND_STANDALONE) return CHACHA_RTL_OK;
@@ -2261,7 +2384,7 @@ static CHACHA_UNUSED int chacha_hardware_decrypt_auto(
   if (*backend == CHACHA_HW_BACKEND_STANDALONE) {
     status = chacha_rtl8195b_transaction_begin();
     if (status != CHACHA_RTL_OK) return status;
-    __sync_fetch_and_add(&g_chacha_multi_rx_transactions, 1u);
+    CHACHA_RUNTIME_ADD(g_chacha_multi_rx_transactions, 1u);
     status = chacha_hardware_auth_standalone_locked(
       key, nonce, aad, aad_len, ciphertext, len, calculated_tag
     );
@@ -2272,7 +2395,7 @@ static CHACHA_UNUSED int chacha_hardware_decrypt_auto(
     }
     chacha_rtl8195b_transaction_end();
     if (status != CHACHA_RTL_OK) {
-      __sync_fetch_and_add(&g_chacha_multi_rx_errors, 1u);
+      CHACHA_RUNTIME_ADD(g_chacha_multi_rx_errors, 1u);
     }
     return status;
   } else {
@@ -2283,13 +2406,13 @@ static CHACHA_UNUSED int chacha_hardware_decrypt_auto(
 
   status = chacha_rtl8195b_transaction_begin();
   if (status != CHACHA_RTL_OK) return status;
-  __sync_fetch_and_add(&g_chacha_multi_rx_transactions, 1u);
+  CHACHA_RUNTIME_ADD(g_chacha_multi_rx_transactions, 1u);
   status = chacha_hardware_xor_chunks_locked(
     key, nonce, ciphertext, len, plaintext
   );
   chacha_rtl8195b_transaction_end();
   if (status != CHACHA_RTL_OK) {
-    __sync_fetch_and_add(&g_chacha_multi_rx_errors, 1u);
+    CHACHA_RUNTIME_ADD(g_chacha_multi_rx_errors, 1u);
   }
   return status;
 }
@@ -2820,7 +2943,7 @@ size_t chacha20_poly1305_verify(
     );
   }
   chacha_post_timeout_finish(
-    state, key, nonce, aad, aad_len, total_len, tag, *out_error,
+    state, key, nonce, aad, aad_len, total_len, tag, output_base, out_error,
     diagnostic_hardware_submitted
   );
   memset(state, 0, sizeof(*state));

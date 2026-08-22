@@ -30,6 +30,12 @@
 #ifndef CONFIG_SCREEN_TIMESTAMP_PROFILE
 #define CONFIG_SCREEN_TIMESTAMP_PROFILE 0
 #endif
+#ifndef CONFIG_SCREEN_HW_TIMESTAMP
+#define CONFIG_SCREEN_HW_TIMESTAMP 0
+#endif
+#ifndef CONFIG_SCREEN_SELECT_PROFILE
+#define CONFIG_SCREEN_SELECT_PROFILE 0
+#endif
 
 #if CONFIG_SCREEN_QUEUE_PROFILE
 
@@ -384,7 +390,7 @@ static TaskHandle_t screenprof_sender_task;
 static uint32_t screenprof_select_streak;
 static uint32_t screenprof_select_streak_start_us;
 #if CONFIG_SCREEN_TIMESTAMP_PROFILE
-static uint32_t screenprof_timestamp_prev_ms;
+static uint64_t screenprof_timestamp_prev_ntp;
 static uint32_t screenprof_timestamp_have_prev;
 static uint32_t screenprof_pending_source_ntp_valid;
 static uint64_t screenprof_pending_source_ntp;
@@ -402,10 +408,11 @@ extern void __real_CVector_delete(void *vector);
 extern ssize_t __real_lwip_recv(int socket, void *buffer, size_t bytes,
 				int flags);
 extern ssize_t __real_lwip_write(int socket, const void *buffer, size_t bytes);
+#if CONFIG_SCREEN_SELECT_PROFILE
 extern int __real_lwip_select(int maxfdp1, fd_set *readset, fd_set *writeset,
 			      fd_set *exceptset, struct timeval *timeout);
+#endif
 #if CONFIG_SCREEN_TIMESTAMP_PROFILE
-extern uint64_t __real_UpTicksToNTP(uint64_t ticks);
 static void screenprof_record_metric(screenprof_metric_id_t metric_id,
 				     uint32_t value_us);
 
@@ -1130,6 +1137,7 @@ void __wrap_AirPlayScreen_SendVideo(const void *data, int bytes)
 	TaskHandle_t current = xTaskGetCurrentTaskHandle();
 	carbox_screen_rx_stage_handover_begin();
 	carbox_screen_rx_record_send_video(data, bytes);
+	carbox_screen_rx_rate_limit_frame();
 	screenprof_active_input_t input;
 	uint32_t now_us = hal_read_curtime_us();
 	int marked = screenprof_mark_active(current);
@@ -1213,15 +1221,15 @@ void __wrap_AirPlayScreen_SendVideo(const void *data, int bytes)
  * GetTickCount(), so the input is the local millisecond clock, not a source
  * timestamp carried by AirPlayScreen_SendVideo(data, bytes).
  *
- * Capture only while a dequeued frame is active.  This preserves the original
- * conversion and wire value while allowing its cadence to be compared with
- * the complete-frame arrival cadence measured above.  A config frame can call
- * the converter more than once; only the first call is paired with the frame.
+ * Capture only while a dequeued frame is active.  The isolated timestamp
+ * wrapper supplies the value actually emitted on the wire (vendor millisecond
+ * conversion or hardware-microsecond mode), so its cadence can be compared
+ * with complete-frame arrival. A config frame can call the converter more
+ * than once; only the first call is paired with the frame.
  */
-uint64_t __wrap_UpTicksToNTP(uint64_t ticks)
+void carbox_screen_timestamp_profile_sample(uint64_t ticks, uint64_t ntp,
+					    uint32_t now_us)
 {
-	uint64_t ntp = __real_UpTicksToNTP(ticks);
-	uint32_t now_us = hal_read_curtime_us();
 	uint32_t ticks_ms = (uint32_t)ticks;
 
 	taskENTER_CRITICAL();
@@ -1239,18 +1247,17 @@ uint64_t __wrap_UpTicksToNTP(uint64_t ticks)
 					 after_arrival_us);
 
 		if (screenprof_timestamp_have_prev) {
-			uint32_t delta_ms = ticks_ms -
-				screenprof_timestamp_prev_ms;
 			uint32_t delta_us;
 			uint32_t arrival_delta_us =
 				screenprof_active_frame.arrival_delta_us;
 			uint32_t error_us;
 
-			if (delta_ms > 0x7FFFFFFFU) {
+			if (ntp < screenprof_timestamp_prev_ntp) {
 				screenprof_live.timestamp_tick_regressions++;
 			} else {
-				delta_us = (delta_ms <= (UINT32_MAX / 1000U)) ?
-					delta_ms * 1000U : UINT32_MAX;
+				delta_us = screenprof_u64_to_u32_sat(
+					screenprof_ntp_delta_us(ntp,
+						screenprof_timestamp_prev_ntp));
 				error_us = (delta_us >= arrival_delta_us) ?
 					delta_us - arrival_delta_us :
 					arrival_delta_us - delta_us;
@@ -1270,7 +1277,7 @@ uint64_t __wrap_UpTicksToNTP(uint64_t ticks)
 				}
 			}
 		}
-		screenprof_timestamp_prev_ms = ticks_ms;
+		screenprof_timestamp_prev_ntp = ntp;
 		screenprof_timestamp_have_prev = 1U;
 	} else if (screenprof_active_frame.valid) {
 		screenprof_live.timestamp_duplicate++;
@@ -1278,8 +1285,15 @@ uint64_t __wrap_UpTicksToNTP(uint64_t ticks)
 		screenprof_live.timestamp_unpaired++;
 	}
 	taskEXIT_CRITICAL();
-
-	return ntp;
+}
+#else
+void carbox_screen_timestamp_profile_sample(uint64_t original_ticks,
+					    uint64_t emitted_ntp,
+					    uint32_t sample_us)
+{
+	(void)original_ticks;
+	(void)emitted_ntp;
+	(void)sample_us;
 }
 #endif
 
@@ -1484,6 +1498,7 @@ void __wrap_CVector_delete(void *vector)
 	__real_CVector_delete(vector);
 }
 
+#if CONFIG_SCREEN_SELECT_PROFILE
 int __wrap_lwip_select(int maxfdp1, fd_set *readset, fd_set *writeset,
 		       fd_set *exceptset, struct timeval *timeout)
 {
@@ -1545,6 +1560,7 @@ int __wrap_lwip_select(int maxfdp1, fd_set *readset, fd_set *writeset,
 	}
 	return result;
 }
+#endif
 
 ssize_t __wrap_lwip_recv(int socket, void *buffer, size_t bytes, int flags)
 {
@@ -2194,7 +2210,12 @@ void screen_queue_profiler_report(uint32_t sequence)
 		uint32_t le20_x10 = screenprof_ratio_x10(
 			screenprof_copy.timestamp_error_le_20ms, samples);
 
-		rt_printf("[TIMESTAMPPROF][%lu] source=local-GetTickCount-ms "
+		rt_printf("[TIMESTAMPPROF][%lu] source="
+#if CONFIG_SCREEN_HW_TIMESTAMP
+			  "hardware-systimer-us64 "
+#else
+			  "local-GetTickCount-ms "
+#endif
 			  "calls=%lu paired=%lu unpaired=%lu duplicate=%lu "
 			  "delta_samples=%lu regress=%lu tick_last_ms=%lu "
 			  "ntp_last=%08lx:%08lx\r\n",
@@ -2513,6 +2534,15 @@ void screen_queue_profiler_report(uint32_t sequence)
 }
 
 #else
+
+void carbox_screen_timestamp_profile_sample(uint64_t original_ticks,
+					    uint64_t emitted_ntp,
+					    uint32_t sample_us)
+{
+	(void)original_ticks;
+	(void)emitted_ntp;
+	(void)sample_us;
+}
 
 void screen_queue_profiler_report(uint32_t sequence)
 {

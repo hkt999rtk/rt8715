@@ -114,6 +114,10 @@
 
 #include <string.h>
 
+#if defined(CONFIG_CAR_ACK_TCP_PROFILE) && CONFIG_CAR_ACK_TCP_PROFILE
+void lwip_diag_car_ack_rto(struct tcp_pcb *pcb, u8_t committed);
+#endif
+
 #ifndef CONFIG_SCREEN_RX_RATE_LIMIT_INTERVAL_MS
 #define CONFIG_SCREEN_RX_RATE_LIMIT_INTERVAL_MS 10U
 #endif
@@ -186,6 +190,14 @@ static u32_t tcp_screen_rx_adjust_hold_ms;
 static u32_t tcp_screen_rx_open_adjusts;
 static u32_t tcp_screen_rx_close_adjusts;
 static u32_t tcp_screen_rx_pressure_events;
+#if defined(CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE) && CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE
+static u32_t tcp_screen_rx_total_ticks;
+static u32_t tcp_screen_rx_pending_ticks;
+static u32_t tcp_screen_rx_token_limited_ticks;
+static u32_t tcp_screen_rx_valve_limited_ticks;
+static u32_t tcp_screen_rx_zero_grant_ticks;
+static u32_t tcp_screen_rx_pending_sum_bytes;
+#endif
 static u32_t tcp_screen_rx_last_pressure_ms;
 static u8_t tcp_screen_rx_pressure_seen;
 static u8_t tcp_screen_rx_pressure_pending;
@@ -296,6 +308,14 @@ int tcp_screen_rx_rate_limit_enable(struct tcp_pcb *pcb)
     tcp_screen_rx_open_adjusts = 0;
     tcp_screen_rx_close_adjusts = 0;
     tcp_screen_rx_pressure_events = 0;
+#if defined(CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE) && CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE
+    tcp_screen_rx_total_ticks = 0;
+    tcp_screen_rx_pending_ticks = 0;
+    tcp_screen_rx_token_limited_ticks = 0;
+    tcp_screen_rx_valve_limited_ticks = 0;
+    tcp_screen_rx_zero_grant_ticks = 0;
+    tcp_screen_rx_pending_sum_bytes = 0;
+#endif
     tcp_screen_rx_last_pressure_ms = now;
     tcp_screen_rx_pressure_seen = 0U;
     tcp_screen_rx_pressure_pending = 0U;
@@ -361,6 +381,23 @@ int tcp_screen_rx_rate_limit_tick(void)
   valve_allowance = (u32_t)(valve_numerator / 8000U);
   tcp_screen_rx_valve_remainder = (u32_t)(valve_numerator % 8000U);
 
+#if defined(CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE) && CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE
+  tcp_screen_rx_total_ticks++;
+  if (tcp_screen_rx_pending != 0U) {
+    tcp_screen_rx_pending_ticks++;
+    tcp_screen_rx_pending_sum_bytes += tcp_screen_rx_pending;
+    if (tcp_screen_rx_tokens < tcp_screen_rx_pending) {
+      tcp_screen_rx_token_limited_ticks++;
+    }
+    if (valve_allowance < tcp_screen_rx_pending) {
+      tcp_screen_rx_valve_limited_ticks++;
+    }
+    if ((tcp_screen_rx_tokens == 0U) || (valve_allowance == 0U)) {
+      tcp_screen_rx_zero_grant_ticks++;
+    }
+  }
+#endif
+
   if ((tcp_screen_rx_pending != 0U) && (tcp_screen_rx_tokens != 0U) &&
       (valve_allowance != 0U)) {
     u32_t grant32 = LWIP_MIN(tcp_screen_rx_pending,
@@ -404,7 +441,13 @@ void tcp_screen_rx_rate_limit_snapshot(u32_t *active,
                                        u32_t *filtered_kbps,
                                        u32_t *open_adjusts,
                                        u32_t *close_adjusts,
-                                       u32_t *pressure_events, int reset)
+                                       u32_t *pressure_events,
+                                       u32_t *total_ticks,
+                                       u32_t *pending_ticks,
+                                       u32_t *token_limited_ticks,
+                                       u32_t *valve_limited_ticks,
+                                       u32_t *zero_grant_ticks,
+                                       u32_t *pending_sum_bytes, int reset)
 {
   u32_t now = sys_now();
 
@@ -423,6 +466,21 @@ void tcp_screen_rx_rate_limit_snapshot(u32_t *active,
   *open_adjusts = tcp_screen_rx_open_adjusts;
   *close_adjusts = tcp_screen_rx_close_adjusts;
   *pressure_events = tcp_screen_rx_pressure_events;
+#if defined(CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE) && CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE
+  *total_ticks = tcp_screen_rx_total_ticks;
+  *pending_ticks = tcp_screen_rx_pending_ticks;
+  *token_limited_ticks = tcp_screen_rx_token_limited_ticks;
+  *valve_limited_ticks = tcp_screen_rx_valve_limited_ticks;
+  *zero_grant_ticks = tcp_screen_rx_zero_grant_ticks;
+  *pending_sum_bytes = tcp_screen_rx_pending_sum_bytes;
+#else
+  *total_ticks = 0;
+  *pending_ticks = 0;
+  *token_limited_ticks = 0;
+  *valve_limited_ticks = 0;
+  *zero_grant_ticks = 0;
+  *pending_sum_bytes = 0;
+#endif
   if (reset) {
     tcp_screen_rx_requested = 0;
     tcp_screen_rx_granted = 0;
@@ -431,6 +489,14 @@ void tcp_screen_rx_rate_limit_snapshot(u32_t *active,
     tcp_screen_rx_open_adjusts = 0;
     tcp_screen_rx_close_adjusts = 0;
     tcp_screen_rx_pressure_events = 0;
+#if defined(CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE) && CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE
+    tcp_screen_rx_total_ticks = 0;
+    tcp_screen_rx_pending_ticks = 0;
+    tcp_screen_rx_token_limited_ticks = 0;
+    tcp_screen_rx_valve_limited_ticks = 0;
+    tcp_screen_rx_zero_grant_ticks = 0;
+    tcp_screen_rx_pending_sum_bytes = 0;
+#endif
     tcp_screen_rx_stats_start_ms = now;
   }
 }
@@ -1624,6 +1690,9 @@ tcp_slowtmr_start:
 
         if (pcb->rtime >= pcb->rto) {
           /* Time for a retransmission. */
+#if defined(CONFIG_CAR_ACK_TCP_PROFILE) && CONFIG_CAR_ACK_TCP_PROFILE
+          lwip_diag_car_ack_rto(pcb, 0U);
+#endif
           LWIP_DEBUGF(TCP_RTO_DEBUG, ("tcp_slowtmr: rtime %"S16_F
                                       " pcb->rto %"S16_F"\n",
                                       pcb->rtime, pcb->rto));
@@ -1666,6 +1735,9 @@ tcp_slowtmr_start:
             /* The following needs to be called AFTER cwnd is set to one
                mss - STJ */
             tcp_rexmit_rto_commit(pcb);
+#if defined(CONFIG_CAR_ACK_TCP_PROFILE) && CONFIG_CAR_ACK_TCP_PROFILE
+            lwip_diag_car_ack_rto(pcb, 1U);
+#endif
           }
         }
       }
@@ -2249,6 +2321,9 @@ tcp_alloc(u8_t prio)
     /* zero out the whole pcb, so there is no need to initialize members to zero */
     memset(pcb, 0, sizeof(struct tcp_pcb));
     pcb->prio = prio;
+#if defined(LWIP_TCP_NODELAY_DEFAULT) && LWIP_TCP_NODELAY_DEFAULT
+    tcp_nagle_disable(pcb);
+#endif
     pcb->snd_buf = TCP_SND_BUF;
     /* Start with a window that does not need scaling. When window scaling is
        enabled and used, the window is enlarged when both sides agree on scaling. */

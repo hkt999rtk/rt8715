@@ -122,6 +122,57 @@ const u8_t netconn_closed = 0;
 #define CONFIG_TCP_SOCKET_HANDOFF_PROFILE 0
 #endif
 
+#ifndef CONFIG_IPHONE_HTTP_RX_PROFILE
+#define CONFIG_IPHONE_HTTP_RX_PROFILE 0
+#endif
+
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_IPHONE_HTTP_RX_PROFILE
+#define IPHONE_RX_POST_SLOTS 128U
+struct iphone_rx_post_slot {
+  const void *message;
+  u32_t post_us;
+  u32_t generation;
+  u32_t bytes;
+};
+static struct iphone_rx_post_slot iphone_rx_post_slots[IPHONE_RX_POST_SLOTS];
+static u32_t iphone_rx_post_generation;
+
+static void
+iphone_rx_post_record(const void *message, u16_t len)
+{
+  struct iphone_rx_post_slot *slot =
+    &iphone_rx_post_slots[((mem_ptr_t)message >> 4) &
+                          (IPHONE_RX_POST_SLOTS - 1U)];
+
+  slot->message = message;
+  slot->post_us = rltk_tcp_perf_now_us();
+  slot->generation = ++iphone_rx_post_generation;
+  slot->bytes = len;
+}
+
+int
+lwip_diag_rx_post_consume(const void *message, u32_t *post_us,
+                          u32_t *generation, u32_t *bytes)
+{
+  struct iphone_rx_post_slot *slot;
+
+  if ((message == NULL) || (post_us == NULL) || (generation == NULL) ||
+      (bytes == NULL)) {
+    return -1;
+  }
+  slot = &iphone_rx_post_slots[((mem_ptr_t)message >> 4) &
+                               (IPHONE_RX_POST_SLOTS - 1U)];
+  if (slot->message == message) {
+    *post_us = slot->post_us;
+    *generation = slot->generation;
+    *bytes = slot->bytes;
+    slot->message = NULL;
+    return 0;
+  }
+  return -1;
+}
+#endif
+
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_SOCKET_HANDOFF_PROFILE
 #define TCP_SOCKET_HANDOFF_WINDOW_US 10000000U
 
@@ -424,6 +475,11 @@ recv_tcp(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err)
     /* don't deallocate p: it is presented to us later again from tcp_fasttmr! */
     return ERR_MEM;
   } else {
+#if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_IPHONE_HTTP_RX_PROFILE
+    if (len != 0U) {
+      iphone_rx_post_record(msg, len);
+    }
+#endif
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_SOCKET_HANDOFF_PROFILE
     post_us = rltk_tcp_perf_now_us() - phase_start_us;
 #endif

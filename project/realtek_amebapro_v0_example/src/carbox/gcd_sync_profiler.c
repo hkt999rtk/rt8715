@@ -7,9 +7,20 @@
 #include "task.h"
 #include "diag.h"
 #include "hal_timer.h"
+#include "pc_profiler.h"
+#include "touch_path_profiler.h"
+#include "touch_frame_profiler.h"
 
 #ifndef CONFIG_GCD_SYNC_PROFILE
 #define CONFIG_GCD_SYNC_PROFILE 0
+#endif
+
+#ifndef CONFIG_TOUCH_PATH_PROFILE
+#define CONFIG_TOUCH_PATH_PROFILE 0
+#endif
+
+#ifndef CONFIG_TOUCH_FRAME_PROFILE
+#define CONFIG_TOUCH_FRAME_PROFILE 0
 #endif
 
 #ifndef CONFIG_GCD_WORK_PRIORITY
@@ -24,8 +35,12 @@
 #define CONFIG_USBH_MAIN_TASK_PRIORITY (-1)
 #endif
 
+#ifndef CONFIG_TCP_CLIENT_PRIORITY
+#define CONFIG_TCP_CLIENT_PRIORITY (-1)
+#endif
+
 #if CONFIG_GCD_WORK_PRIORITY >= 0 || CONFIG_USBH_ISR_TASK_PRIORITY >= 0 || \
-	CONFIG_USBH_MAIN_TASK_PRIORITY >= 0
+	CONFIG_USBH_MAIN_TASK_PRIORITY >= 0 || CONFIG_TCP_CLIENT_PRIORITY >= 0
 
 extern BaseType_t __real_xTaskCreate(TaskFunction_t task_code,
 				     const char *task_name,
@@ -82,6 +97,22 @@ static int gcdprof_is_usbh_main_name(const char *name)
 	return 1;
 }
 
+static int gcdprof_is_tcp_client_name(const char *name)
+{
+	static const char expected[] = "TCPClient";
+	uint32_t i;
+
+	if (name == NULL) {
+		return 0;
+	}
+	for (i = 0U; i < sizeof(expected); i++) {
+		if (name[i] != expected[i]) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
 /*
  * DispatchLite creates its workers through FreeRTOS-Plus-POSIX and requests
  * priority 2.  Its binary has no source, so alter only tasks named gcd-work at
@@ -119,13 +150,22 @@ BaseType_t __wrap_xTaskCreate(TaskFunction_t task_code,
 		}
 	}
 #endif
+#if CONFIG_TCP_CLIENT_PRIORITY >= 0
+	if (gcdprof_is_tcp_client_name(task_name)) {
+		priority = (UBaseType_t)CONFIG_TCP_CLIENT_PRIORITY;
+		if (priority >= (UBaseType_t)configMAX_PRIORITIES) {
+			priority = (UBaseType_t)configMAX_PRIORITIES - 1U;
+		}
+	}
+#endif
 	return __real_xTaskCreate(task_code, task_name, stack_depth, parameters,
 				  priority, created_task);
 }
 
 #endif /* task-priority override enabled */
 
-#if CONFIG_GCD_SYNC_PROFILE
+#if CONFIG_GCD_SYNC_PROFILE || CONFIG_TOUCH_PATH_PROFILE || \
+	CONFIG_TOUCH_FRAME_PROFILE
 
 /*
  * DispatchLite is supplied in lib_CarPlay.a without source.  Intercepting its
@@ -144,11 +184,16 @@ typedef void (*gcdprof_function_t)(void *context);
 typedef struct gcdprof_call_s {
 	void *original_context;
 	gcdprof_function_t original_function;
+	uint32_t touch_token;
+	uint32_t touch_frame_token;
 	volatile uint32_t callback_start_us;
 	volatile uint32_t callback_end_us;
 	volatile uint32_t callback_called;
+	carbox_pcprof_task_samples_t submit_samples;
+	carbox_pcprof_task_samples_t callback_samples;
 } gcdprof_call_t;
 
+#if CONFIG_GCD_SYNC_PROFILE
 typedef struct gcdprof_entry_s {
 	uint32_t queue;
 	uint32_t function;
@@ -163,6 +208,12 @@ typedef struct gcdprof_entry_s {
 	uint32_t wait_ge_5ms;
 	uint32_t wait_ge_20ms;
 	uint32_t wait_ge_100ms;
+	uint32_t wait_pc_samples;
+	uint32_t wait_pc_idle_samples;
+	uint32_t wait_pc_gcd_samples;
+	uint32_t wait_pc_sampled_calls;
+	uint32_t wait_pc_idle_seen_calls;
+	uint32_t wait_pc_gcd_seen_calls;
 } gcdprof_entry_t;
 
 typedef struct gcdprof_snapshot_s {
@@ -179,14 +230,18 @@ static gcdprof_snapshot_t gcdprof_report_copy
 	__attribute__((section(".lpddr.bss.gcdprof")));
 static volatile uint32_t gcdprof_in_flight;
 static volatile uint32_t gcdprof_in_flight_peak;
+#endif
 
 extern void __real_dispatch_sync_f(void *queue, void *context,
 				   gcdprof_function_t function);
 
+#if CONFIG_GCD_SYNC_PROFILE
 static void gcdprof_update_entry(gcdprof_entry_t *entry, uint32_t queue,
 				 uint32_t function,
 				 uint32_t wait_us, uint32_t exec_us,
-				 uint32_t total_us)
+				 uint32_t total_us,
+				 uint32_t pc_samples, uint32_t pc_idle_samples,
+				 uint32_t pc_gcd_samples)
 {
 	entry->queue = queue;
 	entry->function = function;
@@ -207,15 +262,36 @@ static void gcdprof_update_entry(gcdprof_entry_t *entry, uint32_t queue,
 	entry->wait_ge_5ms += (wait_us >= 5000U);
 	entry->wait_ge_20ms += (wait_us >= 20000U);
 	entry->wait_ge_100ms += (wait_us >= 100000U);
+	entry->wait_pc_samples += pc_samples;
+	entry->wait_pc_idle_samples += pc_idle_samples;
+	entry->wait_pc_gcd_samples += pc_gcd_samples;
+	entry->wait_pc_sampled_calls += (pc_samples != 0U);
+	entry->wait_pc_idle_seen_calls += (pc_idle_samples != 0U);
+	entry->wait_pc_gcd_seen_calls += (pc_gcd_samples != 0U);
 }
+#endif
 
 static void gcdprof_trampoline(void *context)
 {
 	gcdprof_call_t *call = (gcdprof_call_t *)context;
 
+	carbox_pc_profiler_task_samples_snapshot(&call->callback_samples);
 	call->callback_start_us = hal_read_curtime_us();
 	call->callback_called = 1U;
+	if (call->touch_token != 0U) {
+		carbox_touch_dispatch_sync_callback_begin(call->touch_token);
+	}
+	if (call->touch_frame_token != 0U) {
+		carbox_touch_frame_dispatch_callback_begin(
+			call->touch_frame_token);
+	}
 	call->original_function(call->original_context);
+	if (call->touch_frame_token != 0U) {
+		carbox_touch_frame_dispatch_callback_end(call->touch_frame_token);
+	}
+	if (call->touch_token != 0U) {
+		carbox_touch_dispatch_sync_callback_end(call->touch_token);
+	}
 	call->callback_end_us = hal_read_curtime_us();
 }
 
@@ -225,13 +301,18 @@ void __wrap_dispatch_sync_f(void *queue, void *context,
 	gcdprof_call_t call;
 	uint32_t submit_us;
 	uint32_t return_us;
+#if CONFIG_GCD_SYNC_PROFILE
 	uint32_t wait_us;
 	uint32_t exec_us;
 	uint32_t total_us;
 	uint32_t normalized_function;
 	uint32_t normalized_queue;
+	uint32_t pc_samples;
+	uint32_t pc_idle_samples;
+	uint32_t pc_gcd_samples;
 	uint32_t i;
 	gcdprof_entry_t *entry = NULL;
+#endif
 
 	/* Preserve the original API's behaviour for an invalid callback. */
 	if (function == NULL) {
@@ -241,32 +322,63 @@ void __wrap_dispatch_sync_f(void *queue, void *context,
 
 	call.original_context = context;
 	call.original_function = function;
+	call.touch_token = carbox_touch_dispatch_sync_begin();
+	call.touch_frame_token = carbox_touch_frame_dispatch_begin();
+#if !CONFIG_GCD_SYNC_PROFILE
+	/* Touch-only mode must not add a trampoline to unrelated GCD traffic. */
+	if ((call.touch_token == 0U) && (call.touch_frame_token == 0U)) {
+		__real_dispatch_sync_f(queue, context, function);
+		return;
+	}
+#endif
 	call.callback_start_us = 0U;
 	call.callback_end_us = 0U;
 	call.callback_called = 0U;
+	memset(&call.submit_samples, 0, sizeof(call.submit_samples));
+	memset(&call.callback_samples, 0, sizeof(call.callback_samples));
+#if CONFIG_GCD_SYNC_PROFILE
 	taskENTER_CRITICAL();
 	gcdprof_in_flight++;
 	if (gcdprof_in_flight > gcdprof_in_flight_peak) {
 		gcdprof_in_flight_peak = gcdprof_in_flight;
 	}
 	taskEXIT_CRITICAL();
+#endif
 	submit_us = hal_read_curtime_us();
+	carbox_pc_profiler_task_samples_snapshot(&call.submit_samples);
 	__real_dispatch_sync_f(queue, &call, gcdprof_trampoline);
 	return_us = hal_read_curtime_us();
+	if (call.touch_token != 0U) {
+		carbox_touch_dispatch_sync_complete(call.touch_token, submit_us,
+			call.callback_start_us, call.callback_end_us, return_us,
+			call.callback_called != 0U);
+	}
+	if (call.touch_frame_token != 0U) {
+		carbox_touch_frame_dispatch_complete(call.touch_frame_token,
+			submit_us, call.callback_start_us, call.callback_end_us,
+			return_us, call.callback_called != 0U);
+	}
 
 	if (call.callback_called == 0U) {
+#if CONFIG_GCD_SYNC_PROFILE
 		taskENTER_CRITICAL();
 		gcdprof_in_flight--;
 		gcdprof_live.callback_missing++;
 		taskEXIT_CRITICAL();
+#endif
 		return;
 	}
 
+#if CONFIG_GCD_SYNC_PROFILE
 	wait_us = call.callback_start_us - submit_us;
 	exec_us = call.callback_end_us - call.callback_start_us;
 	total_us = return_us - submit_us;
 	normalized_function = ((uint32_t)(uintptr_t)function) & ~1U;
 	normalized_queue = (uint32_t)(uintptr_t)queue;
+	pc_samples = call.callback_samples.total - call.submit_samples.total;
+	pc_idle_samples = call.callback_samples.idle - call.submit_samples.idle;
+	pc_gcd_samples = call.callback_samples.gcd_work -
+		call.submit_samples.gcd_work;
 
 	/* Updates are short and infrequent compared with callback execution. */
 	taskENTER_CRITICAL();
@@ -284,15 +396,19 @@ void __wrap_dispatch_sync_f(void *queue, void *context,
 	if (entry != NULL) {
 		gcdprof_update_entry(entry, normalized_queue, normalized_function,
 				     wait_us, exec_us,
-				     total_us);
+				     total_us, pc_samples, pc_idle_samples,
+				     pc_gcd_samples);
 	} else {
 		gcdprof_live.callback_overflow++;
 	}
 	gcdprof_update_entry(&gcdprof_live.total, 0U, 0U, wait_us, exec_us,
-			     total_us);
+			     total_us, pc_samples, pc_idle_samples, pc_gcd_samples);
 	gcdprof_in_flight--;
 	taskEXIT_CRITICAL();
+#endif
 }
+
+#if CONFIG_GCD_SYNC_PROFILE
 
 static uint32_t gcdprof_average(uint64_t total, uint32_t count)
 {
@@ -352,6 +468,16 @@ void gcd_sync_profiler_report(uint32_t sequence)
 		  (unsigned long)total->wait_ge_5ms,
 		  (unsigned long)total->wait_ge_20ms,
 		  (unsigned long)total->wait_ge_100ms);
+	rt_printf("[GCDPROF][%lu] wait_pc samples total/idle/gcd=%lu/%lu/%lu "
+		  "calls sampled/idle_seen/gcd_seen=%lu/%lu/%lu "
+		  "sample_period_us=2003 warmup=first-window\r\n",
+		  (unsigned long)sequence,
+		  (unsigned long)total->wait_pc_samples,
+		  (unsigned long)total->wait_pc_idle_samples,
+		  (unsigned long)total->wait_pc_gcd_samples,
+		  (unsigned long)total->wait_pc_sampled_calls,
+		  (unsigned long)total->wait_pc_idle_seen_calls,
+		  (unsigned long)total->wait_pc_gcd_seen_calls);
 
 	/* A small in-place selection sort keeps the diagnostic independent of libc qsort. */
 	for (i = 0U; i < gcdprof_report_copy.callback_count; i++) {
@@ -378,7 +504,8 @@ void gcd_sync_profiler_report(uint32_t sequence)
 		gcdprof_entry_t *entry = &gcdprof_report_copy.callbacks[i];
 		rt_printf("[GCDPROF][%lu][CB] #%02lu q=0x%08lx fn=0x%08lx calls=%lu "
 			  "wait_avg/max=%lu/%lu exec_avg/max=%lu/%lu "
-			  "total_avg/max=%lu/%lu ge_ms=%lu/%lu/%lu/%lu\r\n",
+			  "total_avg/max=%lu/%lu ge_ms=%lu/%lu/%lu/%lu "
+			  "pc total/idle/gcd=%lu/%lu/%lu seen=%lu/%lu/%lu\r\n",
 			  (unsigned long)sequence, (unsigned long)(i + 1U),
 			  (unsigned long)entry->queue,
 			  (unsigned long)entry->function,
@@ -395,11 +522,17 @@ void gcd_sync_profiler_report(uint32_t sequence)
 			  (unsigned long)entry->wait_ge_1ms,
 			  (unsigned long)entry->wait_ge_5ms,
 			  (unsigned long)entry->wait_ge_20ms,
-			  (unsigned long)entry->wait_ge_100ms);
+			  (unsigned long)entry->wait_ge_100ms,
+			  (unsigned long)entry->wait_pc_samples,
+			  (unsigned long)entry->wait_pc_idle_samples,
+			  (unsigned long)entry->wait_pc_gcd_samples,
+			  (unsigned long)entry->wait_pc_sampled_calls,
+			  (unsigned long)entry->wait_pc_idle_seen_calls,
+			  (unsigned long)entry->wait_pc_gcd_seen_calls);
 	}
 }
 
-#else
+#else /* CONFIG_GCD_SYNC_PROFILE */
 
 void gcd_sync_profiler_report(uint32_t sequence)
 {
@@ -407,3 +540,12 @@ void gcd_sync_profiler_report(uint32_t sequence)
 }
 
 #endif /* CONFIG_GCD_SYNC_PROFILE */
+
+#else /* no dispatch instrumentation */
+
+void gcd_sync_profiler_report(uint32_t sequence)
+{
+	(void)sequence;
+}
+
+#endif /* GCD, touch-path, or touch-frame profile */

@@ -17,6 +17,9 @@
 #ifndef CONFIG_SCREEN_RX_RATE_LIMIT
 #define CONFIG_SCREEN_RX_RATE_LIMIT 0
 #endif
+#ifndef CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE
+#define CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE 0
+#endif
 
 #if CONFIG_SCREEN_FPS_PROFILE
 typedef struct screen_rx_stage_stats_s {
@@ -227,7 +230,8 @@ void carbox_screen_rx_stage_report(uint32_t sequence)
 /* In the compact-profiler build no other feature owns lwip_recv.  Full queue
  * profiling and RX limiting call carbox_screen_rx_stage_recv() from their
  * existing wrappers instead, preventing duplicate linker wrappers. */
-#if !CONFIG_SCREEN_QUEUE_PROFILE && !CONFIG_SCREEN_RX_RATE_LIMIT
+#if !CONFIG_SCREEN_QUEUE_PROFILE && !CONFIG_SCREEN_RX_RATE_LIMIT && \
+	!CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE
 extern ssize_t __real_lwip_recv(int socket, void *buffer, size_t bytes,
 				int flags);
 

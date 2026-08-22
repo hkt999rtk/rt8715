@@ -10,6 +10,11 @@ extern "C" {
 /* Called by the existing 10-second PC-profiler reporter task. */
 void screen_queue_profiler_report(uint32_t sequence);
 
+/* Called by the isolated screen timestamp generator/wrapper. */
+void carbox_screen_timestamp_profile_sample(uint64_t original_ticks,
+					    uint64_t emitted_ntp,
+					    uint32_t sample_us);
+
 #ifdef __cplusplus
 }
 #endif

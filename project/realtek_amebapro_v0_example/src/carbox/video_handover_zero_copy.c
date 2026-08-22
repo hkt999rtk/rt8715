@@ -2,6 +2,7 @@
 #include "screen_rx_record_profiler.h"
 #include "screen_queue_wait.h"
 #include "screen_rx_stage_profiler.h"
+#include "screen_rx_rate_limit.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -92,6 +93,8 @@ static uint32_t screen_fps_begin(int bytes)
 	TaskHandle_t task = xTaskGetCurrentTaskHandle();
 	uint32_t now_us = hal_read_curtime_us();
 	uint32_t delta_us = 0U;
+
+	carbox_screen_rx_rate_limit_frame();
 
 	taskENTER_CRITICAL();
 	if (screen_fps_have_arrival) {
