@@ -1619,11 +1619,13 @@ static void pcprof_task(void *arg)
 		}
 
 		sequence++;
+#if defined(CONFIG_PC_PROFILER_SELF_REPORT) && CONFIG_PC_PROFILER_SELF_REPORT
 		pcprof_report(sequence, old_buffer, count, invalid, nested, late,
 			      dropped, isr_cycles, isr_cycles_max,
 			      interval_cycles_sum, interval_cycles_max,
 			      interval_count, late_10us, late_100us,
 			      caller_attributed);
+#endif
 #if CONFIG_PC_PROFILER_PLATFORM_REPORT
 		pcprof_clock_report(sequence);
 #endif
@@ -1635,10 +1637,13 @@ static void pcprof_task(void *arg)
 #if CONFIG_PC_PROFILER_PLATFORM_REPORT
 		carbox_i2c_bitbang_pacing_report(sequence);
 #endif
-#if defined(CONFIG_NCM_TX_PIPELINE) && CONFIG_NCM_TX_PIPELINE
+#if defined(CONFIG_NCM_TX_PIPELINE) && CONFIG_NCM_TX_PIPELINE && \
+	defined(CONFIG_NCM_TX_ASYNC_PROFILE) && CONFIG_NCM_TX_ASYNC_PROFILE
 		rltk_ncm_tx_pipeline_report(sequence);
 #endif
+#if defined(CONFIG_CRYPTO_ENGINE_PROFILE) && CONFIG_CRYPTO_ENGINE_PROFILE
 		carbox_crypto_irq_controller_report(sequence);
+#endif
 		if (chacha_rtl8195b_partial_selftest_report != NULL) {
 			chacha_rtl8195b_partial_selftest_report(sequence);
 		}

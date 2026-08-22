@@ -9,6 +9,10 @@
 #define CONFIG_TOUCH_MOVE_SAMPLE_HZ 0
 #endif
 
+#ifndef CONFIG_TOUCH_PATH_REPORT_DETAIL
+#define CONFIG_TOUCH_PATH_REPORT_DETAIL 0
+#endif
+
 #ifndef CONFIG_CAR_ACK_TCP_PROFILE
 #define CONFIG_CAR_ACK_TCP_PROFILE 0
 #endif
@@ -25,7 +29,7 @@
 #define CONFIG_AIRPLAY_HID_HTTP_BYPASS 0
 #endif
 
-#if CONFIG_TOUCH_PATH_PROFILE
+#if CONFIG_TOUCH_PATH_PROFILE || CONFIG_AIRPLAY_HID_HTTP_BYPASS
 
 #include <string.h>
 
@@ -201,6 +205,7 @@ typedef struct touch_path_stats_s {
 	uint32_t http_bypass_write_partial;
 	uint32_t http_bypass_write_error;
 	uint32_t http_bypass_released;
+	uint32_t http_bypass_coalesced;
 	uint32_t http_bypass_depth_peak;
 	uint32_t http_bypass_drain_calls;
 	uint32_t http_bypass_drain_bytes;
@@ -288,6 +293,8 @@ typedef struct touch_path_stats_s {
 	uint32_t move_sample_down;
 	uint32_t move_sample_release;
 	uint32_t move_sample_passthrough;
+	uint32_t move_sample_gate_waits;
+	uint32_t move_sample_edge_flushes;
 	uint32_t report5_x_min;
 	uint32_t report5_x_max;
 	uint32_t report5_y_min;
@@ -341,6 +348,7 @@ typedef struct touch_path_stats_s {
 	touch_path_stage_t event_to_hid_return;
 	touch_path_stage_t event_to_http_enqueue;
 	touch_path_stage_t event_to_http_write;
+	touch_path_stage_t move_sample_write_interval;
 	touch_path_tail_t event_to_hid_tail;
 	touch_path_tail_t event_to_http_write_tail;
 	touch_path_tail_t event_to_http_200_tail;
@@ -370,7 +378,9 @@ typedef struct touch_http_slot_s {
 	uint8_t active;
 	uint8_t write_started;
 	uint8_t write_completed;
+	uint8_t is_touch;
 	uint8_t is_release;
+	uint8_t is_down;
 	uint8_t response_post_valid;
 	uint8_t pipeline_state;
 } touch_http_slot_t;
@@ -466,7 +476,11 @@ typedef struct touch_path_state_s {
 	uint8_t current_car_release_lt50;
 	uint8_t current_forward_is_release;
 	uint8_t hid_is_release;
+	uint8_t hid_is_down;
+	uint8_t hid_is_touch;
 	uint8_t dispatch_is_release;
+	uint8_t dispatch_is_down;
+	uint8_t dispatch_is_touch;
 	uint8_t post_release_active;
 	uint8_t generic_active;
 	uint8_t generic_forward_active;
@@ -497,6 +511,8 @@ typedef struct touch_path_state_s {
 	TaskHandle_t bypass_write_task;
 	void *bypass_write_message;
 	uint32_t bypass_depth;
+	uint32_t bypass_last_touch_write_us;
+	uint8_t bypass_touch_active;
 	uint8_t bypass_worker_scheduled;
 	uint8_t bypass_drain_scheduled;
 #endif
@@ -809,7 +825,7 @@ static touch_http_slot_t *touch_http_allocate(void *client, void *message,
 					       uint32_t hid_start_us,
 					       uint32_t action_start_us,
 					       uint32_t enqueue_us,
-					       int is_release,
+					       int is_touch, int is_release, int is_down,
 					       uint32_t sequence)
 {
 	uint32_t i;
@@ -839,7 +855,9 @@ static touch_http_slot_t *touch_http_allocate(void *client, void *message,
 	free_slot->hid_start_us = hid_start_us;
 	free_slot->action_start_us = action_start_us;
 	free_slot->enqueue_us = enqueue_us;
+	free_slot->is_touch = is_touch != 0;
 	free_slot->is_release = is_release != 0;
+	free_slot->is_down = is_down != 0;
 	free_slot->sequence = sequence;
 	free_slot->active = 1U;
 #if CONFIG_AIRPLAY_HID_HTTP_PIPELINE_DEPTH > 0
@@ -1167,7 +1185,8 @@ static int32_t touch_http_bypass_drain(void *client)
 	return 0;
 }
 
-static void touch_http_bypass_schedule_worker(void *client, int delayed)
+static void touch_http_bypass_schedule_worker(void *client,
+					      uint32_t delay_us, int force)
 {
 	void *queue;
 	int schedule = 0;
@@ -1177,16 +1196,16 @@ static void touch_http_bypass_schedule_worker(void *client, int delayed)
 		return;
 	}
 	taskENTER_CRITICAL();
-	if (!touch_path_state.bypass_worker_scheduled) {
+	if (force || !touch_path_state.bypass_worker_scheduled) {
 		touch_path_state.bypass_worker_scheduled = 1U;
 		schedule = 1;
 	}
 	taskEXIT_CRITICAL();
 	if (schedule) {
 		(void)CFRetain(client);
-		if (delayed) {
+		if (delay_us != 0U) {
 			dispatch_after_f(dispatch_time(0U,
-				TOUCH_HTTP_BYPASS_RETRY_NS), queue, client,
+				(int64_t)delay_us * 1000LL), queue, client,
 				touch_http_bypass_worker);
 		} else {
 			dispatch_async_f(queue, client,
@@ -1221,6 +1240,7 @@ static void touch_http_bypass_schedule_drain(void *client)
 static int32_t touch_http_bypass_enqueue(void *client, void *message)
 {
 	int32_t result = touch_http_bypass_prepare(message);
+	int force = 0;
 
 	if (result != 0) {
 		return result;
@@ -1243,11 +1263,21 @@ static int32_t touch_http_bypass_enqueue(void *client, void *message)
 			&touch_path_state.bypass_head;
 		touch_path_state.bypass_worker_scheduled = 0U;
 		touch_path_state.bypass_drain_scheduled = 0U;
+		touch_path_state.bypass_touch_active = 0U;
+		touch_path_state.move_sample_active = 0U;
+		touch_path_state.bypass_last_touch_write_us = 0U;
+		touch_path_state.move_sample_next_due_us = 0U;
 	}
 	*touch_path_state.bypass_tail = message;
 	touch_path_state.bypass_tail = (void **)((uint8_t *)message +
 		TOUCH_HTTP_MESSAGE_NEXT_OFFSET);
 	touch_path_state.bypass_depth++;
+	{
+		touch_http_slot_t *slot = touch_http_find(message);
+
+		force = (slot != NULL) && slot->is_touch &&
+			(slot->is_down || slot->is_release);
+	}
 	touch_path_stats.http_bypass_enqueued++;
 	if (touch_path_state.bypass_depth >
 	    touch_path_stats.http_bypass_depth_peak) {
@@ -1255,7 +1285,7 @@ static int32_t touch_http_bypass_enqueue(void *client, void *message)
 			touch_path_state.bypass_depth;
 	}
 	taskEXIT_CRITICAL();
-	touch_http_bypass_schedule_worker(client, 0);
+	touch_http_bypass_schedule_worker(client, 0U, force);
 	return 0;
 }
 
@@ -1282,17 +1312,78 @@ static void touch_http_bypass_worker(void *context)
 	for (;;) {
 		void *message;
 		void *next;
+		void *discard_move = NULL;
+		touch_http_slot_t *slot;
+		touch_http_slot_t *next_slot;
+		uint32_t gate_delay_us = 0U;
 		int32_t result;
 
 		taskENTER_CRITICAL();
 		message = touch_path_state.bypass_head;
 		if (message != NULL) {
-			touch_path_state.bypass_write_task =
-				xTaskGetCurrentTaskHandle();
-			touch_path_state.bypass_write_message = message;
+			slot = touch_http_find(message);
+			next = touch_http_pointer_at(message,
+				TOUCH_HTTP_MESSAGE_NEXT_OFFSET);
+			next_slot = next != NULL ? touch_http_find(next) : NULL;
+
+#if CONFIG_TOUCH_MOVE_SAMPLE_HZ > 0
+			/* While the dequeue gate is closed, retain only the newest
+			 * contiguous move.  Edges form hard ordering boundaries. */
+			if ((slot != NULL) && slot->is_touch && !slot->write_started &&
+			    !slot->is_down && !slot->is_release &&
+			    (next_slot != NULL) && next_slot->is_touch &&
+			    !next_slot->is_down &&
+			    !next_slot->is_release) {
+				discard_move = message;
+				touch_path_state.bypass_head = next;
+				if (touch_path_state.bypass_depth != 0U) {
+					touch_path_state.bypass_depth--;
+				}
+				touch_path_stats.http_bypass_coalesced++;
+				touch_path_stats.move_sample_suppressed++;
+				memset(slot, 0, sizeof(*slot));
+			} else if ((slot != NULL) && slot->is_touch && !slot->is_down &&
+				   !slot->is_release &&
+				   touch_path_state.bypass_touch_active) {
+				uint32_t now_us = hal_read_curtime_us();
+				uint32_t elapsed_us = now_us -
+					touch_path_state.bypass_last_touch_write_us;
+				int boundary_follows = (next_slot != NULL) &&
+					(!next_slot->is_touch || next_slot->is_down ||
+					 next_slot->is_release);
+
+				if (!boundary_follows &&
+				    (elapsed_us < TOUCH_MOVE_SAMPLE_PERIOD_US)) {
+					touch_path_stats.move_sample_gate_waits++;
+					gate_delay_us =
+						TOUCH_MOVE_SAMPLE_PERIOD_US - elapsed_us;
+					touch_path_state.move_sample_next_due_us =
+						touch_path_state.bypass_last_touch_write_us +
+						TOUCH_MOVE_SAMPLE_PERIOD_US;
+				} else if (boundary_follows &&
+					   (elapsed_us < TOUCH_MOVE_SAMPLE_PERIOD_US)) {
+					touch_path_stats.move_sample_edge_flushes++;
+				}
+			}
+#endif
+			if ((discard_move == NULL) && (gate_delay_us == 0U)) {
+				touch_path_state.bypass_write_task =
+					xTaskGetCurrentTaskHandle();
+				touch_path_state.bypass_write_message = message;
+			}
 		}
 		taskEXIT_CRITICAL();
+		if (discard_move != NULL) {
+			CFRelease(discard_move);
+			CFRelease(client);
+			continue;
+		}
 		if (message == NULL) {
+			break;
+		}
+		if (gate_delay_us != 0U) {
+			touch_http_bypass_schedule_worker(client,
+				gate_delay_us, 0);
 			break;
 		}
 
@@ -1302,6 +1393,9 @@ static void touch_http_bypass_worker(void *context)
 		touch_path_state.bypass_write_task = NULL;
 		touch_path_state.bypass_write_message = NULL;
 		if (result == 0) {
+			uint32_t write_complete_us = hal_read_curtime_us();
+			touch_http_slot_t *completed_slot = touch_http_find(message);
+
 			next = touch_http_pointer_at(
 				message, TOUCH_HTTP_MESSAGE_NEXT_OFFSET);
 			touch_path_state.bypass_head = next;
@@ -1314,11 +1408,34 @@ static void touch_http_bypass_worker(void *context)
 			}
 			touch_path_stats.http_bypass_write_complete++;
 			touch_path_stats.http_bypass_released++;
-			{
-				touch_http_slot_t *slot = touch_http_find(message);
-				if (slot != NULL) {
-					memset(slot, 0, sizeof(*slot));
+			if ((completed_slot != NULL) && completed_slot->is_touch) {
+#if CONFIG_TOUCH_MOVE_SAMPLE_HZ > 0
+				touch_path_stats.move_sample_sent++;
+				if (completed_slot->is_release) {
+					touch_path_state.bypass_touch_active = 0U;
+					touch_path_state.move_sample_active = 0U;
+					touch_path_state.bypass_last_touch_write_us = 0U;
+					touch_path_state.move_sample_next_due_us = 0U;
+				} else {
+					if (!completed_slot->is_down &&
+					    (touch_path_state.bypass_last_touch_write_us != 0U)) {
+						touch_path_stage_add(
+							&touch_path_stats.move_sample_write_interval,
+							write_complete_us -
+							touch_path_state.bypass_last_touch_write_us);
+					}
+					touch_path_state.bypass_touch_active = 1U;
+					touch_path_state.move_sample_active = 1U;
+					touch_path_state.bypass_last_touch_write_us =
+						write_complete_us;
+					touch_path_state.move_sample_next_due_us =
+						write_complete_us +
+						TOUCH_MOVE_SAMPLE_PERIOD_US;
 				}
+#endif
+			}
+			if (completed_slot != NULL) {
+				memset(completed_slot, 0, sizeof(*completed_slot));
 			}
 		} else if (result == TOUCH_OSSTATUS_WOULD_BLOCK) {
 			touch_path_stats.http_bypass_write_partial++;
@@ -1337,7 +1454,7 @@ static void touch_http_bypass_worker(void *context)
 			continue;
 		}
 		if (result == TOUCH_OSSTATUS_WOULD_BLOCK) {
-			touch_http_bypass_schedule_worker(client, 1);
+			touch_http_bypass_schedule_worker(client, 1000U, 0);
 		}
 		break;
 	}
@@ -1352,6 +1469,10 @@ static void touch_http_bypass_worker(void *context)
 			&touch_path_state.bypass_head;
 		touch_path_state.bypass_depth = 0U;
 		touch_path_state.bypass_client = NULL;
+		touch_path_state.bypass_touch_active = 0U;
+		touch_path_state.move_sample_active = 0U;
+		touch_path_state.bypass_last_touch_write_us = 0U;
+		touch_path_state.move_sample_next_due_us = 0U;
 		taskEXIT_CRITICAL();
 		while (discard != NULL) {
 			void *next = touch_http_pointer_at(
@@ -1841,62 +1962,30 @@ void __wrap_lib_carplay_touch(uint32_t action, uint32_t x, uint32_t y)
 	taskEXIT_CRITICAL();
 }
 
-/*
- * Sample an over-rate absolute-touch stream without delaying its edges.
- * This deliberately keeps no timer or deferred report: at each 30 Hz slot we
- * forward the newest vehicle sample that has arrived, while down and release
- * always pass synchronously.  The signed subtraction is rollover-safe for
- * intervals shorter than half of the 32-bit microsecond counter range.
- * Caller holds the FreeRTOS critical section.
- */
-static int touch_move_sample_should_send(const void *report, uint32_t length,
-					 uint32_t now_us)
+/* Classify input only.  Rate limiting happens at the bypass dequeue boundary,
+ * immediately before the ChaCha/TCP write, so pending moves can be coalesced
+ * to the newest position.  Caller holds the FreeRTOS critical section. */
+static void touch_move_sample_record_input(const void *report, uint32_t length,
+					   int is_down)
 {
 #if CONFIG_TOUCH_MOVE_SAMPLE_HZ > 0
 	const uint8_t *bytes = (const uint8_t *)report;
 
 	if ((bytes == NULL) || (length != 5U)) {
 		touch_path_stats.move_sample_passthrough++;
-		return 1;
+		return;
 	}
 
 	touch_path_stats.move_sample_input++;
 	if (touch_action_is_release(bytes[0])) {
 		touch_path_stats.move_sample_release++;
-		touch_path_stats.move_sample_sent++;
-		touch_path_state.move_sample_active = 0U;
-		touch_path_state.move_sample_next_due_us = 0U;
-		return 1;
-	}
-
-	if (!touch_path_state.move_sample_active) {
+	} else if (is_down) {
 		touch_path_stats.move_sample_down++;
-		touch_path_stats.move_sample_sent++;
-		touch_path_state.move_sample_active = 1U;
-		touch_path_state.move_sample_next_due_us =
-			now_us + TOUCH_MOVE_SAMPLE_PERIOD_US;
-		return 1;
 	}
-
-	if ((int32_t)(now_us - touch_path_state.move_sample_next_due_us) < 0) {
-		touch_path_stats.move_sample_suppressed++;
-		return 0;
-	}
-
-	{
-		uint32_t late_us = now_us - touch_path_state.move_sample_next_due_us;
-		uint32_t periods = (late_us / TOUCH_MOVE_SAMPLE_PERIOD_US) + 1U;
-
-		touch_path_state.move_sample_next_due_us +=
-			periods * TOUCH_MOVE_SAMPLE_PERIOD_US;
-	}
-	touch_path_stats.move_sample_sent++;
-	return 1;
 #else
 	(void)report;
 	(void)length;
-	(void)now_us;
-	return 1;
+	(void)is_down;
 #endif
 }
 
@@ -1906,7 +1995,9 @@ int32_t __wrap_AirPlayReceiverSessionSendHIDReport(
 	TaskHandle_t current = xTaskGetCurrentTaskHandle();
 	uint32_t start_us = hal_read_curtime_us();
 	uint32_t event_start_us = 0U;
+	int is_touch = 0;
 	int is_release = 0;
+	int is_down = 0;
 	int event_matched = 0;
 	int matched = 0;
 	int32_t result;
@@ -1914,11 +2005,15 @@ int32_t __wrap_AirPlayReceiverSessionSendHIDReport(
 	taskENTER_CRITICAL();
 	touch_path_stats.iphone_hid_calls++;
 	touch_hid_format_record(report, length);
-	touch_report5_record(device_uid, report, length, start_us);
-	if (!touch_move_sample_should_send(report, length, start_us)) {
-		taskEXIT_CRITICAL();
-		return 0;
+	if ((report != NULL) && (length == 5U)) {
+		const uint8_t *bytes = (const uint8_t *)report;
+
+		is_touch = 1;
+		is_release = touch_action_is_release(bytes[0]);
+		is_down = !is_release && !touch_path_state.report5_touch_active;
 	}
+	touch_move_sample_record_input(report, length, is_down);
+	touch_report5_record(device_uid, report, length, start_us);
 	touch_path_state.hid_sequence = 0U;
 	event_matched = touch_path_state.event_active &&
 		(touch_path_state.event_task == current);
@@ -1987,7 +2082,12 @@ int32_t __wrap_AirPlayReceiverSessionSendHIDReport(
 		event_start_us : start_us;
 	touch_path_state.hid_action_start_us = matched ?
 		touch_path_state.touch_start_us : start_us;
-	touch_path_state.hid_is_release = matched && (is_release != 0);
+	/* Transport behaviour must come directly from the HID report.  The
+	 * profiler's vehicle/forward correlation is diagnostic only and may be
+	 * disabled or legitimately miss an event. */
+	touch_path_state.hid_is_release = is_release != 0;
+	touch_path_state.hid_is_down = is_down != 0;
+	touch_path_state.hid_is_touch = is_touch != 0;
 	touch_path_state.hid_active = 1U;
 	taskEXIT_CRITICAL();
 
@@ -2046,6 +2146,10 @@ uint32_t carbox_touch_dispatch_sync_begin(void)
 			touch_path_state.hid_action_start_us;
 		touch_path_state.dispatch_is_release =
 			touch_path_state.hid_is_release;
+		touch_path_state.dispatch_is_down =
+			touch_path_state.hid_is_down;
+		touch_path_state.dispatch_is_touch =
+			touch_path_state.hid_is_touch;
 		touch_path_state.dispatch_sequence =
 			touch_path_state.hid_sequence;
 		touch_path_stats.dispatch_calls++;
@@ -2131,7 +2235,9 @@ int32_t __wrap_HTTPClientSendMessage(void *client, void *message)
 		action_start_us = touch_path_state.dispatch_action_start_us;
 		if (touch_http_allocate(client, message, source_start_us,
 					hid_start_us, action_start_us, enqueue_us,
+					touch_path_state.dispatch_is_touch,
 					touch_path_state.dispatch_is_release,
+					touch_path_state.dispatch_is_down,
 					touch_path_state.dispatch_sequence) != NULL) {
 			touch_path_stats.http_enqueued++;
 			touch_path_stage_add(&touch_path_stats.event_to_http_enqueue,
@@ -2631,6 +2737,7 @@ static unsigned long touch_path_stage_avg(const touch_path_stage_t *stage)
 
 void carbox_touch_path_profiler_report(uint32_t sequence)
 {
+#if CONFIG_TOUCH_PATH_PROFILE
 	static touch_path_stats_t stats;
 	uint32_t now_us = hal_read_curtime_us();
 	uint32_t last_car_touch_us;
@@ -2813,6 +2920,7 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 	}
 	rt_printf("\r\n");
 #endif
+#if CONFIG_TOUCH_PATH_REPORT_DETAIL
 	rt_printf("[TOUCHSTATE][%lu] action_semantics 0=release nonzero=contact/move "
 		  "car contact/release/start/down_lt50/suppressed_down/supp_down_lt50/duplicate="
 		  "%lu/%lu/%lu/%lu/%lu/%lu/%lu forward contact/release/mismatch="
@@ -2844,11 +2952,11 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 		  (unsigned long)stats.descriptor_errors,
 		  (unsigned long)stats.report_len_mismatch,
 		  (unsigned long)stats.report_uid_mismatch);
+#endif
 	rt_printf("[HIDREPORT][%lu] len 5/12/other=%lu/%lu/%lu "
-		  "five contact/release/down/up/dup_contact/dup_release="
-		  "%lu/%lu/%lu/%lu/%lu/%lu active=%u flags_upper=%lu "
-		  "xy x=%lu-%lu y=%lu-%lu oob_x/y=%lu/%lu moved/same/flip=%lu/%lu/%lu "
-		  "contact_after_up=%lu release_age_ms=%ld uids=",
+		  "contact/release/down/up=%lu/%lu/%lu/%lu active=%u "
+		  "moved/same/flip=%lu/%lu/%lu contact_after_up=%lu "
+		  "release_age_ms=%ld\r\n",
 		  (unsigned long)sequence,
 		  (unsigned long)stats.report_len5,
 		  (unsigned long)stats.report_len12,
@@ -2857,40 +2965,18 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 		  (unsigned long)stats.report5_release,
 		  (unsigned long)stats.report5_down,
 		  (unsigned long)stats.report5_up,
-		  (unsigned long)stats.report5_duplicate_contact,
-		  (unsigned long)stats.report5_duplicate_release,
 		  (unsigned)report5_touch_active,
-		  (unsigned long)stats.report5_upper_flag_bits,
-		  (unsigned long)stats.report5_x_min,
-		  (unsigned long)stats.report5_x_max,
-		  (unsigned long)stats.report5_y_min,
-		  (unsigned long)stats.report5_y_max,
-		  (unsigned long)stats.report5_x_out_of_range,
-		  (unsigned long)stats.report5_y_out_of_range,
 		  (unsigned long)stats.report5_moved,
 		  (unsigned long)stats.report5_same_xy,
 		  (unsigned long)stats.report5_direction_flip,
 		  (unsigned long)stats.report_after_up_contact,
 		  last_report_release_us != 0U ?
 			(long)((now_us - last_report_release_us) / 1000U) : -1L);
-	for (i = 0U; i < TOUCH_HID_UID_SLOTS; i++) {
-		const touch_hid_uid_stat_t *uid = &stats.iphone_hid_uid[i];
-
-		if (uid->valid) {
-			rt_printf(" %lu:%lu(%u-%u)",
-				  (unsigned long)uid->uid,
-				  (unsigned long)uid->count,
-				  (unsigned)uid->min_len,
-				  (unsigned)uid->max_len);
-		}
-	}
-	if (stats.report_uid_overflow != 0U) {
-		rt_printf(" overflow=%lu", (unsigned long)stats.report_uid_overflow);
-	}
-	rt_printf("\r\n");
 	rt_printf("[HIDSAMPLE][%lu] enabled/hz/period_us=%u/%u/%lu "
 		  "input/sent/suppressed/down/release/passthrough="
-		  "%lu/%lu/%lu/%lu/%lu/%lu active=%u next_due_in_us=%ld\r\n",
+		  "%lu/%lu/%lu/%lu/%lu/%lu gate_waits/edge_flushes=%lu/%lu "
+		  "write_interval n/avg/max=%lu/%lu/%lu active=%u "
+		  "next_due_in_us=%ld\r\n",
 		  (unsigned long)sequence,
 		  (unsigned)(CONFIG_TOUCH_MOVE_SAMPLE_HZ > 0),
 		  (unsigned)CONFIG_TOUCH_MOVE_SAMPLE_HZ,
@@ -2905,10 +2991,16 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 		  (unsigned long)stats.move_sample_down,
 		  (unsigned long)stats.move_sample_release,
 		  (unsigned long)stats.move_sample_passthrough,
+		  (unsigned long)stats.move_sample_gate_waits,
+		  (unsigned long)stats.move_sample_edge_flushes,
+		  (unsigned long)stats.move_sample_write_interval.samples,
+		  touch_path_stage_avg(&stats.move_sample_write_interval),
+		  (unsigned long)stats.move_sample_write_interval.max_us,
 		  (unsigned)move_sample_active,
 		  move_sample_active ?
 			(long)(int32_t)(move_sample_next_due_us - now_us) :
 			0L);
+#if CONFIG_TOUCH_PATH_REPORT_DETAIL
 	rt_printf("[TOUCHSTATE][%lu] active car/forward/iphone=%u/%u/%u "
 		  "age_ms contact/car_release/iphone_release=%ld/%ld/%ld "
 		  "last action/x/y=%lu/%lu/%lu\r\n",
@@ -2964,6 +3056,8 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 		  (unsigned long)last_hid_sequence,
 		  (unsigned long)last_http_enqueue_sequence,
 		  (unsigned long)last_http_write_sequence);
+#endif
+#if CONFIG_TOUCH_PATH_REPORT_DETAIL
 	rt_printf("[HIDFLOW][%lu] safe_parser_counter car_commands/out_hid="
 		  "%lu/%lu http_enq/write/2xx=%lu/%lu/%lu "
 		  "car_body_bytes=%lu min/max=%lu/%lu\r\n",
@@ -3009,6 +3103,7 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 		  (unsigned long)stats.http_write_while_pending,
 		  (unsigned long)stats.http_wire_inflight_peak,
 		  (unsigned long)stats.http_response_reorder);
+#endif
 #if CONFIG_AIRPLAY_HID_HTTP_PIPELINE_DEPTH > 0
 	rt_printf("[HIDHTTPPIPE][%lu] depth=%u schedule/run=%lu/%lu "
 		  "prewrite/fake/partial/error=%lu/%lu/%lu/%lu "
@@ -3026,7 +3121,7 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 #endif
 #if CONFIG_AIRPLAY_HID_HTTP_BYPASS
 	rt_printf("[HIDHTTPBYPASS][%lu] queue now/peak=%lu/%lu "
-		  "enq/write/release=%lu/%lu/%lu partial/error=%lu/%lu "
+		  "enq/write/release/coalesced=%lu/%lu/%lu/%lu partial/error=%lu/%lu "
 		  "drain calls/bytes/wouldblock/error/vendor_block=%lu/%lu/%lu/%lu/%lu "
 		  "ready plain/socket/no_data/ioctl_err=%lu/%lu/%lu/%lu "
 		  "worker/vendor_overlap=%lu/%lu\r\n",
@@ -3036,6 +3131,7 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 		  (unsigned long)stats.http_bypass_enqueued,
 		  (unsigned long)stats.http_bypass_write_complete,
 		  (unsigned long)stats.http_bypass_released,
+		  (unsigned long)stats.http_bypass_coalesced,
 		  (unsigned long)stats.http_bypass_write_partial,
 		  (unsigned long)stats.http_bypass_write_error,
 		  (unsigned long)stats.http_bypass_drain_calls,
@@ -3050,6 +3146,7 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 		  (unsigned long)stats.http_bypass_worker_runs,
 		  (unsigned long)stats.http_bypass_vendor_overlap);
 #endif
+#if CONFIG_TOUCH_PATH_REPORT_DETAIL
 	rt_printf("[IPHONEHTTPRX][%lu] reader gcd/other=%lu/%lu prio_min/max=%lu/%lu "
 		  "lwip_read calls/bytes/post_missing=%lu/%lu/%lu\r\n",
 		  (unsigned long)sequence,
@@ -3096,6 +3193,7 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 		  car_socket_valid ? car_socket_fd : -1,
 		  car_socket_nodelay_valid ? (int)car_socket_nodelay : -1,
 		  (unsigned)car_socket_nodelay_valid);
+#endif
 #if CONFIG_CAR_ACK_TCP_PROFILE
 	rt_printf("[CARACKTCP][%lu] valid=%d marked/acked/already/pending/max/overflow="
 		  "%lu/%lu/%lu/%lu/%lu/%lu pcb_nodelay=%d nodelay set/missing="
@@ -3173,6 +3271,7 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 		  (unsigned long)stats.car_rx_pending_ioctl_errors,
 		  (unsigned long)car_rx_drain_streak,
 		  (unsigned long)stats.car_rx_drain_streak_max);
+#if CONFIG_TOUCH_PATH_REPORT_DETAIL
 	rt_printf("[EVENTREARM][%lu] read_complete_to_next_read_us n/avg/max="
 		  "%lu/%lu/%lu parser_complete_to_next_read=%lu/%lu/%lu "
 		  "ack_complete_to_next_read=%lu/%lu/%lu\r\n",
@@ -3209,6 +3308,7 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 		  (unsigned long)stats.event_to_http_200_tail.gt_5ms,
 		  (unsigned long)stats.event_to_http_200_tail.gt_10ms,
 		  (unsigned long)stats.event_to_http_200_tail.gt_16ms);
+#endif
 	rt_printf("[TOUCHAFTERRELEASE][%lu] active=%u release_seq=%lu "
 		  "contact car/forward/hid/http_write=%lu/%lu/%lu/%lu "
 		  "quiet_gt100ms hid/http_write=%lu/%lu "
@@ -3367,6 +3467,9 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 		  (unsigned long)stats.dispatch_total_tail.gt_5ms,
 		  (unsigned long)stats.dispatch_total_tail.gt_10ms,
 		  (unsigned long)stats.dispatch_total.samples);
+#endif
+#else
+	(void)sequence;
 #endif
 }
 

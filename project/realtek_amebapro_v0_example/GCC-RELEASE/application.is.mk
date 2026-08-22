@@ -916,14 +916,20 @@ TCP_PHASE_PROFILE ?= 0
 # Exact owned-screen-write split across caller task, TCP_IP, tcp_write_owned(),
 # tcp_output(), and the completion semaphore wakeup.  One aggregate line is
 # emitted by the existing 10-second profiler.
-SCREEN_TCP_WRITE_PHASE_PROFILE ?= 1
+SCREEN_TCP_WRITE_PHASE_PROFILE ?= 0
 # Detailed 10-second breakdown of tcp_input() processing. This is independent
 # of the compact 5-second TCP_PERF throughput/checksum summary above.
 TCP_CORE_PHASE_PROFILE ?= 0
 # Ten-second breakdown of tcp_output() and its synchronous WLAN transmit path.
 # This distinguishes ACK/data traffic and separates lwIP preparation/checksum/IP
 # time from skb allocation, scatter-gather copy, and closed-driver submission.
-TCP_OUTPUT_PROFILE ?= 1
+TCP_OUTPUT_PROFILE ?= 0
+TCP_OUTPUT_PROFILE_STAMP := $(OBJ_DIR)/.tcp_output_profile_$(TCP_OUTPUT_PROFILE)
+$(TCP_OUTPUT_PROFILE_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.tcp_output_profile_*
+	@touch $@
+../../../component/common/drivers/wlan/realtek/src/osdep/lwip_intf.o: $(TCP_OUTPUT_PROFILE_STAMP)
 # Ten-second timing of the en3 CDC-NCM transmit path.  The closed NCM library
 # waits synchronously for USB completion, so measure that wait separately from
 # any lwIP pbuf-chain flattening done by ethernetif.c.
@@ -961,6 +967,9 @@ $(NCM_TX_PROFILE_STAMP):
 ../src/carbox/ncm/ncm_tx.o: $(NCM_TX_PROFILE_STAMP)
 # Keep the boot-time PLL/SPIC result visible in the recurring 10-second report.
 PC_PROFILER ?= 1
+# Keep the 10-second reporter task as the common clock for focused subsystem
+# reports, but suppress its own CPU/task table after scheduler diagnosis.
+PC_PROFILER_SELF_REPORT ?= 0
 # Keep task CPU utilization and the active subsystem report, but suppress the
 # already-validated recurring clock/PLL/SPIC, I2C pacing, and firmware-slot
 # dumps during normal soak tests. Set this to 1 when platform bring-up data is
@@ -1057,7 +1066,7 @@ USBH_MAIN_TASK_PRIORITY ?= 6
 TCP_CLIENT_PRIORITY ?= 5
 # Overnight UI-freeze diagnosis: trace the CarPlay screen RX, handover queue,
 # and TX stages in the existing 10-second profiler report.
-SCREEN_QUEUE_PROFILE ?= 1
+SCREEN_QUEUE_PROFILE ?= 0
 # Lightweight 30/60-fps latency probe.  It reuses the production handover and
 # lwIP-write wrappers and records counters/timestamps only; unlike the full
 # SCREEN_QUEUE_PROFILE it does not scan frames or retain histogram samples.
@@ -1241,9 +1250,13 @@ endif
 # Isolated vehicle-event -> iPhone HID bridge latency profile. This remains
 # independent of the screen, USB and crypto profilers.
 TOUCH_PATH_PROFILE ?= 1
+# The compact report keeps only the fields needed to validate input cadence,
+# dequeue coalescing, actual write cadence, queue peak and release behavior.
+# Restore this switch for the older HTTP/ACK/sequence latency investigation.
+TOUCH_PATH_REPORT_DETAIL ?= 0
 # Profile the private vendor airplay_mutex without changing its locking
 # behaviour. The touch wrapper discovers the mutex address on first use.
-AIRPLAY_MUTEX_PROFILE ?= 1
+AIRPLAY_MUTEX_PROFILE ?= 0
 ifeq ($(AIRPLAY_MUTEX_PROFILE),1)
 ifneq ($(TOUCH_PATH_PROFILE),1)
 $(error AIRPLAY_MUTEX_PROFILE requires TOUCH_PATH_PROFILE=1)
@@ -1261,7 +1274,7 @@ endif
 # Split the iPhone HID HTTP response latency at the lwIP recvmbox boundary.
 # This identifies whether a slow 200 response was late on the wire or whether
 # the priority-4 DispatchLite worker was late to consume already-arrived data.
-IPHONE_HTTP_RX_PROFILE ?= 1
+IPHONE_HTTP_RX_PROFILE ?= 0
 ifeq ($(IPHONE_HTTP_RX_PROFILE),1)
 ifneq ($(TOUCH_PATH_PROFILE),1)
 $(error IPHONE_HTTP_RX_PROFILE requires TOUCH_PATH_PROFILE=1)
@@ -1280,19 +1293,14 @@ endif
 # HID commands. The wrapper owns ordered writes and drains decrypted response
 # bytes without interpreting the HTTP response.
 AIRPLAY_HID_HTTP_BYPASS ?= 1
-ifeq ($(AIRPLAY_HID_HTTP_BYPASS),1)
-ifneq ($(TOUCH_PATH_PROFILE),1)
-$(error AIRPLAY_HID_HTTP_BYPASS requires TOUCH_PATH_PROFILE=1)
-endif
-endif
-# A/B experiment for the vehicle's roughly 50 Hz absolute-touch stream.
-# Pass the first contact and every release immediately; sample subsequent
-# move reports at the configured rate before they enter the AirPlay channel.
+# Dequeue-rate control for the vehicle's absolute-touch stream. Pass touch
+# edges immediately; while the gate is closed, coalesce pending moves and
+# write only the newest position when the configured interval expires.
 # Set to 0 to restore the unmodified one-report-in/one-report-out behaviour.
-TOUCH_MOVE_SAMPLE_HZ ?= 0
+TOUCH_MOVE_SAMPLE_HZ ?= 30
 ifneq ($(TOUCH_MOVE_SAMPLE_HZ),0)
-ifneq ($(TOUCH_PATH_PROFILE),1)
-$(error TOUCH_MOVE_SAMPLE_HZ requires TOUCH_PATH_PROFILE=1)
+ifneq ($(AIRPLAY_HID_HTTP_BYPASS),1)
+$(error TOUCH_MOVE_SAMPLE_HZ requires AIRPLAY_HID_HTTP_BYPASS=1)
 endif
 endif
 # Lightweight correlation of outgoing HID timing, its synchronous GCD wait,
@@ -1345,7 +1353,7 @@ $(SCREEN_FLOW_PROFILE_STAMP):
 # These switches affect several standalone profiler/wrapper objects.  Track
 # them explicitly so a diagnostic override cannot reuse release-mode objects.
 CRYPTO_ENGINE_PROFILE ?= 0
-DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-platform$(PC_PROFILER_PLATFORM_REPORT)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)-touch$(TOUCH_PATH_PROFILE)-airmutex$(AIRPLAY_MUTEX_PROFILE)-carack$(CAR_ACK_TCP_PROFILE)-iphonerx$(IPHONE_HTTP_RX_PROFILE)-hidpipe$(AIRPLAY_HID_HTTP_PIPELINE_DEPTH)-hidbypass$(AIRPLAY_HID_HTTP_BYPASS)-touchsample$(TOUCH_MOVE_SAMPLE_HZ)-touchframe$(TOUCH_FRAME_PROFILE)-gcd$(GCD_SYNC_PROFILE)-gcdprio$(GCD_WORK_PRIORITY)-uisr$(USBH_ISR_TASK_PRIORITY)-umain$(USBH_MAIN_TASK_PRIORITY)-tcpclient$(TCP_CLIENT_PRIORITY)-rxrec$(SCREEN_RX_RECORD_PROFILE)-crypto$(CRYPTO_ENGINE_PROFILE)-cryptotmo$(CARBOX_CRYPTO_IRQ_TIMEOUT_MS)
+DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-pcreport$(PC_PROFILER_SELF_REPORT)-platform$(PC_PROFILER_PLATFORM_REPORT)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)-touch$(TOUCH_PATH_PROFILE)-touchdetail$(TOUCH_PATH_REPORT_DETAIL)-airmutex$(AIRPLAY_MUTEX_PROFILE)-carack$(CAR_ACK_TCP_PROFILE)-iphonerx$(IPHONE_HTTP_RX_PROFILE)-hidpipe$(AIRPLAY_HID_HTTP_PIPELINE_DEPTH)-hidbypass$(AIRPLAY_HID_HTTP_BYPASS)-touchsample$(TOUCH_MOVE_SAMPLE_HZ)-touchframe$(TOUCH_FRAME_PROFILE)-gcd$(GCD_SYNC_PROFILE)-gcdprio$(GCD_WORK_PRIORITY)-uisr$(USBH_ISR_TASK_PRIORITY)-umain$(USBH_MAIN_TASK_PRIORITY)-tcpclient$(TCP_CLIENT_PRIORITY)-rxrec$(SCREEN_RX_RECORD_PROFILE)-crypto$(CRYPTO_ENGINE_PROFILE)-cryptotmo$(CARBOX_CRYPTO_IRQ_TIMEOUT_MS)
 $(DIAGNOSTIC_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.diagnostic_profile_*
@@ -1527,6 +1535,7 @@ GCCFLAGS += -DCONFIG_NCM_TX_BATCH_TIMEOUT_UPPER_US=$(NCM_TX_BATCH_TIMEOUT_UPPER_
 GCCFLAGS += -DCONFIG_NCM_TX_PIPELINE=$(NCM_TX_PIPELINE)
 GCCFLAGS += -DCONFIG_NCM_TX_LINKED_GDMA=$(NCM_TX_LINKED_GDMA)
 GCCFLAGS += -DCONFIG_PC_PROFILER=$(PC_PROFILER)
+GCCFLAGS += -DCONFIG_PC_PROFILER_SELF_REPORT=$(PC_PROFILER_SELF_REPORT)
 GCCFLAGS += -DCONFIG_PC_PROFILER_PLATFORM_REPORT=$(PC_PROFILER_PLATFORM_REPORT)
 GCCFLAGS += -DCONFIG_PC_PROFILER_PC_DETAIL=$(PC_PROFILER_PC_DETAIL)
 GCCFLAGS += -DCONFIG_PC_PROFILER_RTW_RECV_DETAIL=$(PC_PROFILER_RTW_RECV_DETAIL)
@@ -1630,6 +1639,7 @@ GCCFLAGS += -DCONFIG_USB_NCM_RX_PROFILE=$(USB_NCM_RX_PROFILE)
 GCCFLAGS += -DCONFIG_USB_TX_LIFETIME_PROFILE=$(USB_TX_LIFETIME_PROFILE)
 GCCFLAGS += -DCONFIG_USB_PROFILE_REPORT=$(USB_PROFILE_REPORT)
 GCCFLAGS += -DCONFIG_TOUCH_PATH_PROFILE=$(TOUCH_PATH_PROFILE)
+GCCFLAGS += -DCONFIG_TOUCH_PATH_REPORT_DETAIL=$(TOUCH_PATH_REPORT_DETAIL)
 GCCFLAGS += -DCONFIG_AIRPLAY_MUTEX_PROFILE=$(AIRPLAY_MUTEX_PROFILE)
 GCCFLAGS += -DCONFIG_CAR_ACK_TCP_PROFILE=$(CAR_ACK_TCP_PROFILE)
 GCCFLAGS += -DCONFIG_IPHONE_HTTP_RX_PROFILE=$(IPHONE_HTTP_RX_PROFILE)
@@ -1718,7 +1728,7 @@ endif
 ifeq ($(IRQ_PROFILE_USB_CH4_NCM),1)
 LFLAGS += -Wl,--wrap=usbh_ctrl_request -Wl,--wrap=ncm_receive_buf_size
 endif
-ifneq ($(filter 1,$(GCD_SYNC_PROFILE) $(TOUCH_PATH_PROFILE) $(TOUCH_FRAME_PROFILE)),)
+ifneq ($(filter 1,$(GCD_SYNC_PROFILE) $(TOUCH_PATH_PROFILE) $(TOUCH_FRAME_PROFILE) $(AIRPLAY_HID_HTTP_BYPASS)),)
 LFLAGS += -Wl,--wrap=dispatch_sync_f
 endif
 ifeq ($(AIRPLAY_MUTEX_PROFILE),1)
@@ -1848,7 +1858,13 @@ ifeq ($(IPHONE_HTTP_RX_PROFILE),1)
 LFLAGS += -Wl,--wrap=lwip_read
 endif
 endif
-ifneq ($(filter 1,$(TOUCH_PATH_PROFILE) $(TOUCH_FRAME_PROFILE)),)
+ifeq ($(AIRPLAY_HID_HTTP_BYPASS),1)
+ifneq ($(TOUCH_PATH_PROFILE),1)
+LFLAGS += -Wl,--wrap=HTTPClientSendMessage
+LFLAGS += -Wl,--wrap=HTTPMessageWriteMessage
+endif
+endif
+ifneq ($(filter 1,$(TOUCH_PATH_PROFILE) $(TOUCH_FRAME_PROFILE) $(AIRPLAY_HID_HTTP_BYPASS)),)
 LFLAGS += -Wl,--wrap=AirPlayReceiverSessionSendHIDReport
 endif
 ifeq ($(TOUCH_FRAME_PROFILE),1)

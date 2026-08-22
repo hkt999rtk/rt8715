@@ -23,6 +23,10 @@
 #define CONFIG_TOUCH_FRAME_PROFILE 0
 #endif
 
+#ifndef CONFIG_AIRPLAY_HID_HTTP_BYPASS
+#define CONFIG_AIRPLAY_HID_HTTP_BYPASS 0
+#endif
+
 #ifndef CONFIG_GCD_WORK_PRIORITY
 #define CONFIG_GCD_WORK_PRIORITY (-1)
 #endif
@@ -165,7 +169,7 @@ BaseType_t __wrap_xTaskCreate(TaskFunction_t task_code,
 #endif /* task-priority override enabled */
 
 #if CONFIG_GCD_SYNC_PROFILE || CONFIG_TOUCH_PATH_PROFILE || \
-	CONFIG_TOUCH_FRAME_PROFILE
+	CONFIG_TOUCH_FRAME_PROFILE || CONFIG_AIRPLAY_HID_HTTP_BYPASS
 
 /*
  * DispatchLite is supplied in lib_CarPlay.a without source.  Intercepting its
