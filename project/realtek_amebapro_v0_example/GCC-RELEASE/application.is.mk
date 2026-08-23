@@ -775,6 +775,7 @@ SRC_C += ../src/carbox/ota_local_upload_page.c
 SRC_C += ../src/carbox/ota/carplay_ota_compat.c
 SRC_C += ../src/carbox/irq_profiler.c
 SRC_C += ../src/carbox/usb_hcd_profiler.c
+SRC_C += ../src/carbox/usb_rx_priority.c
 SRC_C += ../src/carbox/gcd_sync_profiler.c
 SRC_C += ../src/carbox/airplay_mutex_profiler.c
 SRC_C += ../src/carbox/screen_queue_profiler.c
@@ -1056,9 +1057,8 @@ GCD_WORK_PRIORITY ?= 4
 # The closed USB HCD bottom half is short and must run immediately after the
 # top-half ISR masks USB_IRQn.  Keep it above all normal networking tasks.
 USBH_ISR_TASK_PRIORITY ?= 11
-# Keep the closed HCD main worker above the priority-4 audio and screen tasks so
-# CPU-heavy decode cannot delay USB completion handling and the next transfer.
-# It remains below TCP/IP and NCM (priority 10) and the USB ISR worker (11).
+# Preserve the closed HCD main worker's established priority while testing
+# channel-4-first interrupt service as a single isolated behavior change.
 USBH_MAIN_TASK_PRIORITY ?= 6
 # The CarPlay control/event socket is latency-sensitive.  Keep TCPClient above
 # the priority-4 screen/GCD workers while leaving USB and TCP/IP workers above it.
@@ -1233,6 +1233,9 @@ USB_NCM_RX_PROFILE ?= 0
 # Correlate customer NCM send, HCD bulk-OUT attempts, observed URB completion,
 # return, and the source pbuf release.  Counters only; customer flow is intact.
 USB_TX_LIFETIME_PROFILE ?= 0
+# Put CarBox NCM channel-4 state-change notifications at the front of the
+# closed USB core queue. Also records the HCD-to-core-queue path.
+USB_CH4_QUEUE_FRONT ?= 1
 # Master switch for recurring USBBOOT, NCMTX and optional HCD report output.
 # Instrumentation and the validated NCM TX data path remain compiled so this
 # can be restored without changing USB behaviour.
@@ -1245,6 +1248,11 @@ endif
 ifneq ($(words $(filter 1,$(USB_HCD_PROFILE) $(USB_HCD_CHANNEL_PROFILE) $(USB_NCM_RX_PROFILE) $(USB_TX_LIFETIME_PROFILE))),1)
 ifneq ($(filter 1,$(USB_HCD_PROFILE) $(USB_HCD_CHANNEL_PROFILE) $(USB_NCM_RX_PROFILE) $(USB_TX_LIFETIME_PROFILE)),)
 $(error Enable at most one HCD/NCM USB profiler)
+endif
+endif
+ifeq ($(USB_CH4_QUEUE_FRONT),1)
+ifneq ($(USB_HCD_PROFILE)$(USB_HCD_CHANNEL_PROFILE)$(USB_NCM_RX_PROFILE)$(USB_TX_LIFETIME_PROFILE)$(SCREEN_USB_PROBE),00000)
+$(error USB_CH4_QUEUE_FRONT owns the HCD wrappers; disable the other USB wrapper profiles)
 endif
 endif
 # Isolated vehicle-event -> iPhone HID bridge latency profile. This remains
@@ -1320,12 +1328,13 @@ ifneq ($(CHACHA_API_TRACE)$(CHACHA_VENDOR_TRACE)$(CHACHA_PRE_RX_VENDOR),000)
 $(error SCREEN_RX_RECORD_PROFILE requires the normal key-alias ChaCha route)
 endif
 endif
-USB_PROFILE_STAMP := $(OBJ_DIR)/.usb_profile_h$(USB_HCD_PROFILE)-c$(USB_HCD_CHANNEL_PROFILE)-rx$(USB_NCM_RX_PROFILE)-life$(USB_TX_LIFETIME_PROFILE)-screenusb$(SCREEN_USB_PROBE)-report$(USB_PROFILE_REPORT)
+USB_PROFILE_STAMP := $(OBJ_DIR)/.usb_profile_h$(USB_HCD_PROFILE)-c$(USB_HCD_CHANNEL_PROFILE)-rx$(USB_NCM_RX_PROFILE)-life$(USB_TX_LIFETIME_PROFILE)-ch4front$(USB_CH4_QUEUE_FRONT)-screenusb$(SCREEN_USB_PROBE)-report$(USB_PROFILE_REPORT)
 $(USB_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.usb_profile_*
 	@touch $@
 ../src/carbox/usb_hcd_profiler.o \
+	../src/carbox/usb_rx_priority.o \
 	../src/carbox/pc_profiler.o: $(USB_PROFILE_STAMP)
 NET_QUEUE_PROFILE ?= 0
 # Make the RX/queue/TX diagnostic switches safe for incremental builds. These
@@ -1638,6 +1647,7 @@ GCCFLAGS += -DCONFIG_USB_HCD_PROFILE=$(USB_HCD_PROFILE)
 GCCFLAGS += -DCONFIG_USB_HCD_CHANNEL_PROFILE=$(USB_HCD_CHANNEL_PROFILE)
 GCCFLAGS += -DCONFIG_USB_NCM_RX_PROFILE=$(USB_NCM_RX_PROFILE)
 GCCFLAGS += -DCONFIG_USB_TX_LIFETIME_PROFILE=$(USB_TX_LIFETIME_PROFILE)
+GCCFLAGS += -DCONFIG_USB_CH4_QUEUE_FRONT=$(USB_CH4_QUEUE_FRONT)
 GCCFLAGS += -DCONFIG_USB_PROFILE_REPORT=$(USB_PROFILE_REPORT)
 GCCFLAGS += -DCONFIG_TOUCH_PATH_PROFILE=$(TOUCH_PATH_PROFILE)
 GCCFLAGS += -DCONFIG_TOUCH_PATH_REPORT_DETAIL=$(TOUCH_PATH_REPORT_DETAIL)
@@ -1836,6 +1846,14 @@ ifneq ($(USB_HCD_PROFILE),1)
 LFLAGS += -Wl,--wrap=usbh_hcd_hc_submit_request
 LFLAGS += -Wl,--wrap=usbh_hcd_hc_get_urb_state
 endif
+endif
+ifeq ($(USB_CH4_QUEUE_FRONT),1)
+LFLAGS += -Wl,--wrap=usbh_hcd_hc_submit_request
+LFLAGS += -Wl,--wrap=usbh_hal_hc_read_interrupt
+LFLAGS += -Wl,--wrap=usbh_core_notify_urb_state_change
+LFLAGS += -Wl,--wrap=usb_os_queue_send
+LFLAGS += -Wl,--wrap=usb_os_queue_receive
+LFLAGS += -Wl,--wrap=usbh_hcd_hc_get_urb_state
 endif
 ifeq ($(SCREEN_USB_PROBE),1)
 ifneq ($(USB_HCD_PROFILE),1)

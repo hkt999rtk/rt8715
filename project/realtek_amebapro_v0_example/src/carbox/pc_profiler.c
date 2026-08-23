@@ -10,6 +10,7 @@
 #include "screen_rx_record_profiler.h"
 #include "chacha_key_alias_fix.h"
 #include "usb_hcd_profiler.h"
+#include "usb_rx_priority.h"
 #include "net_queue_profiler.h"
 #include "crypto_engine_profiler.h"
 #include "crypto_priority_lock.h"
@@ -1740,6 +1741,9 @@ static void pcprof_task(void *arg)
 	(defined(CONFIG_USB_NCM_RX_PROFILE) && CONFIG_USB_NCM_RX_PROFILE) || \
 	(defined(CONFIG_USB_TX_LIFETIME_PROFILE) && CONFIG_USB_TX_LIFETIME_PROFILE))
 		usb_hcd_profiler_report(sequence);
+#endif
+#if defined(CONFIG_USB_CH4_QUEUE_FRONT) && CONFIG_USB_CH4_QUEUE_FRONT
+		carbox_usb_rx_priority_report(sequence);
 #endif
 #if defined(CONFIG_NET_QUEUE_PROFILE) && CONFIG_NET_QUEUE_PROFILE
 		net_queue_profiler_report(sequence);
