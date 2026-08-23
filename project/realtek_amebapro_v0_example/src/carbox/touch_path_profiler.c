@@ -490,6 +490,7 @@ typedef struct touch_path_state_s {
 	uint8_t report5_prev_valid;
 	uint8_t report5_touch_active;
 	uint8_t move_sample_active;
+	uint8_t move_sample_pending_valid;
 	uint8_t car_socket_valid;
 	uint8_t car_socket_nodelay_valid;
 	uint8_t car_socket_nodelay;
@@ -497,6 +498,9 @@ typedef struct touch_path_state_s {
 	TaskHandle_t generic_task;
 	TaskHandle_t generic_forward_task;
 	uint32_t move_sample_next_due_us;
+	uint32_t move_sample_last_handover_us;
+	uint32_t move_sample_pending_uid;
+	uint8_t move_sample_pending_report[5];
 	TaskHandle_t iphone_http_read_task;
 	touch_http_slot_t *iphone_http_read_slot;
 #if CONFIG_AIRPLAY_HID_HTTP_PIPELINE_DEPTH > 0
@@ -531,6 +535,8 @@ extern int32_t __real_AirPlayResponse_GetInfoHIDReportCommand(
 	const void *body, uint32_t length);
 extern void __real_acc_carplay_cb_send_touch(
 	uint32_t action, uint32_t x, uint32_t y);
+extern void __real_acc_carplay_cb_hid_report(
+	uint32_t uid, const void *report, uint32_t length);
 extern void __real_lib_carplay_touch(uint32_t action, uint32_t x, uint32_t y);
 extern int32_t __real_AirPlayReceiverSessionSendHIDReport(
 	void *session, uint32_t device_uid, const void *report, uint32_t length);
@@ -1264,9 +1270,7 @@ static int32_t touch_http_bypass_enqueue(void *client, void *message)
 		touch_path_state.bypass_worker_scheduled = 0U;
 		touch_path_state.bypass_drain_scheduled = 0U;
 		touch_path_state.bypass_touch_active = 0U;
-		touch_path_state.move_sample_active = 0U;
 		touch_path_state.bypass_last_touch_write_us = 0U;
-		touch_path_state.move_sample_next_due_us = 0U;
 	}
 	*touch_path_state.bypass_tail = message;
 	touch_path_state.bypass_tail = (void **)((uint8_t *)message +
@@ -1312,78 +1316,17 @@ static void touch_http_bypass_worker(void *context)
 	for (;;) {
 		void *message;
 		void *next;
-		void *discard_move = NULL;
-		touch_http_slot_t *slot;
-		touch_http_slot_t *next_slot;
-		uint32_t gate_delay_us = 0U;
 		int32_t result;
 
 		taskENTER_CRITICAL();
 		message = touch_path_state.bypass_head;
 		if (message != NULL) {
-			slot = touch_http_find(message);
-			next = touch_http_pointer_at(message,
-				TOUCH_HTTP_MESSAGE_NEXT_OFFSET);
-			next_slot = next != NULL ? touch_http_find(next) : NULL;
-
-#if CONFIG_TOUCH_MOVE_SAMPLE_HZ > 0
-			/* While the dequeue gate is closed, retain only the newest
-			 * contiguous move.  Edges form hard ordering boundaries. */
-			if ((slot != NULL) && slot->is_touch && !slot->write_started &&
-			    !slot->is_down && !slot->is_release &&
-			    (next_slot != NULL) && next_slot->is_touch &&
-			    !next_slot->is_down &&
-			    !next_slot->is_release) {
-				discard_move = message;
-				touch_path_state.bypass_head = next;
-				if (touch_path_state.bypass_depth != 0U) {
-					touch_path_state.bypass_depth--;
-				}
-				touch_path_stats.http_bypass_coalesced++;
-				touch_path_stats.move_sample_suppressed++;
-				memset(slot, 0, sizeof(*slot));
-			} else if ((slot != NULL) && slot->is_touch && !slot->is_down &&
-				   !slot->is_release &&
-				   touch_path_state.bypass_touch_active) {
-				uint32_t now_us = hal_read_curtime_us();
-				uint32_t elapsed_us = now_us -
-					touch_path_state.bypass_last_touch_write_us;
-				int boundary_follows = (next_slot != NULL) &&
-					(!next_slot->is_touch || next_slot->is_down ||
-					 next_slot->is_release);
-
-				if (!boundary_follows &&
-				    (elapsed_us < TOUCH_MOVE_SAMPLE_PERIOD_US)) {
-					touch_path_stats.move_sample_gate_waits++;
-					gate_delay_us =
-						TOUCH_MOVE_SAMPLE_PERIOD_US - elapsed_us;
-					touch_path_state.move_sample_next_due_us =
-						touch_path_state.bypass_last_touch_write_us +
-						TOUCH_MOVE_SAMPLE_PERIOD_US;
-				} else if (boundary_follows &&
-					   (elapsed_us < TOUCH_MOVE_SAMPLE_PERIOD_US)) {
-					touch_path_stats.move_sample_edge_flushes++;
-				}
-			}
-#endif
-			if ((discard_move == NULL) && (gate_delay_us == 0U)) {
-				touch_path_state.bypass_write_task =
-					xTaskGetCurrentTaskHandle();
-				touch_path_state.bypass_write_message = message;
-			}
+			touch_path_state.bypass_write_task =
+				xTaskGetCurrentTaskHandle();
+			touch_path_state.bypass_write_message = message;
 		}
 		taskEXIT_CRITICAL();
-		if (discard_move != NULL) {
-			CFRelease(discard_move);
-			CFRelease(client);
-			continue;
-		}
 		if (message == NULL) {
-			break;
-		}
-		if (gate_delay_us != 0U) {
-			touch_http_bypass_schedule_worker(client,
-				gate_delay_us, 0);
 			break;
 		}
 
@@ -1413,9 +1356,7 @@ static void touch_http_bypass_worker(void *context)
 				touch_path_stats.move_sample_sent++;
 				if (completed_slot->is_release) {
 					touch_path_state.bypass_touch_active = 0U;
-					touch_path_state.move_sample_active = 0U;
 					touch_path_state.bypass_last_touch_write_us = 0U;
-					touch_path_state.move_sample_next_due_us = 0U;
 				} else {
 					if (!completed_slot->is_down &&
 					    (touch_path_state.bypass_last_touch_write_us != 0U)) {
@@ -1425,12 +1366,8 @@ static void touch_http_bypass_worker(void *context)
 							touch_path_state.bypass_last_touch_write_us);
 					}
 					touch_path_state.bypass_touch_active = 1U;
-					touch_path_state.move_sample_active = 1U;
 					touch_path_state.bypass_last_touch_write_us =
 						write_complete_us;
-					touch_path_state.move_sample_next_due_us =
-						write_complete_us +
-						TOUCH_MOVE_SAMPLE_PERIOD_US;
 				}
 #endif
 			}
@@ -1471,7 +1408,9 @@ static void touch_http_bypass_worker(void *context)
 		touch_path_state.bypass_client = NULL;
 		touch_path_state.bypass_touch_active = 0U;
 		touch_path_state.move_sample_active = 0U;
+		touch_path_state.move_sample_pending_valid = 0U;
 		touch_path_state.bypass_last_touch_write_us = 0U;
+		touch_path_state.move_sample_last_handover_us = 0U;
 		touch_path_state.move_sample_next_due_us = 0U;
 		taskEXIT_CRITICAL();
 		while (discard != NULL) {
@@ -1795,6 +1734,89 @@ int32_t __wrap_AirPlayResponse_GetInfoHIDReportCommand(
 	return result;
 }
 
+void __wrap_acc_carplay_cb_hid_report(uint32_t uid, const void *report,
+				      uint32_t length)
+{
+#if CONFIG_TOUCH_MOVE_SAMPLE_HZ > 0
+	const uint8_t *bytes = (const uint8_t *)report;
+	uint8_t pending_report[5];
+	uint32_t pending_uid = 0U;
+	uint32_t now_us = hal_read_curtime_us();
+	int forward_current = 1;
+	int flush_pending = 0;
+
+	if ((bytes == NULL) || (length != sizeof(pending_report))) {
+		taskENTER_CRITICAL();
+		touch_path_stats.move_sample_passthrough++;
+		taskEXIT_CRITICAL();
+		__real_acc_carplay_cb_hid_report(uid, report, length);
+		return;
+	}
+
+	taskENTER_CRITICAL();
+	touch_path_stats.move_sample_input++;
+	if (touch_action_is_release(bytes[0])) {
+		touch_path_stats.move_sample_release++;
+		if (touch_path_state.move_sample_pending_valid) {
+			pending_uid = touch_path_state.move_sample_pending_uid;
+			memcpy(pending_report,
+			       touch_path_state.move_sample_pending_report,
+			       sizeof(pending_report));
+			flush_pending = 1;
+			touch_path_stats.move_sample_edge_flushes++;
+		}
+		touch_path_state.move_sample_pending_valid = 0U;
+		touch_path_state.move_sample_active = 0U;
+		touch_path_state.move_sample_last_handover_us = 0U;
+		touch_path_state.move_sample_next_due_us = 0U;
+	} else if (!touch_path_state.move_sample_active) {
+		/* DOWN is an ordering edge and must never be sampled away. */
+		touch_path_stats.move_sample_down++;
+		touch_path_state.move_sample_pending_valid = 0U;
+		touch_path_state.move_sample_active = 1U;
+		touch_path_state.move_sample_last_handover_us = now_us;
+		touch_path_state.move_sample_next_due_us =
+			now_us + TOUCH_MOVE_SAMPLE_PERIOD_US;
+	} else {
+		uint32_t elapsed_us = now_us -
+			touch_path_state.move_sample_last_handover_us;
+
+		if (elapsed_us >= TOUCH_MOVE_SAMPLE_PERIOD_US) {
+			/* The current report is newer than any saved report, so it is
+			 * the correct sample for the newly opened interval. */
+			touch_path_state.move_sample_pending_valid = 0U;
+			touch_path_state.move_sample_last_handover_us = now_us;
+			touch_path_state.move_sample_next_due_us =
+				now_us + TOUCH_MOVE_SAMPLE_PERIOD_US;
+		} else {
+			touch_path_state.move_sample_pending_uid = uid;
+			memcpy(touch_path_state.move_sample_pending_report,
+			       bytes, sizeof(pending_report));
+			touch_path_state.move_sample_pending_valid = 1U;
+			touch_path_state.move_sample_next_due_us =
+				touch_path_state.move_sample_last_handover_us +
+				TOUCH_MOVE_SAMPLE_PERIOD_US;
+			touch_path_stats.move_sample_suppressed++;
+			touch_path_stats.move_sample_gate_waits++;
+			forward_current = 0;
+		}
+	}
+	taskEXIT_CRITICAL();
+
+	/* This is the first external boundary after binary-plist parsing. Filtering
+	 * here avoids callback, conversion, HID dispatch, HTTP and crypto work. */
+	if (flush_pending) {
+		__real_acc_carplay_cb_hid_report(
+			pending_uid, pending_report, sizeof(pending_report));
+	}
+	if (forward_current) {
+		__real_acc_carplay_cb_hid_report(uid, report, length);
+	}
+#else
+	__real_acc_carplay_cb_hid_report(uid, report, length);
+#endif
+}
+
 void __wrap_acc_carplay_cb_send_touch(uint32_t action, uint32_t x, uint32_t y)
 {
 	TaskHandle_t current = xTaskGetCurrentTaskHandle();
@@ -1962,33 +1984,6 @@ void __wrap_lib_carplay_touch(uint32_t action, uint32_t x, uint32_t y)
 	taskEXIT_CRITICAL();
 }
 
-/* Classify input only.  Rate limiting happens at the bypass dequeue boundary,
- * immediately before the ChaCha/TCP write, so pending moves can be coalesced
- * to the newest position.  Caller holds the FreeRTOS critical section. */
-static void touch_move_sample_record_input(const void *report, uint32_t length,
-					   int is_down)
-{
-#if CONFIG_TOUCH_MOVE_SAMPLE_HZ > 0
-	const uint8_t *bytes = (const uint8_t *)report;
-
-	if ((bytes == NULL) || (length != 5U)) {
-		touch_path_stats.move_sample_passthrough++;
-		return;
-	}
-
-	touch_path_stats.move_sample_input++;
-	if (touch_action_is_release(bytes[0])) {
-		touch_path_stats.move_sample_release++;
-	} else if (is_down) {
-		touch_path_stats.move_sample_down++;
-	}
-#else
-	(void)report;
-	(void)length;
-	(void)is_down;
-#endif
-}
-
 int32_t __wrap_AirPlayReceiverSessionSendHIDReport(
 	void *session, uint32_t device_uid, const void *report, uint32_t length)
 {
@@ -2012,7 +2007,6 @@ int32_t __wrap_AirPlayReceiverSessionSendHIDReport(
 		is_release = touch_action_is_release(bytes[0]);
 		is_down = !is_release && !touch_path_state.report5_touch_active;
 	}
-	touch_move_sample_record_input(report, length, is_down);
 	touch_report5_record(device_uid, report, length, start_us);
 	touch_path_state.hid_sequence = 0U;
 	event_matched = touch_path_state.event_active &&

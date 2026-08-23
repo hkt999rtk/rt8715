@@ -1293,9 +1293,10 @@ endif
 # HID commands. The wrapper owns ordered writes and drains decrypted response
 # bytes without interpreting the HTTP response.
 AIRPLAY_HID_HTTP_BYPASS ?= 1
-# Dequeue-rate control for the vehicle's absolute-touch stream. Pass touch
-# edges immediately; while the gate is closed, coalesce pending moves and
-# write only the newest position when the configured interval expires.
+# Ingress-rate control for the vehicle's absolute-touch stream. Apply it at
+# acc_carplay_cb_hid_report(), before the customer touch callback performs the
+# AirPlay/HID handover. Touch edges pass immediately; intermediate moves retain
+# only the newest position. The downstream HTTP queue remains an unpaced FIFO.
 # Set to 0 to restore the unmodified one-report-in/one-report-out behaviour.
 TOUCH_MOVE_SAMPLE_HZ ?= 30
 ifneq ($(TOUCH_MOVE_SAMPLE_HZ),0)
@@ -1857,6 +1858,9 @@ LFLAGS += -Wl,--wrap=HTTPMessageReadMessage
 ifeq ($(IPHONE_HTTP_RX_PROFILE),1)
 LFLAGS += -Wl,--wrap=lwip_read
 endif
+endif
+ifneq ($(TOUCH_MOVE_SAMPLE_HZ),0)
+LFLAGS += -Wl,--wrap=acc_carplay_cb_hid_report
 endif
 ifeq ($(AIRPLAY_HID_HTTP_BYPASS),1)
 ifneq ($(TOUCH_PATH_PROFILE),1)
