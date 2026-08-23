@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 7 ]; then
-	echo "usage: $0 MODE AR OBJCOPY INPUT OUTPUT MEMBER SCREEN_WAIT" >&2
+if [ "$#" -ne 8 ]; then
+	echo "usage: $0 MODE AR OBJCOPY INPUT OUTPUT MEMBERS SCREEN_WAIT ACK_CACHE" >&2
 	exit 2
 fi
 
@@ -13,9 +13,11 @@ input_archive=$4
 output_archive=$5
 members=$6
 screen_wait=$7
+ack_cache=$8
 script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 screen_wait_patcher=$script_directory/../../src/carbox/tools/patch_screen_wait_relocation.py
 redundant_copy_patcher=$script_directory/../../src/carbox/tools/patch_airplay_redundant_copy.py
+event_response_patcher=$script_directory/../../src/carbox/tools/patch_airplay_event_response.py
 temporary=$(mktemp -d)
 trap 'rm -rf -- "$temporary"' EXIT HUP INT TERM
 
@@ -60,6 +62,14 @@ case "$screen_wait" in
 		;;
 esac
 
+case "$ack_cache" in
+	0|1) ;;
+	*)
+		echo "ACK_CACHE must be 0 or 1: $ack_cache" >&2
+		exit 2
+		;;
+esac
+
 # Work only on a derived archive.  The Realtek/customer supplied input archive
 # remains byte-for-byte untouched, so disabling the feature restores the exact
 # legacy binary without relying on an inverse objcopy operation.
@@ -97,6 +107,15 @@ cp "$input_archive" "$output_archive"
 				"patched.o" "patched-with-screen-wait.o"
 			mv "patched-with-screen-wait.o" "patched.o"
 			python3 "$screen_wait_patcher" "patched.o"
+		fi
+		if [ "$ack_cache" = 1 ] && [ "$member" = AirPlayEvent.o ]; then
+			# Redirect only DealWithSendHIDReport's no-body response.  Other
+			# AirPlay response builders remain byte-for-byte vendor code.
+			"$objcopy_tool" --add-symbol \
+				carbox_airplay_event_send_fast_response=0,global \
+				"patched.o" "patched-with-ack-cache.o"
+			mv "patched-with-ack-cache.o" "patched.o"
+			python3 "$event_response_patcher" "patched.o"
 		fi
 		mv "patched.o" "$member"
 		"$ar_tool" r "$output_archive" "$member"

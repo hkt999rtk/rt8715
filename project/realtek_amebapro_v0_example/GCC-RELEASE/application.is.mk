@@ -769,6 +769,8 @@ SRC_C += ../src/carbox/carbox_diag.c
 SRC_C += ../src/carbox/pc_profiler.c
 SRC_C += ../src/carbox/lpddr_margin_test.c
 SRC_C += ../src/carbox/touch_path_profiler.c
+SRC_C += ../src/carbox/car_ack_response_cache.c
+SRC_C += ../src/carbox/iap2_device_time_sync.c
 SRC_C += ../src/carbox/touch_frame_profiler.c
 SRC_C += ../src/carbox/i2c_bitbang_pacing.c
 SRC_C += ../src/carbox/ota_local_upload_page.c
@@ -1060,10 +1062,11 @@ USBH_ISR_TASK_PRIORITY ?= 11
 # Preserve the closed HCD main worker's established priority while testing
 # channel-4-first interrupt service as a single isolated behavior change.
 USBH_MAIN_TASK_PRIORITY ?= 6
-# The CarPlay control/event socket is latency-sensitive.  Keep TCPClient above
-# the priority-4 screen/GCD workers while leaving USB and TCP/IP workers above it.
+# The CarPlay control/event socket is latency-sensitive and performs only the
+# short vehicle-event read/HTTP-200/queue handoff path.  Run it at the highest
+# FreeRTOS task priority so an incoming event can be acknowledged immediately.
 # Set to -1 to preserve the priority requested by the closed CarPlay library.
-TCP_CLIENT_PRIORITY ?= 5
+TCP_CLIENT_PRIORITY ?= 11
 # Overnight UI-freeze diagnosis: trace the CarPlay screen RX, handover queue,
 # and TX stages in the existing 10-second profiler report.
 SCREEN_QUEUE_PROFILE ?= 0
@@ -1279,6 +1282,10 @@ ifneq ($(TOUCH_PATH_PROFILE),1)
 $(error CAR_ACK_TCP_PROFILE requires TOUCH_PATH_PROFILE=1)
 endif
 endif
+# Prebuild the vehicle event RTSP 200 header in a two-second cache.  The
+# response still uses the vendor HTTPMessage writer and encrypted transport;
+# only GetLocalTime/date formatting/header construction leave the request path.
+CAR_ACK_RESPONSE_CACHE ?= 1
 # Split the iPhone HID HTTP response latency at the lwIP recvmbox boundary.
 # This identifies whether a slow 200 response was late on the wire or whether
 # the priority-4 DispatchLite worker was late to consume already-arrived data.
@@ -1301,6 +1308,27 @@ endif
 # HID commands. The wrapper owns ordered writes and drains decrypted response
 # bytes without interpreting the HTTP response.
 AIRPLAY_HID_HTTP_BYPASS ?= 1
+# Synchronize the system wall clock from the first valid iAP2 DeviceTimeUpdate.
+# This arrives before the AirPlay/RTSP session. The vendor handler first applies
+# the iPhone timezone offset, then passes local calendar fields to its callback;
+# synchronize that local wall clock while preserving the original callback.
+IAP2_DEVICE_TIME_SYNC ?= 1
+# Sample one decrypted iPhone HTTP/RTSP 200 response header per 10-second
+# touch-path report. The body is never retained or printed.
+IPHONE_200_SAMPLE_PROFILE ?= 1
+ifeq ($(IPHONE_200_SAMPLE_PROFILE),1)
+ifneq ($(TOUCH_PATH_PROFILE)$(AIRPLAY_HID_HTTP_BYPASS),11)
+$(error IPHONE_200_SAMPLE_PROFILE requires TOUCH_PATH_PROFILE=1 and AIRPLAY_HID_HTTP_BYPASS=1)
+endif
+endif
+# Sample the wall clock used by time(NULL) once per 10-second touch-path
+# report, including UTC text and progress relative to the monotonic interval.
+GMT_TIME_PROFILE ?= 1
+ifeq ($(GMT_TIME_PROFILE),1)
+ifneq ($(TOUCH_PATH_PROFILE),1)
+$(error GMT_TIME_PROFILE requires TOUCH_PATH_PROFILE=1)
+endif
+endif
 # Ingress-rate control for the vehicle's absolute-touch stream. Apply it at
 # acc_carplay_cb_hid_report(), before the customer touch callback performs the
 # AirPlay/HID handover. Touch edges pass immediately; intermediate moves retain
@@ -1363,7 +1391,7 @@ $(SCREEN_FLOW_PROFILE_STAMP):
 # These switches affect several standalone profiler/wrapper objects.  Track
 # them explicitly so a diagnostic override cannot reuse release-mode objects.
 CRYPTO_ENGINE_PROFILE ?= 0
-DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-pcreport$(PC_PROFILER_SELF_REPORT)-platform$(PC_PROFILER_PLATFORM_REPORT)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)-touch$(TOUCH_PATH_PROFILE)-touchdetail$(TOUCH_PATH_REPORT_DETAIL)-airmutex$(AIRPLAY_MUTEX_PROFILE)-carack$(CAR_ACK_TCP_PROFILE)-iphonerx$(IPHONE_HTTP_RX_PROFILE)-hidpipe$(AIRPLAY_HID_HTTP_PIPELINE_DEPTH)-hidbypass$(AIRPLAY_HID_HTTP_BYPASS)-touchsample$(TOUCH_MOVE_SAMPLE_HZ)-touchframe$(TOUCH_FRAME_PROFILE)-gcd$(GCD_SYNC_PROFILE)-gcdprio$(GCD_WORK_PRIORITY)-uisr$(USBH_ISR_TASK_PRIORITY)-umain$(USBH_MAIN_TASK_PRIORITY)-tcpclient$(TCP_CLIENT_PRIORITY)-rxrec$(SCREEN_RX_RECORD_PROFILE)-crypto$(CRYPTO_ENGINE_PROFILE)-cryptotmo$(CARBOX_CRYPTO_IRQ_TIMEOUT_MS)
+DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-pcreport$(PC_PROFILER_SELF_REPORT)-platform$(PC_PROFILER_PLATFORM_REPORT)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)-touch$(TOUCH_PATH_PROFILE)-touchdetail$(TOUCH_PATH_REPORT_DETAIL)-airmutex$(AIRPLAY_MUTEX_PROFILE)-carack$(CAR_ACK_TCP_PROFILE)-iphonerx$(IPHONE_HTTP_RX_PROFILE)-iphone200$(IPHONE_200_SAMPLE_PROFILE)-gmttime$(GMT_TIME_PROFILE)-hidpipe$(AIRPLAY_HID_HTTP_PIPELINE_DEPTH)-hidbypass$(AIRPLAY_HID_HTTP_BYPASS)-touchsample$(TOUCH_MOVE_SAMPLE_HZ)-touchframe$(TOUCH_FRAME_PROFILE)-gcd$(GCD_SYNC_PROFILE)-gcdprio$(GCD_WORK_PRIORITY)-uisr$(USBH_ISR_TASK_PRIORITY)-umain$(USBH_MAIN_TASK_PRIORITY)-tcpclient$(TCP_CLIENT_PRIORITY)-rxrec$(SCREEN_RX_RECORD_PROFILE)-crypto$(CRYPTO_ENGINE_PROFILE)-cryptotmo$(CARBOX_CRYPTO_IRQ_TIMEOUT_MS)
 $(DIAGNOSTIC_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.diagnostic_profile_*
@@ -1395,6 +1423,13 @@ $(CAR_ACK_TCP_PROFILE_STAMP):
 	../src/carbox/chacha_key_alias_fix.o \
 	../src/carbox/libusb_ref_compat/libusb_ref_compat_os.o: \
 	$(DIAGNOSTIC_PROFILE_STAMP)
+IAP2_DEVICE_TIME_SYNC_STAMP := \
+	$(OBJ_DIR)/.iap2_device_time_sync_$(IAP2_DEVICE_TIME_SYNC)
+$(IAP2_DEVICE_TIME_SYNC_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.iap2_device_time_sync_*
+	@touch $@
+../src/carbox/iap2_device_time_sync.o: $(IAP2_DEVICE_TIME_SYNC_STAMP)
 # Stage 1 validates the preallocated pbuf-pointer mailbox path without
 # aggregation, delay, or GTimer.  Each WLAN packet is still posted immediately.
 TCPIP_RX_BATCH_STAGE1 ?= 1
@@ -1411,6 +1446,10 @@ TCPIP_RX_BATCH_MAX_PACKETS ?= 8
 TCPIP_RX_BATCH_TIMEOUT_US ?= 1000
 # Diagnostic counters/logs only; aggregation remains enabled when this is 0.
 TCPIP_RX_BATCH_PROFILE ?= 0
+# Keep vehicle USB-NCM RX packets in their own FIFO and place one drain marker
+# at the front of the TCP_IP mailbox. This prioritizes RX without reversing a
+# burst, as inserting every packet at the mailbox front would do.
+TCPIP_NCM_RX_PRIORITY ?= 1
 CARBOX_CRYPTO_OWNER_BOOST_PRIORITY ?= 11
 CARBOX_CRYPTO_IRQ_TIMEOUT_MS ?= 20
 # Public clock selection.  Use only SYSTEM_CLOCK_PROFILE on normal builds;
@@ -1653,7 +1692,11 @@ GCCFLAGS += -DCONFIG_TOUCH_PATH_PROFILE=$(TOUCH_PATH_PROFILE)
 GCCFLAGS += -DCONFIG_TOUCH_PATH_REPORT_DETAIL=$(TOUCH_PATH_REPORT_DETAIL)
 GCCFLAGS += -DCONFIG_AIRPLAY_MUTEX_PROFILE=$(AIRPLAY_MUTEX_PROFILE)
 GCCFLAGS += -DCONFIG_CAR_ACK_TCP_PROFILE=$(CAR_ACK_TCP_PROFILE)
+GCCFLAGS += -DCONFIG_CAR_ACK_RESPONSE_CACHE=$(CAR_ACK_RESPONSE_CACHE)
 GCCFLAGS += -DCONFIG_IPHONE_HTTP_RX_PROFILE=$(IPHONE_HTTP_RX_PROFILE)
+GCCFLAGS += -DCONFIG_IAP2_DEVICE_TIME_SYNC=$(IAP2_DEVICE_TIME_SYNC)
+GCCFLAGS += -DCONFIG_IPHONE_200_SAMPLE_PROFILE=$(IPHONE_200_SAMPLE_PROFILE)
+GCCFLAGS += -DCONFIG_GMT_TIME_PROFILE=$(GMT_TIME_PROFILE)
 GCCFLAGS += -DCONFIG_AIRPLAY_HID_HTTP_PIPELINE_DEPTH=$(AIRPLAY_HID_HTTP_PIPELINE_DEPTH)
 GCCFLAGS += -DCONFIG_AIRPLAY_HID_HTTP_BYPASS=$(AIRPLAY_HID_HTTP_BYPASS)
 GCCFLAGS += -DCONFIG_TOUCH_MOVE_SAMPLE_HZ=$(TOUCH_MOVE_SAMPLE_HZ)
@@ -1667,6 +1710,7 @@ GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_STAGE3=$(TCPIP_RX_BATCH_STAGE3)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_MAX_PACKETS=$(TCPIP_RX_BATCH_MAX_PACKETS)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_TIMEOUT_US=$(TCPIP_RX_BATCH_TIMEOUT_US)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_PROFILE=$(TCPIP_RX_BATCH_PROFILE)
+GCCFLAGS += -DCONFIG_TCPIP_NCM_RX_PRIORITY=$(TCPIP_NCM_RX_PRIORITY)
 GCCFLAGS += -DCONFIG_CRYPTO_ENGINE_PROFILE=$(CRYPTO_ENGINE_PROFILE)
 GCCFLAGS += -DCONFIG_CHACHA_RUNTIME_PROFILE=$(CHACHA_RUNTIME_PROFILE)
 GCCFLAGS += -DCARBOX_CRYPTO_OWNER_BOOST_PRIORITY=$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
@@ -1741,6 +1785,9 @@ LFLAGS += -Wl,--wrap=usbh_ctrl_request -Wl,--wrap=ncm_receive_buf_size
 endif
 ifneq ($(filter 1,$(GCD_SYNC_PROFILE) $(TOUCH_PATH_PROFILE) $(TOUCH_FRAME_PROFILE) $(AIRPLAY_HID_HTTP_BYPASS)),)
 LFLAGS += -Wl,--wrap=dispatch_sync_f
+endif
+ifeq ($(IAP2_DEVICE_TIME_SYNC),1)
+LFLAGS += -Wl,--wrap=UpdateDeviceTime
 endif
 ifeq ($(AIRPLAY_MUTEX_PROFILE),1)
 LFLAGS += -Wl,--wrap=pthread_mutex_lock -Wl,--wrap=pthread_mutex_unlock
@@ -2052,7 +2099,8 @@ CARBOX_CHACHA_CONFIG_STAMP := $(CARBOX_CARPLAY_CHACHA_DIR)/build/.carbox_chacha_
 CARBOX_VIDEO_HANDOVER_PATCH := $(CARBOX_SMART_CARPLAY_LIB_DIR)/patch_video_handover_archive.sh
 CARBOX_SCREEN_WAIT_RELOC_PATCH := ../src/carbox/tools/patch_screen_wait_relocation.py
 CARBOX_REDUNDANT_COPY_PATCH := ../src/carbox/tools/patch_airplay_redundant_copy.py
-CARBOX_ACCESSORY_PATCH_STAMP := $(OBJ_DIR)/.accessory_patch_v2-zc$(VIDEO_HANDOVER_ZERO_COPY)-direct$(SCREEN_TX_DIRECT_CRYPTO)-wait$(SCREEN_QUEUE_EVENT_WAIT)
+CARBOX_EVENT_RESPONSE_PATCH := ../src/carbox/tools/patch_airplay_event_response.py
+CARBOX_ACCESSORY_PATCH_STAMP := $(OBJ_DIR)/.accessory_patch_v4-zc$(VIDEO_HANDOVER_ZERO_COPY)-direct$(SCREEN_TX_DIRECT_CRYPTO)-wait$(SCREEN_QUEUE_EVENT_WAIT)-ackcache$(CAR_ACK_RESPONSE_CACHE)
 $(CARBOX_ACCESSORY_PATCH_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.accessory_patch_*
@@ -2135,15 +2183,16 @@ $(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) vendor-private-sw
 application: $(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE)
 endif
-ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO) $(SCREEN_QUEUE_EVENT_WAIT)),)
+ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO) $(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE)),)
 $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH) $(CARBOX_SCREEN_WAIT_RELOC_PATCH) \
-		$(CARBOX_REDUNDANT_COPY_PATCH) \
+		$(CARBOX_REDUNDANT_COPY_PATCH) $(CARBOX_EVENT_RESPONSE_PATCH) \
 		$(CARBOX_ACCESSORY_PATCH_STAMP)
 	sh $(CARBOX_VIDEO_HANDOVER_PATCH) \
 		$(if $(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO)),accessory,accessory-wait) \
 		$(AR) $(OBJCOPY) $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) $@ \
-		AirPlayScreen.o $(SCREEN_QUEUE_EVENT_WAIT)
+		"AirPlayScreen.o $(if $(filter 1,$(CAR_ACK_RESPONSE_CACHE)),AirPlayEvent.o)" \
+		$(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE)
 application: $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
 endif
 ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
@@ -2151,27 +2200,28 @@ $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH) $(CARBOX_SCREEN_WAIT_RELOC_PATCH) \
 		$(CARBOX_ACCESSORY_PATCH_STAMP)
 	sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
-		$(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) $@ AirPlayScreen.o \
-		$(SCREEN_QUEUE_EVENT_WAIT)
+		$(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) $@ \
+		"AirPlayScreen.o $(if $(filter 1,$(CAR_ACK_RESPONSE_CACHE)),AirPlayEvent.o)" \
+		$(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE)
 application: $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE)
 endif
 ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW)),)
 $(CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE): $(CARBOX_SYSTEMLIB_VENDOR_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH)
 	sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
-		$(CARBOX_SYSTEMLIB_VENDOR_ARCHIVE) $@ "Accessory.o Image.o" 0
+		$(CARBOX_SYSTEMLIB_VENDOR_ARCHIVE) $@ "Accessory.o Image.o" 0 0
 application: $(CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE)
 $(CARBOX_UILIB_PRIVATE_MEM_ARCHIVE): $(CARBOX_UILIB_VENDOR_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH)
 	sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
-		$(CARBOX_UILIB_VENDOR_ARCHIVE) $@ "Surface.o ImageView.o" 0
+		$(CARBOX_UILIB_VENDOR_ARCHIVE) $@ "Surface.o ImageView.o" 0 0
 application: $(CARBOX_UILIB_PRIVATE_MEM_ARCHIVE)
 endif
 ifeq ($(VIDEO_HANDOVER_ZERO_COPY),1)
 $(CARBOX_CARPLAY_HANDOVER_ARCHIVE): $(CARBOX_CARPLAY_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH)
 	sh $(CARBOX_VIDEO_HANDOVER_PATCH) receiver $(AR) $(OBJCOPY) \
-		$(CARBOX_CARPLAY_ARCHIVE) $@ AirPlayReceiverSessionScreen.o 0
+		$(CARBOX_CARPLAY_ARCHIVE) $@ AirPlayReceiverSessionScreen.o 0 0
 
 application: $(CARBOX_CARPLAY_HANDOVER_ARCHIVE)
 endif

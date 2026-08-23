@@ -1,5 +1,6 @@
 #include "touch_path_profiler.h"
 #include "airplay_mutex_profiler.h"
+#include "car_ack_response_cache.h"
 
 #ifndef CONFIG_TOUCH_PATH_PROFILE
 #define CONFIG_TOUCH_PATH_PROFILE 0
@@ -29,9 +30,20 @@
 #define CONFIG_AIRPLAY_HID_HTTP_BYPASS 0
 #endif
 
+#ifndef CONFIG_IPHONE_200_SAMPLE_PROFILE
+#define CONFIG_IPHONE_200_SAMPLE_PROFILE 0
+#endif
+
+#ifndef CONFIG_GMT_TIME_PROFILE
+#define CONFIG_GMT_TIME_PROFILE 0
+#endif
+
 #if CONFIG_TOUCH_PATH_PROFILE || CONFIG_AIRPLAY_HID_HTTP_BYPASS
 
 #include <string.h>
+#if CONFIG_GMT_TIME_PROFILE
+#include <time.h>
+#endif
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -63,6 +75,14 @@
 #define TOUCH_HTTP_MESSAGE_WRITE_IOVCNT    0x8d0U
 #define TOUCH_NETTRANSPORT_PLAIN_CUR       0x4028U
 #define TOUCH_NETTRANSPORT_PLAIN_END       0x402cU
+#endif
+
+#if CONFIG_IPHONE_200_SAMPLE_PROFILE
+#define TOUCH_IPHONE_200_SAMPLE_BYTES         256U
+#endif
+#if CONFIG_IPHONE_200_SAMPLE_PROFILE
+#define TOUCH_IPHONE_200_ESCAPED_BYTES       \
+	(TOUCH_IPHONE_200_SAMPLE_BYTES * 4U + 1U)
 #endif
 
 #if (CONFIG_AIRPLAY_HID_HTTP_PIPELINE_DEPTH > 0) || \
@@ -218,6 +238,11 @@ typedef struct touch_path_stats_s {
 	uint32_t http_bypass_ioctl_error;
 	uint32_t http_bypass_worker_runs;
 	uint32_t http_bypass_vendor_overlap;
+	uint32_t iphone_response_headers;
+	uint32_t iphone_response_200;
+	uint32_t iphone_response_non_200;
+	uint32_t iphone_response_sample_busy;
+	uint32_t iphone_response_overflow;
 	uint32_t iphone_rx_read_calls;
 	uint32_t iphone_rx_read_bytes;
 	uint32_t iphone_rx_post_missing;
@@ -522,6 +547,28 @@ typedef struct touch_path_state_s {
 #endif
 } touch_path_state_t;
 
+#if CONFIG_IPHONE_200_SAMPLE_PROFILE
+typedef struct touch_iphone_response_parser_s {
+	uint8_t sample[TOUCH_IPHONE_200_SAMPLE_BYTES];
+	uint8_t probe[5];
+	uint32_t total_length;
+	uint16_t sample_length;
+	uint8_t probe_length;
+	uint8_t delimiter_state;
+	uint8_t capturing;
+	uint8_t overflow;
+} touch_iphone_response_parser_t;
+
+#if CONFIG_IPHONE_200_SAMPLE_PROFILE
+typedef struct touch_iphone_response_sample_s {
+	uint8_t bytes[TOUCH_IPHONE_200_SAMPLE_BYTES];
+	uint16_t length;
+	uint8_t available;
+	uint8_t overflow;
+} touch_iphone_response_sample_t;
+#endif
+#endif
+
 static touch_path_stats_t touch_path_stats
 	__attribute__((section(".lpddr.bss.touch_path_stats")));
 static touch_path_state_t touch_path_state
@@ -530,6 +577,23 @@ static touch_http_slot_t touch_http_slots[TOUCH_HTTP_SLOTS]
 	__attribute__((section(".lpddr.bss.touch_http_slots")));
 static touch_read_origin_t touch_read_origins[TOUCH_READ_ORIGINS]
 	__attribute__((section(".lpddr.bss.touch_read_origins")));
+#if CONFIG_GMT_TIME_PROFILE
+static time_t touch_gmt_previous_epoch;
+static uint32_t touch_gmt_previous_tick_us;
+static uint8_t touch_gmt_previous_valid;
+#endif
+#if CONFIG_IPHONE_200_SAMPLE_PROFILE
+static touch_iphone_response_parser_t touch_iphone_response_parser
+	__attribute__((section(".lpddr.bss.touch_iphone_response_parser")));
+#endif
+#if CONFIG_IPHONE_200_SAMPLE_PROFILE
+static touch_iphone_response_sample_t touch_iphone_response_sample
+	__attribute__((section(".lpddr.bss.touch_iphone_response_sample")));
+static uint8_t touch_iphone_response_report[TOUCH_IPHONE_200_SAMPLE_BYTES]
+	__attribute__((section(".lpddr.bss.touch_iphone_response_report")));
+static char touch_iphone_response_escaped[TOUCH_IPHONE_200_ESCAPED_BYTES]
+	__attribute__((section(".lpddr.bss.touch_iphone_response_escaped")));
+#endif
 
 extern int32_t __real_AirPlayResponse_GetInfoHIDReportCommand(
 	const void *body, uint32_t length);
@@ -1053,6 +1117,156 @@ typedef int32_t (*touch_http_transport_read_f)(
 static void touch_http_bypass_worker(void *context);
 static void touch_http_bypass_drain_worker(void *context);
 
+#if CONFIG_IPHONE_200_SAMPLE_PROFILE
+static int touch_iphone_response_is_200(const uint8_t *bytes,
+					uint16_t length)
+{
+	uint16_t i;
+
+	for (i = 0U; i + 3U < length; i++) {
+		if (bytes[i] == ' ') {
+			return (bytes[i + 1U] == '2') &&
+				(bytes[i + 2U] == '0') &&
+				(bytes[i + 3U] == '0');
+		}
+		if ((bytes[i] == '\r') || (bytes[i] == '\n')) {
+			break;
+		}
+	}
+	return 0;
+}
+
+static void touch_iphone_response_finish(void)
+{
+	touch_iphone_response_parser_t *parser =
+		&touch_iphone_response_parser;
+	int is_200 = touch_iphone_response_is_200(parser->sample,
+		parser->sample_length);
+	taskENTER_CRITICAL();
+	touch_path_stats.iphone_response_headers++;
+	if (is_200) {
+		touch_path_stats.iphone_response_200++;
+#if CONFIG_IPHONE_200_SAMPLE_PROFILE
+		if (!touch_iphone_response_sample.available) {
+			memcpy(touch_iphone_response_sample.bytes, parser->sample,
+				parser->sample_length);
+			touch_iphone_response_sample.length = parser->sample_length;
+			touch_iphone_response_sample.overflow = parser->overflow;
+			touch_iphone_response_sample.available = 1U;
+		} else {
+			touch_path_stats.iphone_response_sample_busy++;
+		}
+#endif
+	} else {
+		touch_path_stats.iphone_response_non_200++;
+	}
+	if (parser->overflow) {
+		touch_path_stats.iphone_response_overflow++;
+	}
+	taskEXIT_CRITICAL();
+
+	memset(parser, 0, sizeof(*parser));
+}
+
+static void touch_iphone_response_sample_feed(const uint8_t *bytes,
+					       uint32_t length)
+{
+	touch_iphone_response_parser_t *parser =
+		&touch_iphone_response_parser;
+	uint32_t i;
+
+	for (i = 0U; i < length; i++) {
+		uint8_t byte = bytes[i];
+
+		if (!parser->capturing) {
+			if (parser->probe_length < sizeof(parser->probe)) {
+				parser->probe[parser->probe_length++] = byte;
+			} else {
+				memmove(parser->probe, parser->probe + 1U,
+					sizeof(parser->probe) - 1U);
+				parser->probe[sizeof(parser->probe) - 1U] = byte;
+			}
+			if ((parser->probe_length == sizeof(parser->probe)) &&
+			    ((memcmp(parser->probe, "HTTP/", 5U) == 0) ||
+			     (memcmp(parser->probe, "RTSP/", 5U) == 0))) {
+				memcpy(parser->sample, parser->probe,
+					sizeof(parser->probe));
+				parser->sample_length = sizeof(parser->probe);
+				parser->total_length = sizeof(parser->probe);
+				parser->probe_length = 0U;
+				parser->capturing = 1U;
+			}
+			continue;
+		}
+
+		parser->total_length++;
+		if (parser->sample_length < sizeof(parser->sample)) {
+			parser->sample[parser->sample_length++] = byte;
+		} else {
+			parser->overflow = 1U;
+		}
+
+		switch (parser->delimiter_state) {
+		case 0U:
+			parser->delimiter_state = (byte == '\r') ? 1U : 0U;
+			break;
+		case 1U:
+			parser->delimiter_state = (byte == '\n') ? 2U :
+				((byte == '\r') ? 1U : 0U);
+			break;
+		case 2U:
+			parser->delimiter_state = (byte == '\r') ? 3U : 0U;
+			break;
+		default:
+			if (byte == '\n') {
+				touch_iphone_response_finish();
+				parser = &touch_iphone_response_parser;
+			} else {
+				parser->delimiter_state =
+					(byte == '\r') ? 1U : 0U;
+			}
+			break;
+		}
+	}
+}
+
+static const char *touch_iphone_response_escape(const uint8_t *bytes,
+						 uint16_t length)
+{
+	static const char hex[] = "0123456789ABCDEF";
+	uint32_t output = 0U;
+	uint16_t i;
+
+	for (i = 0U; (i < length) &&
+	     (output + 4U < sizeof(touch_iphone_response_escaped)); i++) {
+		uint8_t byte = bytes[i];
+
+		if ((byte == '\r') || (byte == '\n') || (byte == '\t') ||
+		    (byte == '\\') || (byte == '"')) {
+			touch_iphone_response_escaped[output++] = '\\';
+			if (byte == '\r') {
+				touch_iphone_response_escaped[output++] = 'r';
+			} else if (byte == '\n') {
+				touch_iphone_response_escaped[output++] = 'n';
+			} else if (byte == '\t') {
+				touch_iphone_response_escaped[output++] = 't';
+			} else {
+				touch_iphone_response_escaped[output++] = (char)byte;
+			}
+		} else if ((byte >= 0x20U) && (byte <= 0x7eU)) {
+			touch_iphone_response_escaped[output++] = (char)byte;
+		} else {
+			touch_iphone_response_escaped[output++] = '\\';
+			touch_iphone_response_escaped[output++] = 'x';
+			touch_iphone_response_escaped[output++] = hex[byte >> 4U];
+			touch_iphone_response_escaped[output++] = hex[byte & 0x0fU];
+		}
+	}
+	touch_iphone_response_escaped[output] = '\0';
+	return touch_iphone_response_escaped;
+}
+#endif
+
 static int32_t touch_http_bypass_prepare(void *message)
 {
 	uint8_t *bytes = (uint8_t *)message;
@@ -1187,6 +1401,9 @@ static int32_t touch_http_bypass_drain(void *client)
 		if (out_length == 0U) {
 			return TOUCH_OSSTATUS_WOULD_BLOCK;
 		}
+#if CONFIG_IPHONE_200_SAMPLE_PROFILE
+		touch_iphone_response_sample_feed(buffer, out_length);
+#endif
 	}
 	return 0;
 }
@@ -2731,6 +2948,7 @@ static unsigned long touch_path_stage_avg(const touch_path_stage_t *stage)
 
 void carbox_touch_path_profiler_report(uint32_t sequence)
 {
+	carbox_car_ack_response_cache_report(sequence);
 #if CONFIG_TOUCH_PATH_PROFILE
 	static touch_path_stats_t stats;
 	uint32_t now_us = hal_read_curtime_us();
@@ -2774,6 +2992,19 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 	uint8_t report5_touch_active;
 	uint8_t move_sample_active;
 	int car_socket_fd;
+#if CONFIG_GMT_TIME_PROFILE
+	time_t gmt_epoch;
+	struct tm gmt_utc;
+	long gmt_delta_seconds = 0L;
+	uint32_t gmt_elapsed_ms = 0U;
+	uint8_t gmt_utc_valid;
+	uint8_t gmt_previous_valid;
+#endif
+#if CONFIG_IPHONE_200_SAMPLE_PROFILE
+	uint16_t iphone_response_sample_length = 0U;
+	uint8_t iphone_response_sample_available = 0U;
+	uint8_t iphone_response_sample_overflow = 0U;
+#endif
 #if CONFIG_CAR_ACK_TCP_PROFILE
 	struct lwip_car_ack_diag car_tcp_ack;
 	int car_tcp_ack_valid = 0;
@@ -2821,6 +3052,20 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 	report5_touch_active = touch_path_state.report5_touch_active;
 	move_sample_active = touch_path_state.move_sample_active;
 	move_sample_next_due_us = touch_path_state.move_sample_next_due_us;
+#if CONFIG_IPHONE_200_SAMPLE_PROFILE
+	if (touch_iphone_response_sample.available) {
+		iphone_response_sample_length =
+			touch_iphone_response_sample.length;
+		iphone_response_sample_overflow =
+			touch_iphone_response_sample.overflow;
+		memcpy(touch_iphone_response_report,
+			touch_iphone_response_sample.bytes,
+			iphone_response_sample_length);
+		memset(&touch_iphone_response_sample, 0,
+			sizeof(touch_iphone_response_sample));
+		iphone_response_sample_available = 1U;
+	}
+#endif
 	http_depth = touch_http_live_depth();
 	for (i = 0U; i < TOUCH_HTTP_SLOTS; i++) {
 		if (touch_http_slots[i].active) {
@@ -2859,6 +3104,48 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 	    (lwip_diag_car_ack_snapshot(car_socket_fd, &car_tcp_ack, 1,
 					now_us) == 0)) {
 		car_tcp_ack_valid = 1;
+	}
+#endif
+
+#if CONFIG_GMT_TIME_PROFILE
+	gmt_epoch = time(NULL);
+	gmt_utc_valid = gmtime_r(&gmt_epoch, &gmt_utc) != NULL;
+	gmt_previous_valid = touch_gmt_previous_valid;
+	if (gmt_previous_valid) {
+		gmt_delta_seconds = (long)(gmt_epoch - touch_gmt_previous_epoch);
+		gmt_elapsed_ms = (now_us - touch_gmt_previous_tick_us) / 1000U;
+	}
+	touch_gmt_previous_epoch = gmt_epoch;
+	touch_gmt_previous_tick_us = now_us;
+	touch_gmt_previous_valid = 1U;
+	if (gmt_utc_valid) {
+		rt_printf("[GMTTIME][%lu] epoch=%ld delta_s=%ld elapsed_ms=%lu "
+			  "running/regressed=%u/%u utc=%04d-%02d-%02dT%02d:%02d:%02dZ\r\n",
+			  (unsigned long)sequence,
+			  (long)gmt_epoch,
+			  gmt_previous_valid ? gmt_delta_seconds : 0L,
+			  (unsigned long)gmt_elapsed_ms,
+			  (unsigned)(gmt_previous_valid &&
+				gmt_delta_seconds > 0L),
+			  (unsigned)(gmt_previous_valid &&
+				gmt_delta_seconds < 0L),
+			  gmt_utc.tm_year + 1900,
+			  gmt_utc.tm_mon + 1,
+			  gmt_utc.tm_mday,
+			  gmt_utc.tm_hour,
+			  gmt_utc.tm_min,
+			  gmt_utc.tm_sec);
+	} else {
+		rt_printf("[GMTTIME][%lu] epoch=%ld delta_s=%ld elapsed_ms=%lu "
+			  "running/regressed=%u/%u utc=invalid\r\n",
+			  (unsigned long)sequence,
+			  (long)gmt_epoch,
+			  gmt_previous_valid ? gmt_delta_seconds : 0L,
+			  (unsigned long)gmt_elapsed_ms,
+			  (unsigned)(gmt_previous_valid &&
+				gmt_delta_seconds > 0L),
+			  (unsigned)(gmt_previous_valid &&
+				gmt_delta_seconds < 0L));
 	}
 #endif
 
@@ -3139,6 +3426,33 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 		  (unsigned long)stats.http_bypass_ioctl_error,
 		  (unsigned long)stats.http_bypass_worker_runs,
 		  (unsigned long)stats.http_bypass_vendor_overlap);
+#endif
+#if CONFIG_IPHONE_200_SAMPLE_PROFILE
+	if (iphone_response_sample_available) {
+		rt_printf("[IPHONE200SAMPLE][%lu] headers/200/non200/busy/overflow="
+			  "%lu/%lu/%lu/%lu/%lu sample_len=%u truncated=%u "
+			  "header=\"%s\"\r\n",
+			  (unsigned long)sequence,
+			  (unsigned long)stats.iphone_response_headers,
+			  (unsigned long)stats.iphone_response_200,
+			  (unsigned long)stats.iphone_response_non_200,
+			  (unsigned long)stats.iphone_response_sample_busy,
+			  (unsigned long)stats.iphone_response_overflow,
+			  (unsigned)iphone_response_sample_length,
+			  (unsigned)iphone_response_sample_overflow,
+			  touch_iphone_response_escape(
+				touch_iphone_response_report,
+				iphone_response_sample_length));
+	} else {
+		rt_printf("[IPHONE200SAMPLE][%lu] headers/200/non200/busy/overflow="
+			  "%lu/%lu/%lu/%lu/%lu sample=none\r\n",
+			  (unsigned long)sequence,
+			  (unsigned long)stats.iphone_response_headers,
+			  (unsigned long)stats.iphone_response_200,
+			  (unsigned long)stats.iphone_response_non_200,
+			  (unsigned long)stats.iphone_response_sample_busy,
+			  (unsigned long)stats.iphone_response_overflow);
+	}
 #endif
 #if CONFIG_TOUCH_PATH_REPORT_DETAIL
 	rt_printf("[IPHONEHTTPRX][%lu] reader gcd/other=%lu/%lu prio_min/max=%lu/%lu "

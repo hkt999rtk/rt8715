@@ -78,10 +78,18 @@
 #define CONFIG_TCPIP_RX_BATCH_PROFILE 0
 #endif
 
-#if CONFIG_TCPIP_RX_BATCH_STAGE1 && !LWIP_TCPIP_CORE_LOCKING_INPUT
+#ifndef CONFIG_TCPIP_NCM_RX_PRIORITY
+#define CONFIG_TCPIP_NCM_RX_PRIORITY 0
+#endif
+
+#if (CONFIG_TCPIP_RX_BATCH_STAGE1 || CONFIG_TCPIP_NCM_RX_PRIORITY) && \
+    !LWIP_TCPIP_CORE_LOCKING_INPUT
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
+#endif
+
+#if CONFIG_TCPIP_RX_BATCH_STAGE1 && !LWIP_TCPIP_CORE_LOCKING_INPUT
 #if CONFIG_TCPIP_RX_BATCH_TIMER_PROBE
 #include "hal_timer.h"
 #endif
@@ -107,6 +115,142 @@
 static tcpip_init_done_fn tcpip_init_done;
 static void *tcpip_init_done_arg;
 static sys_mbox_t tcpip_mbox;
+
+#if CONFIG_TCPIP_NCM_RX_PRIORITY && !LWIP_TCPIP_CORE_LOCKING_INPUT
+#define TCPIP_NCM_RX_POOL_SIZE 128U
+#define TCPIP_NCM_RX_INVALID_INDEX 0xffffU
+
+struct tcpip_ncm_rx_entry {
+  struct pbuf *p;
+  struct netif *netif;
+  netif_input_fn input_fn;
+  u16_t next;
+};
+
+static struct tcpip_ncm_rx_entry tcpip_ncm_rx_pool[TCPIP_NCM_RX_POOL_SIZE];
+static u16_t tcpip_ncm_rx_free_head = TCPIP_NCM_RX_INVALID_INDEX;
+static u16_t tcpip_ncm_rx_pending_head = TCPIP_NCM_RX_INVALID_INDEX;
+static u16_t tcpip_ncm_rx_pending_tail = TCPIP_NCM_RX_INVALID_INDEX;
+static u8_t tcpip_ncm_rx_marker_pending;
+static struct tcpip_msg tcpip_ncm_rx_marker;
+
+static int
+tcpip_ncm_rx_eligible(const struct netif *inp)
+{
+  return inp != NULL && inp->name[0] == 'e' && inp->name[1] == 'n';
+}
+
+static void
+tcpip_ncm_rx_free_locked(u16_t index)
+{
+  tcpip_ncm_rx_pool[index].next = tcpip_ncm_rx_free_head;
+  tcpip_ncm_rx_free_head = index;
+}
+
+static void
+tcpip_ncm_rx_drain(void *arg)
+{
+  LWIP_UNUSED_ARG(arg);
+
+  for (;;) {
+    struct tcpip_ncm_rx_entry *entry;
+    struct pbuf *p;
+    struct netif *netif;
+    netif_input_fn input_fn;
+    u16_t index;
+
+    taskENTER_CRITICAL();
+    index = tcpip_ncm_rx_pending_head;
+    if (index == TCPIP_NCM_RX_INVALID_INDEX) {
+      tcpip_ncm_rx_pending_tail = TCPIP_NCM_RX_INVALID_INDEX;
+      tcpip_ncm_rx_marker_pending = 0U;
+      taskEXIT_CRITICAL();
+      break;
+    }
+    entry = &tcpip_ncm_rx_pool[index];
+    tcpip_ncm_rx_pending_head = entry->next;
+    if (tcpip_ncm_rx_pending_head == TCPIP_NCM_RX_INVALID_INDEX) {
+      tcpip_ncm_rx_pending_tail = TCPIP_NCM_RX_INVALID_INDEX;
+    }
+    p = entry->p;
+    netif = entry->netif;
+    input_fn = entry->input_fn;
+    taskEXIT_CRITICAL();
+
+    if (input_fn(p, netif) != ERR_OK) {
+      pbuf_free(p);
+    }
+
+    taskENTER_CRITICAL();
+    tcpip_ncm_rx_free_locked(index);
+    taskEXIT_CRITICAL();
+  }
+}
+
+static err_t
+tcpip_ncm_rx_enqueue(struct pbuf *p, struct netif *inp,
+                     netif_input_fn input_fn)
+{
+  struct tcpip_ncm_rx_entry *entry;
+  struct tcpip_msg *marker = &tcpip_ncm_rx_marker;
+  u16_t index;
+
+  taskENTER_CRITICAL();
+  index = tcpip_ncm_rx_free_head;
+  if (index == TCPIP_NCM_RX_INVALID_INDEX) {
+    taskEXIT_CRITICAL();
+    return ERR_MEM;
+  }
+  entry = &tcpip_ncm_rx_pool[index];
+  tcpip_ncm_rx_free_head = entry->next;
+  entry->p = p;
+  entry->netif = inp;
+  entry->input_fn = input_fn;
+  entry->next = TCPIP_NCM_RX_INVALID_INDEX;
+
+  if (tcpip_ncm_rx_pending_tail == TCPIP_NCM_RX_INVALID_INDEX) {
+    tcpip_ncm_rx_pending_head = index;
+  } else {
+    tcpip_ncm_rx_pool[tcpip_ncm_rx_pending_tail].next = index;
+  }
+  tcpip_ncm_rx_pending_tail = index;
+
+  if (tcpip_ncm_rx_marker_pending == 0U) {
+    tcpip_ncm_rx_marker_pending = 1U;
+    if (xQueueSendToFront(tcpip_mbox, &marker, 0) != pdPASS) {
+      tcpip_ncm_rx_pending_head = TCPIP_NCM_RX_INVALID_INDEX;
+      tcpip_ncm_rx_pending_tail = TCPIP_NCM_RX_INVALID_INDEX;
+      tcpip_ncm_rx_marker_pending = 0U;
+      tcpip_ncm_rx_free_locked(index);
+      taskEXIT_CRITICAL();
+      return ERR_MEM;
+    }
+  }
+  taskEXIT_CRITICAL();
+  return ERR_OK;
+}
+
+static void
+tcpip_ncm_rx_priority_init(void)
+{
+  u32_t i;
+
+  for (i = 0U; i < TCPIP_NCM_RX_POOL_SIZE; i++) {
+    tcpip_ncm_rx_pool[i].next =
+      (i + 1U < TCPIP_NCM_RX_POOL_SIZE) ?
+      (u16_t)(i + 1U) : TCPIP_NCM_RX_INVALID_INDEX;
+  }
+  tcpip_ncm_rx_free_head = 0U;
+  tcpip_ncm_rx_pending_head = TCPIP_NCM_RX_INVALID_INDEX;
+  tcpip_ncm_rx_pending_tail = TCPIP_NCM_RX_INVALID_INDEX;
+  tcpip_ncm_rx_marker_pending = 0U;
+  tcpip_ncm_rx_marker.type = TCPIP_MSG_CALLBACK_STATIC;
+  tcpip_ncm_rx_marker.msg.cb.function = tcpip_ncm_rx_drain;
+  tcpip_ncm_rx_marker.msg.cb.ctx = NULL;
+  LWIP_PLATFORM_DIAG(("[NCMRXPRIO] enabled pool=%u mode=fifo-front-marker\n",
+                      (unsigned)TCPIP_NCM_RX_POOL_SIZE));
+}
+#endif
 
 #if CONFIG_TCPIP_RX_BATCH_STAGE1 && !LWIP_TCPIP_CORE_LOCKING_INPUT
 #define TCPIP_RX_STAGE1_POOL_SIZE 128U
@@ -812,6 +956,12 @@ tcpip_inpkt(struct pbuf *p, struct netif *inp, netif_input_fn input_fn)
 
   LWIP_ASSERT("Invalid mbox", sys_mbox_valid_val(tcpip_mbox));
 
+#if CONFIG_TCPIP_NCM_RX_PRIORITY
+  if (tcpip_ncm_rx_eligible(inp)) {
+    return tcpip_ncm_rx_enqueue(p, inp, input_fn);
+  }
+#endif
+
 #if CONFIG_TCPIP_RX_BATCH_STAGE1
   if (tcpip_rx_stage1_eligible(inp)) {
     struct tcpip_rx_stage1_msg *entry;
@@ -1290,6 +1440,9 @@ tcpip_init(tcpip_init_done_fn initfunc, void *arg)
   if (sys_mbox_new(&tcpip_mbox, TCPIP_MBOX_SIZE) != ERR_OK) {
     LWIP_ASSERT("failed to create tcpip_thread mbox", 0);
   }
+#if CONFIG_TCPIP_NCM_RX_PRIORITY && !LWIP_TCPIP_CORE_LOCKING_INPUT
+  tcpip_ncm_rx_priority_init();
+#endif
 #if CONFIG_TCPIP_RX_BATCH_STAGE1 && !LWIP_TCPIP_CORE_LOCKING_INPUT
   tcpip_rx_stage1_init();
 #if CONFIG_TCPIP_RX_BATCH_TIMER_PROBE
