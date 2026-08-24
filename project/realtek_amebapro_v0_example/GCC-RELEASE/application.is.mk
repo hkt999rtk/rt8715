@@ -771,6 +771,7 @@ SRC_C += ../src/carbox/lpddr_margin_test.c
 SRC_C += ../src/carbox/touch_path_profiler.c
 SRC_C += ../src/carbox/car_ack_response_cache.c
 SRC_C += ../src/carbox/iap2_device_time_sync.c
+SRC_C += ../src/carbox/iap2_cond_timedwait_fix.c
 SRC_C += ../src/carbox/touch_frame_profiler.c
 SRC_C += ../src/carbox/i2c_bitbang_pacing.c
 SRC_C += ../src/carbox/ota_local_upload_page.c
@@ -972,7 +973,7 @@ $(NCM_TX_PROFILE_STAMP):
 PC_PROFILER ?= 1
 # Keep the 10-second reporter task as the common clock for focused subsystem
 # reports, but suppress its own CPU/task table after scheduler diagnosis.
-PC_PROFILER_SELF_REPORT ?= 0
+PC_PROFILER_SELF_REPORT ?= 1
 # Keep task CPU utilization and the active subsystem report, but suppress the
 # already-validated recurring clock/PLL/SPIC, I2C pacing, and firmware-slot
 # dumps during normal soak tests. Set this to 1 when platform bring-up data is
@@ -1313,6 +1314,10 @@ AIRPLAY_HID_HTTP_BYPASS ?= 1
 # the iPhone timezone offset, then passes local calendar fields to its callback;
 # synchronize that local wall clock while preserving the original callback.
 IAP2_DEVICE_TIME_SYNC ?= 1
+# Keep the customer iAP2 control thread's intended 20 ms condition wait after
+# wall-clock synchronization.  Its original tv_sec*1000 deadline arithmetic
+# overflows at a real Unix epoch and otherwise turns the thread into a busy loop.
+IAP2_COND_TIMEDWAIT_FIX ?= 1
 # Sample the wall clock used by time(NULL) once per 10-second touch-path
 # report, including UTC text and progress relative to the monotonic interval.
 GMT_TIME_PROFILE ?= 1
@@ -1422,6 +1427,13 @@ $(IAP2_DEVICE_TIME_SYNC_STAMP):
 	@rm -f $(OBJ_DIR)/.iap2_device_time_sync_*
 	@touch $@
 ../src/carbox/iap2_device_time_sync.o: $(IAP2_DEVICE_TIME_SYNC_STAMP)
+IAP2_COND_TIMEDWAIT_FIX_STAMP := \
+	$(OBJ_DIR)/.iap2_cond_timedwait_fix_$(IAP2_COND_TIMEDWAIT_FIX)
+$(IAP2_COND_TIMEDWAIT_FIX_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.iap2_cond_timedwait_fix_*
+	@touch $@
+../src/carbox/iap2_cond_timedwait_fix.o: $(IAP2_COND_TIMEDWAIT_FIX_STAMP)
 # Stage 1 validates the preallocated pbuf-pointer mailbox path without
 # aggregation, delay, or GTimer.  Each WLAN packet is still posted immediately.
 TCPIP_RX_BATCH_STAGE1 ?= 1
@@ -1581,6 +1593,7 @@ GCCFLAGS += -DCONFIG_PC_PROFILER_PLATFORM_REPORT=$(PC_PROFILER_PLATFORM_REPORT)
 GCCFLAGS += -DCONFIG_PC_PROFILER_PC_DETAIL=$(PC_PROFILER_PC_DETAIL)
 GCCFLAGS += -DCONFIG_PC_PROFILER_RTW_RECV_DETAIL=$(PC_PROFILER_RTW_RECV_DETAIL)
 GCCFLAGS += -DCONFIG_PC_PROFILER_RTW_DUMP_PROFILE=$(PC_PROFILER_RTW_DUMP_PROFILE)
+GCCFLAGS += -DCONFIG_IAP2_COND_TIMEDWAIT_FIX=$(IAP2_COND_TIMEDWAIT_FIX)
 GCCFLAGS += -DCONFIG_LPDDR_RE_OBSERVE=$(LPDDR_RE_OBSERVE)
 GCCFLAGS += -DCONFIG_LPDDR_RE_CLOCK_HZ=$(LPDDR_RE_CLOCK_HZ)U
 GCCFLAGS += -DCONFIG_LPDDR_PROFILE_REPORT=$(LPDDR_PROFILE_REPORT)
@@ -2091,7 +2104,7 @@ CARBOX_VIDEO_HANDOVER_PATCH := $(CARBOX_SMART_CARPLAY_LIB_DIR)/patch_video_hando
 CARBOX_SCREEN_WAIT_RELOC_PATCH := ../src/carbox/tools/patch_screen_wait_relocation.py
 CARBOX_REDUNDANT_COPY_PATCH := ../src/carbox/tools/patch_airplay_redundant_copy.py
 CARBOX_EVENT_RESPONSE_PATCH := ../src/carbox/tools/patch_airplay_event_response.py
-CARBOX_ACCESSORY_PATCH_STAMP := $(OBJ_DIR)/.accessory_patch_v4-zc$(VIDEO_HANDOVER_ZERO_COPY)-direct$(SCREEN_TX_DIRECT_CRYPTO)-wait$(SCREEN_QUEUE_EVENT_WAIT)-ackcache$(CAR_ACK_RESPONSE_CACHE)
+CARBOX_ACCESSORY_PATCH_STAMP := $(OBJ_DIR)/.accessory_patch_v5-zc$(VIDEO_HANDOVER_ZERO_COPY)-direct$(SCREEN_TX_DIRECT_CRYPTO)-wait$(SCREEN_QUEUE_EVENT_WAIT)-ackcache$(CAR_ACK_RESPONSE_CACHE)-iap2wait$(IAP2_COND_TIMEDWAIT_FIX)
 $(CARBOX_ACCESSORY_PATCH_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.accessory_patch_*
@@ -2174,7 +2187,7 @@ $(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) vendor-private-sw
 application: $(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE)
 endif
-ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO) $(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE)),)
+ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO) $(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE) $(IAP2_COND_TIMEDWAIT_FIX)),)
 $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH) $(CARBOX_SCREEN_WAIT_RELOC_PATCH) \
 		$(CARBOX_REDUNDANT_COPY_PATCH) $(CARBOX_EVENT_RESPONSE_PATCH) \
@@ -2182,8 +2195,8 @@ $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
 	sh $(CARBOX_VIDEO_HANDOVER_PATCH) \
 		$(if $(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO)),accessory,accessory-wait) \
 		$(AR) $(OBJCOPY) $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) $@ \
-		"AirPlayScreen.o $(if $(filter 1,$(CAR_ACK_RESPONSE_CACHE)),AirPlayEvent.o)" \
-		$(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE)
+		"AirPlayScreen.o $(if $(filter 1,$(CAR_ACK_RESPONSE_CACHE)),AirPlayEvent.o) $(if $(filter 1,$(IAP2_COND_TIMEDWAIT_FIX)),iAP2Ctrl.o)" \
+		$(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE) $(IAP2_COND_TIMEDWAIT_FIX)
 application: $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
 endif
 ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
@@ -2192,27 +2205,27 @@ $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
 		$(CARBOX_ACCESSORY_PATCH_STAMP)
 	sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
 		$(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) $@ \
-		"AirPlayScreen.o $(if $(filter 1,$(CAR_ACK_RESPONSE_CACHE)),AirPlayEvent.o)" \
-		$(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE)
+		"AirPlayScreen.o $(if $(filter 1,$(CAR_ACK_RESPONSE_CACHE)),AirPlayEvent.o) $(if $(filter 1,$(IAP2_COND_TIMEDWAIT_FIX)),iAP2Ctrl.o)" \
+		$(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE) $(IAP2_COND_TIMEDWAIT_FIX)
 application: $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE)
 endif
 ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW)),)
 $(CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE): $(CARBOX_SYSTEMLIB_VENDOR_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH)
 	sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
-		$(CARBOX_SYSTEMLIB_VENDOR_ARCHIVE) $@ "Accessory.o Image.o" 0 0
+		$(CARBOX_SYSTEMLIB_VENDOR_ARCHIVE) $@ "Accessory.o Image.o" 0 0 0
 application: $(CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE)
 $(CARBOX_UILIB_PRIVATE_MEM_ARCHIVE): $(CARBOX_UILIB_VENDOR_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH)
 	sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
-		$(CARBOX_UILIB_VENDOR_ARCHIVE) $@ "Surface.o ImageView.o" 0 0
+		$(CARBOX_UILIB_VENDOR_ARCHIVE) $@ "Surface.o ImageView.o" 0 0 0
 application: $(CARBOX_UILIB_PRIVATE_MEM_ARCHIVE)
 endif
 ifeq ($(VIDEO_HANDOVER_ZERO_COPY),1)
 $(CARBOX_CARPLAY_HANDOVER_ARCHIVE): $(CARBOX_CARPLAY_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH)
 	sh $(CARBOX_VIDEO_HANDOVER_PATCH) receiver $(AR) $(OBJCOPY) \
-		$(CARBOX_CARPLAY_ARCHIVE) $@ AirPlayReceiverSessionScreen.o 0 0
+		$(CARBOX_CARPLAY_ARCHIVE) $@ AirPlayReceiverSessionScreen.o 0 0 0
 
 application: $(CARBOX_CARPLAY_HANDOVER_ARCHIVE)
 endif
@@ -2239,7 +2252,7 @@ LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_zlib.a
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_AndroidAuto.a
 ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
 LIBFLAGS += $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE)
-else ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO) $(SCREEN_QUEUE_EVENT_WAIT)),)
+else ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO) $(SCREEN_QUEUE_EVENT_WAIT) $(IAP2_COND_TIMEDWAIT_FIX)),)
 LIBFLAGS += $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
 else
 LIBFLAGS += $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE)

@@ -1,5 +1,6 @@
 #include "pc_profiler.h"
 #include "i2c_bitbang_pacing.h"
+#include "iap2_cond_timedwait_fix.h"
 #include "lpddr_re_wrap.h"
 #include "lpddr_margin_test.h"
 #include "gcd_sync_profiler.h"
@@ -144,8 +145,136 @@ void carbox_pc_profiler_set_clock_boot_status(int status)
 #define PCPROF_MAX_TASK_SNAPSHOT        64U
 #define PCPROF_RTW_DUMP_EXIT_COUNT         6U
 #define PCPROF_TASK_STACK_BYTES       8192U
+#define PCPROF_WATCH_STACK_BYTES      2048U
+#define PCPROF_WATCH_PERIOD_MS        2000U
+#define PCPROF_WATCH_STALL_MS        15000U
+#define PCPROF_WATCH_REPEAT_MS       10000U
 #define PCPROF_LATE_REJECT_US            10U
 #define PCPROF_CLOCK_MEASURE_MS           100U
+
+enum pcprof_watch_phase {
+	PCPROF_PHASE_CREATE = 0,
+	PCPROF_PHASE_INIT,
+	PCPROF_PHASE_WAIT,
+	PCPROF_PHASE_SNAPSHOT,
+	PCPROF_PHASE_SELF_REPORT,
+	PCPROF_PHASE_PLATFORM,
+	PCPROF_PHASE_CHACHA_PARTIAL,
+	PCPROF_PHASE_CHACHA_RUNTIME,
+	PCPROF_PHASE_CHACHA_RECOVERY,
+	PCPROF_PHASE_SCREEN,
+	PCPROF_PHASE_TOUCH,
+	PCPROF_PHASE_RX_RECORD,
+	PCPROF_PHASE_FPS_NEGO,
+	PCPROF_PHASE_USB,
+	PCPROF_PHASE_OTHER,
+	PCPROF_PHASE_ROUND_DONE,
+	PCPROF_PHASE_TIMER_ERROR,
+	PCPROF_PHASE_CREATE_ERROR,
+};
+
+static TaskHandle_t pcprof_reporter_handle;
+static volatile uint32_t pcprof_watch_phase = PCPROF_PHASE_CREATE;
+static volatile uint32_t pcprof_watch_sequence;
+static volatile TickType_t pcprof_watch_progress_tick;
+
+static void pcprof_watch_progress(enum pcprof_watch_phase phase,
+				  uint32_t sequence)
+{
+	pcprof_watch_phase = (uint32_t)phase;
+	pcprof_watch_sequence = sequence;
+	pcprof_watch_progress_tick = xTaskGetTickCount();
+}
+
+static const char *pcprof_watch_phase_name(uint32_t phase)
+{
+	static const char *const names[] = {
+		"create", "init", "wait", "snapshot", "self",
+		"platform", "chacha_partial", "chacha_runtime",
+		"chacha_recovery", "screen", "touch", "rx_record",
+		"fps_nego", "usb", "other", "round_done",
+		"timer_error", "create_error",
+	};
+
+	return phase < (sizeof(names) / sizeof(names[0])) ? names[phase] :
+		"invalid";
+}
+
+static const char *pcprof_watch_state_name(eTaskState state)
+{
+	switch (state) {
+	case eRunning:
+		return "RUN";
+	case eReady:
+		return "READY";
+	case eBlocked:
+		return "BLOCK";
+	case eSuspended:
+		return "SUSP";
+	case eDeleted:
+		return "DELETE";
+	default:
+		return "INVALID";
+	}
+}
+
+static void pcprof_watch_task(void *arg)
+{
+	TickType_t last_warning_tick = 0U;
+	uint8_t warning_active = 0U;
+
+	(void)arg;
+	rt_printf("[PCPROFWATCH] enabled period_ms=%u stall_ms=%u\r\n",
+		  PCPROF_WATCH_PERIOD_MS, PCPROF_WATCH_STALL_MS);
+	for (;;) {
+		TaskHandle_t handle;
+		TickType_t now;
+		TickType_t progress;
+		TickType_t age_ticks;
+		uint32_t phase;
+		uint32_t sequence;
+
+		vTaskDelay(pdMS_TO_TICKS(PCPROF_WATCH_PERIOD_MS));
+		now = xTaskGetTickCount();
+		progress = pcprof_watch_progress_tick;
+		age_ticks = now - progress;
+		if (age_ticks < pdMS_TO_TICKS(PCPROF_WATCH_STALL_MS)) {
+			warning_active = 0U;
+			continue;
+		}
+		if (warning_active != 0U &&
+		    (now - last_warning_tick) <
+			pdMS_TO_TICKS(PCPROF_WATCH_REPEAT_MS)) {
+			continue;
+		}
+
+		handle = pcprof_reporter_handle;
+		phase = pcprof_watch_phase;
+		sequence = pcprof_watch_sequence;
+		if (handle != NULL) {
+			eTaskState state = eTaskGetState(handle);
+			UBaseType_t stack_hwm =
+				uxTaskGetStackHighWaterMark(handle);
+
+			rt_printf("[PCPROFWATCH] stalled age_ms=%lu phase=%s "
+				  "seq=%lu task_state=%s stack_hwm_words=%lu "
+				  "handle=%p\r\n",
+				  (unsigned long)(age_ticks * portTICK_PERIOD_MS),
+				  pcprof_watch_phase_name(phase),
+				  (unsigned long)sequence,
+				  pcprof_watch_state_name(state),
+				  (unsigned long)stack_hwm, handle);
+		} else {
+			rt_printf("[PCPROFWATCH] stalled age_ms=%lu phase=%s "
+				  "seq=%lu task_state=NONE handle=0\r\n",
+				  (unsigned long)(age_ticks * portTICK_PERIOD_MS),
+				  pcprof_watch_phase_name(phase),
+				  (unsigned long)sequence);
+		}
+		warning_active = 1U;
+		last_warning_tick = now;
+	}
+}
 
 typedef struct pcprof_clock_measurement_s {
 	uint32_t cycles;
@@ -1526,6 +1655,7 @@ static void pcprof_task(void *arg)
 	uint32_t sequence = 0U;
 
 	(void)arg;
+	pcprof_watch_progress(PCPROF_PHASE_INIT, sequence);
 	CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
 	DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 	pcprof_clock_measure_once();
@@ -1540,7 +1670,9 @@ static void pcprof_task(void *arg)
 
 	timer_id = hal_timer_allocate(NULL);
 	if (timer_id >= MaxGTimerNum || hal_timer_init(&pcprof_timer, timer_id) != HAL_OK) {
+		pcprof_watch_progress(PCPROF_PHASE_TIMER_ERROR, sequence);
 		rt_printf("[PCPROF] ERROR: no GTimer available\r\n");
+		pcprof_reporter_handle = NULL;
 		vTaskDelete(NULL);
 		return;
 	}
@@ -1572,7 +1704,9 @@ static void pcprof_task(void *arg)
 		uint32_t timer_irq;
 		uint32_t primask;
 
+		pcprof_watch_progress(PCPROF_PHASE_WAIT, sequence);
 		vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(PCPROF_REPORT_PERIOD_MS));
+		pcprof_watch_progress(PCPROF_PHASE_SNAPSHOT, sequence + 1U);
 		/*
 		 * The HAL owns the timer IRQ priority.  Use PRIMASK for this very short
 		 * pointer/count snapshot instead of assuming BASEPRI masks that IRQ.
@@ -1621,6 +1755,7 @@ static void pcprof_task(void *arg)
 
 		sequence++;
 #if defined(CONFIG_PC_PROFILER_SELF_REPORT) && CONFIG_PC_PROFILER_SELF_REPORT
+		pcprof_watch_progress(PCPROF_PHASE_SELF_REPORT, sequence);
 		pcprof_report(sequence, old_buffer, count, invalid, nested, late,
 			      dropped, isr_cycles, isr_cycles_max,
 			      interval_cycles_sum, interval_cycles_max,
@@ -1628,6 +1763,7 @@ static void pcprof_task(void *arg)
 			      caller_attributed);
 #endif
 #if CONFIG_PC_PROFILER_PLATFORM_REPORT
+		pcprof_watch_progress(PCPROF_PHASE_PLATFORM, sequence);
 		pcprof_clock_report(sequence);
 #endif
 #if CONFIG_LPDDR_PROFILE_REPORT
@@ -1646,9 +1782,11 @@ static void pcprof_task(void *arg)
 		carbox_crypto_irq_controller_report(sequence);
 #endif
 		if (chacha_rtl8195b_partial_selftest_report != NULL) {
+			pcprof_watch_progress(PCPROF_PHASE_CHACHA_PARTIAL, sequence);
 			chacha_rtl8195b_partial_selftest_report(sequence);
 		}
 #if CONFIG_CHACHA_RUNTIME_PROFILE
+		pcprof_watch_progress(PCPROF_PHASE_CHACHA_RUNTIME, sequence);
 		if (chacha_poly_scratch_report != NULL) {
 			chacha_poly_scratch_report(sequence);
 		}
@@ -1657,9 +1795,11 @@ static void pcprof_task(void *arg)
 		}
 #endif
 		if (chacha_recovery_report != NULL) {
+			pcprof_watch_progress(PCPROF_PHASE_CHACHA_RECOVERY, sequence);
 			chacha_recovery_report(sequence);
 		}
 #if CONFIG_SCREEN_FPS_PROFILE
+		pcprof_watch_progress(PCPROF_PHASE_SCREEN, sequence);
 		carbox_screen_fps_report(sequence);
 		carbox_screen_queue_wait_report(sequence);
 		carbox_video_handover_gate_report(sequence);
@@ -1672,7 +1812,10 @@ static void pcprof_task(void *arg)
 		carbox_ncm_tx_gdma_latency_report(sequence);
 		carbox_screen_block_profile_report(sequence);
 #endif
+		pcprof_watch_progress(PCPROF_PHASE_TOUCH, sequence);
+		carbox_iap2_cond_timedwait_fix_report(sequence);
 		carbox_touch_path_profiler_report(sequence);
+		pcprof_watch_progress(PCPROF_PHASE_RX_RECORD, sequence);
 		carbox_screen_rx_record_profiler_report(sequence);
 #if CONFIG_USB_PROFILE_REPORT
 		carbox_usb_boot_profiler_report(sequence);
@@ -1708,6 +1851,7 @@ static void pcprof_task(void *arg)
 #endif
 #if defined(CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE) && \
 	CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE
+		pcprof_watch_progress(PCPROF_PHASE_FPS_NEGO, sequence);
 		carbox_screen_rx_rate_limit_report(sequence);
 #endif
 #if defined(CONFIG_TOUCH_FRAME_PROFILE) && CONFIG_TOUCH_FRAME_PROFILE
@@ -1740,11 +1884,14 @@ static void pcprof_task(void *arg)
 	(defined(CONFIG_USB_HCD_CHANNEL_PROFILE) && CONFIG_USB_HCD_CHANNEL_PROFILE) || \
 	(defined(CONFIG_USB_NCM_RX_PROFILE) && CONFIG_USB_NCM_RX_PROFILE) || \
 	(defined(CONFIG_USB_TX_LIFETIME_PROFILE) && CONFIG_USB_TX_LIFETIME_PROFILE))
+		pcprof_watch_progress(PCPROF_PHASE_USB, sequence);
 		usb_hcd_profiler_report(sequence);
 #endif
 #if defined(CONFIG_USB_CH4_QUEUE_FRONT) && CONFIG_USB_CH4_QUEUE_FRONT
+		pcprof_watch_progress(PCPROF_PHASE_USB, sequence);
 		carbox_usb_rx_priority_report(sequence);
 #endif
+		pcprof_watch_progress(PCPROF_PHASE_OTHER, sequence);
 #if defined(CONFIG_NET_QUEUE_PROFILE) && CONFIG_NET_QUEUE_PROFILE
 		net_queue_profiler_report(sequence);
 #endif
@@ -1759,6 +1906,7 @@ static void pcprof_task(void *arg)
 	CONFIG_WLAN_RX_SWAP_BRINGUP_PROFILE
 		rltk_wlan_rx_swap_profile_report(sequence);
 #endif
+		pcprof_watch_progress(PCPROF_PHASE_ROUND_DONE, sequence);
 	}
 }
 
@@ -1768,10 +1916,17 @@ void carbox_pc_profiler_start(void)
 	/* Install before later drivers register or replace their IRQ vectors. */
 	carbox_irq_profiler_init();
 #endif
+	pcprof_watch_progress(PCPROF_PHASE_CREATE, 0U);
 	if (xTaskCreate(pcprof_task, "pcprof",
 			PCPROF_TASK_STACK_BYTES / sizeof(StackType_t), NULL,
-			tskIDLE_PRIORITY + 1U, NULL) != pdPASS) {
+			tskIDLE_PRIORITY + 2U, &pcprof_reporter_handle) != pdPASS) {
+		pcprof_watch_progress(PCPROF_PHASE_CREATE_ERROR, 0U);
 		rt_printf("[PCPROF] ERROR: reporter task creation failed\r\n");
+	}
+	if (xTaskCreate(pcprof_watch_task, "pcprof_watch",
+			PCPROF_WATCH_STACK_BYTES / sizeof(StackType_t), NULL,
+			tskIDLE_PRIORITY + 2U, NULL) != pdPASS) {
+		rt_printf("[PCPROFWATCH] ERROR: watchdog task creation failed\r\n");
 	}
 }
 

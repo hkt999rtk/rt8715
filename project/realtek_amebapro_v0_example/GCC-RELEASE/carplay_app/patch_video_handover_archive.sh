@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 8 ]; then
-	echo "usage: $0 MODE AR OBJCOPY INPUT OUTPUT MEMBERS SCREEN_WAIT ACK_CACHE" >&2
+if [ "$#" -ne 9 ]; then
+	echo "usage: $0 MODE AR OBJCOPY INPUT OUTPUT MEMBERS SCREEN_WAIT ACK_CACHE IAP2_WAIT_FIX" >&2
 	exit 2
 fi
 
@@ -14,6 +14,7 @@ output_archive=$5
 members=$6
 screen_wait=$7
 ack_cache=$8
+iap2_wait_fix=$9
 script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 screen_wait_patcher=$script_directory/../../src/carbox/tools/patch_screen_wait_relocation.py
 redundant_copy_patcher=$script_directory/../../src/carbox/tools/patch_airplay_redundant_copy.py
@@ -70,6 +71,14 @@ case "$ack_cache" in
 		;;
 esac
 
+case "$iap2_wait_fix" in
+	0|1) ;;
+	*)
+		echo "IAP2_WAIT_FIX must be 0 or 1: $iap2_wait_fix" >&2
+		exit 2
+		;;
+esac
+
 # Work only on a derived archive.  The Realtek/customer supplied input archive
 # remains byte-for-byte untouched, so disabling the feature restores the exact
 # legacy binary without relying on an inverse objcopy operation.
@@ -116,6 +125,26 @@ cp "$input_archive" "$output_archive"
 				"patched.o" "patched-with-ack-cache.o"
 			mv "patched-with-ack-cache.o" "patched.o"
 			python3 "$event_response_patcher" "patched.o"
+		fi
+		if [ "$iap2_wait_fix" = 1 ] && [ "$member" = iAP2Ctrl.o ]; then
+			# iAP2Ctrl_MsgThread overflows its 32-bit tv_sec*1000 deadline
+			# after wall-clock synchronization.  The customer object currently
+			# has exactly one timed-wait relocation; stop the build if that
+			# invariant changes instead of silently patching a different call.
+			readelf_tool=$(dirname "$objcopy_tool")/arm-none-eabi-readelf
+			test -x "$readelf_tool"
+			wait_relocations=$(
+				"$readelf_tool" -r "patched.o" |
+				awk '$NF == "pthread_cond_timedwait" { count++ } END { print count + 0 }'
+			)
+			if [ "$wait_relocations" -ne 1 ]; then
+				echo "iAP2Ctrl.o expected one pthread_cond_timedwait relocation, found $wait_relocations" >&2
+				exit 1
+			fi
+			"$objcopy_tool" --redefine-sym \
+				pthread_cond_timedwait=carbox_iap2_cond_timedwait \
+				"patched.o" "patched-with-iap2-wait.o"
+			mv "patched-with-iap2-wait.o" "patched.o"
 		fi
 		mv "patched.o" "$member"
 		"$ar_tool" r "$output_archive" "$member"
