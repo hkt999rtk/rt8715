@@ -954,6 +954,10 @@ NCM_TX_BATCH_TIMEOUT_UPPER_US ?= 1000
 # Queue arrival drives assembly.  The adaptive one-shot timer is used only
 # while USB already owns work; it never delays the first NTB after an idle gap.
 NCM_TX_PIPELINE ?= 1
+# Put NCM NTBs carrying vehicle-event RTSP responses on a separate FIFO. The
+# USB owner finishes its current transfer, then services this FIFO before the
+# normal NCM ready queue. Flow identification is independent of diagnostics.
+CAR_ACK_USB_PRIORITY ?= 0
 # Assemble the selected pbuf segments into the contiguous USB NTB with the
 # existing cache-safe linked-GDMA copyv helper.  The NCM builder falls back to
 # a complete CPU copy whenever GDMA is unavailable, busy, or reports an error.
@@ -962,7 +966,7 @@ NCM_TX_LINKED_GDMA ?= 1
 NCM_TX_ASYNC_PROFILE ?= 0
 # Compiler command-line changes are not tracked by ordinary source timestamps.
 # Force the sole consumer to rebuild whenever the observation mode changes.
-NCM_TX_PROFILE_STAMP := $(OBJ_DIR)/.ncm_tx_profile_$(NCM_TX_PROFILE)-async$(NCM_TX_ASYNC_PROFILE)-batch$(NCM_TX_BATCH_MAX)-min$(NCM_TX_BATCH_MIN)-wait$(NCM_TX_BATCH_TIMEOUT_LOWER_US)-$(NCM_TX_BATCH_TIMEOUT_UPPER_US)-pipe$(NCM_TX_PIPELINE)-gdma$(NCM_TX_LINKED_GDMA)
+NCM_TX_PROFILE_STAMP := $(OBJ_DIR)/.ncm_tx_profile_$(NCM_TX_PROFILE)-async$(NCM_TX_ASYNC_PROFILE)-batch$(NCM_TX_BATCH_MAX)-min$(NCM_TX_BATCH_MIN)-wait$(NCM_TX_BATCH_TIMEOUT_LOWER_US)-$(NCM_TX_BATCH_TIMEOUT_UPPER_US)-pipe$(NCM_TX_PIPELINE)-gdma$(NCM_TX_LINKED_GDMA)-ackprio$(CAR_ACK_USB_PRIORITY)
 $(NCM_TX_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.ncm_tx_profile_*
@@ -1239,7 +1243,7 @@ USB_NCM_RX_PROFILE ?= 0
 USB_TX_LIFETIME_PROFILE ?= 0
 # Put CarBox NCM channel-4 state-change notifications at the front of the
 # closed USB core queue. Also records the HCD-to-core-queue path.
-USB_CH4_QUEUE_FRONT ?= 1
+USB_CH4_QUEUE_FRONT ?= 0
 # Master switch for recurring USBBOOT, NCMTX and optional HCD report output.
 # Instrumentation and the validated NCM TX data path remain compiled so this
 # can be restored without changing USB behaviour.
@@ -1590,6 +1594,7 @@ GCCFLAGS += -DCONFIG_NCM_TX_BATCH_TIMEOUT_LOWER_US=$(NCM_TX_BATCH_TIMEOUT_LOWER_
 GCCFLAGS += -DCONFIG_NCM_TX_BATCH_TIMEOUT_UPPER_US=$(NCM_TX_BATCH_TIMEOUT_UPPER_US)
 GCCFLAGS += -DCONFIG_NCM_TX_PIPELINE=$(NCM_TX_PIPELINE)
 GCCFLAGS += -DCONFIG_NCM_TX_LINKED_GDMA=$(NCM_TX_LINKED_GDMA)
+GCCFLAGS += -DCONFIG_CAR_ACK_USB_PRIORITY=$(CAR_ACK_USB_PRIORITY)
 GCCFLAGS += -DCONFIG_PC_PROFILER=$(PC_PROFILER)
 GCCFLAGS += -DCONFIG_PC_PROFILER_SELF_REPORT=$(PC_PROFILER_SELF_REPORT)
 GCCFLAGS += -DCONFIG_PC_PROFILER_PLATFORM_REPORT=$(PC_PROFILER_PLATFORM_REPORT)
