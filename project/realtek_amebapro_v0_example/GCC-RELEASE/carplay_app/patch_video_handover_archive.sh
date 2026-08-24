@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 9 ]; then
-	echo "usage: $0 MODE AR OBJCOPY INPUT OUTPUT MEMBERS SCREEN_WAIT ACK_CACHE IAP2_WAIT_FIX" >&2
+if [ "$#" -ne 10 ]; then
+	echo "usage: $0 MODE AR OBJCOPY INPUT OUTPUT MEMBERS SCREEN_WAIT ACK_CACHE EVENT_READAHEAD_FIX IAP2_WAIT_FIX" >&2
 	exit 2
 fi
 
@@ -14,11 +14,13 @@ output_archive=$5
 members=$6
 screen_wait=$7
 ack_cache=$8
-iap2_wait_fix=$9
+event_readahead_fix=$9
+iap2_wait_fix=${10}
 script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 screen_wait_patcher=$script_directory/../../src/carbox/tools/patch_screen_wait_relocation.py
 redundant_copy_patcher=$script_directory/../../src/carbox/tools/patch_airplay_redundant_copy.py
 event_response_patcher=$script_directory/../../src/carbox/tools/patch_airplay_event_response.py
+event_readahead_patcher=$script_directory/../../src/carbox/tools/patch_airplay_event_readahead.py
 temporary=$(mktemp -d)
 trap 'rm -rf -- "$temporary"' EXIT HUP INT TERM
 
@@ -67,6 +69,14 @@ case "$ack_cache" in
 	0|1) ;;
 	*)
 		echo "ACK_CACHE must be 0 or 1: $ack_cache" >&2
+		exit 2
+		;;
+esac
+
+case "$event_readahead_fix" in
+	0|1) ;;
+	*)
+		echo "EVENT_READAHEAD_FIX must be 0 or 1: $event_readahead_fix" >&2
 		exit 2
 		;;
 esac
@@ -125,6 +135,12 @@ cp "$input_archive" "$output_archive"
 				"patched.o" "patched-with-ack-cache.o"
 			mv "patched-with-ack-cache.o" "patched.o"
 			python3 "$event_response_patcher" "patched.o"
+		fi
+		if [ "$event_readahead_fix" = 1 ] && [ "$member" = AirPlayEvent.o ]; then
+			# HTTPMessageReset intentionally preserves read-ahead bytes.  Retry
+			# the parser before select() so a complete buffered next request is
+			# not stranded while the socket itself is no longer readable.
+			python3 "$event_readahead_patcher" "patched.o"
 		fi
 		if [ "$iap2_wait_fix" = 1 ] && [ "$member" = iAP2Ctrl.o ]; then
 			# iAP2Ctrl_MsgThread overflows its 32-bit tv_sec*1000 deadline
