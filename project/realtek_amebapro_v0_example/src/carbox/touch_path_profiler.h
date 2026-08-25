@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 void carbox_touch_path_profiler_report(uint32_t sequence);
+void carbox_touch_aa_command(void *arg);
 
 /*
  * DispatchLite's implementation is closed.  The common dispatch_sync_f

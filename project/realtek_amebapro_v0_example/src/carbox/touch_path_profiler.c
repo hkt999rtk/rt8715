@@ -532,10 +532,41 @@ typedef struct touch_path_state_s {
 #endif
 } touch_path_state_t;
 
+#if CONFIG_TOUCH_AA_COMMAND
+typedef struct touch_aa_state_s {
+	uint32_t id;
+	uint32_t marker_us;
+	uint32_t previous_release_age_ms;
+	uint32_t raw_reports;
+	uint32_t raw_contacts;
+	uint32_t raw_releases;
+	uint32_t contacts_before_release;
+	uint32_t contacts_after_release;
+	uint32_t parser_hid;
+	uint32_t hid_sent;
+	uint32_t first_raw_delta_us;
+	uint32_t last_raw_delta_us;
+	uint32_t first_release_delta_us;
+	uint32_t last_release_delta_us;
+	uint32_t first_x;
+	uint32_t first_y;
+	uint32_t last_x;
+	uint32_t last_y;
+	uint8_t previous_release_valid;
+	uint8_t active;
+	uint8_t first_coord_valid;
+} touch_aa_state_t;
+#endif
+
 static touch_path_stats_t touch_path_stats
 	__attribute__((section(".lpddr.bss.touch_path_stats")));
 static touch_path_state_t touch_path_state
 	__attribute__((section(".lpddr.bss.touch_path_state")));
+#if CONFIG_TOUCH_AA_COMMAND
+static touch_aa_state_t touch_aa_state
+	__attribute__((section(".lpddr.bss.touch_aa_state")));
+static uint32_t touch_aa_last_source_release_us;
+#endif
 static touch_http_slot_t touch_http_slots[TOUCH_HTTP_SLOTS]
 	__attribute__((section(".lpddr.bss.touch_http_slots")));
 static touch_read_origin_t touch_read_origins[TOUCH_READ_ORIGINS]
@@ -610,6 +641,94 @@ static int touch_action_is_release(uint32_t action)
 {
 	return action == 0U;
 }
+
+#if CONFIG_TOUCH_AA_COMMAND
+void carbox_touch_aa_command(void *arg)
+{
+	uint32_t now_us = hal_read_curtime_us();
+	uint32_t id;
+	uint32_t previous_release_age_ms = 0U;
+	uint8_t previous_release_valid;
+
+	(void)arg;
+	taskENTER_CRITICAL();
+	id = touch_aa_state.id + 1U;
+	if (id == 0U) {
+		id = 1U;
+	}
+	previous_release_valid = touch_aa_last_source_release_us != 0U;
+	if (previous_release_valid != 0U) {
+		previous_release_age_ms =
+			(now_us - touch_aa_last_source_release_us) / 1000U;
+	}
+	memset(&touch_aa_state, 0, sizeof(touch_aa_state));
+	touch_aa_state.id = id;
+	touch_aa_state.marker_us = now_us;
+	touch_aa_state.previous_release_valid = previous_release_valid;
+	touch_aa_state.previous_release_age_ms = previous_release_age_ms;
+	touch_aa_state.active = 1U;
+	taskEXIT_CRITICAL();
+
+	rt_printf("[AAMARK] set id=%lu tick_us=%lu previous_release_age_ms=%ld\r\n",
+		  (unsigned long)id,
+		  (unsigned long)now_us,
+		  previous_release_valid != 0U ?
+			(long)previous_release_age_ms : -1L);
+}
+
+static void touch_aa_record_raw(const void *report, uint32_t length,
+				uint32_t now_us)
+{
+	const uint8_t *bytes = (const uint8_t *)report;
+	uint32_t delta_us;
+	uint32_t x;
+	uint32_t y;
+	int release;
+
+	if (bytes == NULL || length != 5U) {
+		return;
+	}
+	release = touch_action_is_release(bytes[0]);
+	taskENTER_CRITICAL();
+	if (release) {
+		touch_aa_last_source_release_us = now_us;
+	}
+	if (touch_aa_state.active == 0U) {
+		taskEXIT_CRITICAL();
+		return;
+	}
+	delta_us = now_us - touch_aa_state.marker_us;
+	x = (uint32_t)bytes[1] | ((uint32_t)bytes[2] << 8);
+	y = (uint32_t)bytes[3] | ((uint32_t)bytes[4] << 8);
+	touch_aa_state.raw_reports++;
+	if (touch_aa_state.raw_reports == 1U) {
+		touch_aa_state.first_raw_delta_us = delta_us;
+	}
+	touch_aa_state.last_raw_delta_us = delta_us;
+	if (touch_aa_state.first_coord_valid == 0U) {
+		touch_aa_state.first_x = x;
+		touch_aa_state.first_y = y;
+		touch_aa_state.first_coord_valid = 1U;
+	}
+	touch_aa_state.last_x = x;
+	touch_aa_state.last_y = y;
+	if (release) {
+		touch_aa_state.raw_releases++;
+		if (touch_aa_state.raw_releases == 1U) {
+			touch_aa_state.first_release_delta_us = delta_us;
+		}
+		touch_aa_state.last_release_delta_us = delta_us;
+	} else {
+		touch_aa_state.raw_contacts++;
+		if (touch_aa_state.raw_releases == 0U) {
+			touch_aa_state.contacts_before_release++;
+		} else {
+			touch_aa_state.contacts_after_release++;
+		}
+	}
+	taskEXIT_CRITICAL();
+}
+#endif
 
 static void touch_hid_uid_record(uint32_t uid, uint32_t length)
 {
@@ -1731,6 +1850,11 @@ int32_t __wrap_AirPlayResponse_GetInfoHIDReportCommand(
 	result = __real_AirPlayResponse_GetInfoHIDReportCommand(body, length);
 
 	taskENTER_CRITICAL();
+#if CONFIG_TOUCH_AA_COMMAND
+	if (touch_aa_state.active != 0U) {
+		touch_aa_state.parser_hid++;
+	}
+#endif
 	{
 		uint32_t parser_end_us = hal_read_curtime_us();
 		uint32_t elapsed_us = parser_end_us - start_us;
@@ -1755,11 +1879,15 @@ int32_t __wrap_AirPlayResponse_GetInfoHIDReportCommand(
 void __wrap_acc_carplay_cb_hid_report(uint32_t uid, const void *report,
 				      uint32_t length)
 {
+	uint32_t now_us = hal_read_curtime_us();
+
+#if CONFIG_TOUCH_AA_COMMAND
+	touch_aa_record_raw(report, length, now_us);
+#endif
 #if CONFIG_TOUCH_MOVE_SAMPLE_HZ > 0
 	const uint8_t *bytes = (const uint8_t *)report;
 	uint8_t pending_report[5];
 	uint32_t pending_uid = 0U;
-	uint32_t now_us = hal_read_curtime_us();
 	int forward_current = 1;
 	int flush_pending = 0;
 
@@ -2017,6 +2145,11 @@ int32_t __wrap_AirPlayReceiverSessionSendHIDReport(
 
 	taskENTER_CRITICAL();
 	touch_path_stats.iphone_hid_calls++;
+#if CONFIG_TOUCH_AA_COMMAND
+	if (touch_aa_state.active != 0U && length == 5U) {
+		touch_aa_state.hid_sent++;
+	}
+#endif
 	touch_hid_format_record(report, length);
 	if ((report != NULL) && (length == 5U)) {
 		const uint8_t *bytes = (const uint8_t *)report;
@@ -2793,6 +2926,9 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 	uint8_t report5_touch_active;
 	uint8_t move_sample_active;
 	int car_socket_fd;
+#if CONFIG_TOUCH_AA_COMMAND
+	touch_aa_state_t aa;
+#endif
 #if CONFIG_GMT_TIME_PROFILE
 	time_t gmt_epoch;
 	struct tm gmt_utc;
@@ -2811,6 +2947,9 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 	taskENTER_CRITICAL();
 	stats = touch_path_stats;
 	memset(&touch_path_stats, 0, sizeof(touch_path_stats));
+#if CONFIG_TOUCH_AA_COMMAND
+	aa = touch_aa_state;
+#endif
 	last_car_touch_us = touch_path_state.last_car_touch_us;
 	last_forward_us = touch_path_state.last_forward_us;
 	last_action = touch_path_state.last_action;
@@ -2928,6 +3067,40 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 				gmt_delta_seconds > 0L),
 			  (unsigned)(gmt_previous_valid &&
 				gmt_delta_seconds < 0L));
+	}
+#endif
+#if CONFIG_TOUCH_AA_COMMAND
+	if (aa.active != 0U) {
+		rt_printf("[AAMARK][%lu] id=%lu age_ms=%lu "
+			  "raw/contact/release=%lu/%lu/%lu "
+			  "contact before/after_release=%lu/%lu "
+			  "parser/hid_sent=%lu/%lu previous_release_age_ms=%ld\r\n",
+			  (unsigned long)sequence,
+			  (unsigned long)aa.id,
+			  (unsigned long)((now_us - aa.marker_us) / 1000U),
+			  (unsigned long)aa.raw_reports,
+			  (unsigned long)aa.raw_contacts,
+			  (unsigned long)aa.raw_releases,
+			  (unsigned long)aa.contacts_before_release,
+			  (unsigned long)aa.contacts_after_release,
+			  (unsigned long)aa.parser_hid,
+			  (unsigned long)aa.hid_sent,
+			  aa.previous_release_valid != 0U ?
+				(long)aa.previous_release_age_ms : -1L);
+		rt_printf("[AAMARK][%lu] delta_ms raw first/last=%lu/%lu "
+			  "release first/last=%ld/%ld coords first/last="
+			  "%lu,%lu/%lu,%lu\r\n",
+			  (unsigned long)sequence,
+			  (unsigned long)(aa.first_raw_delta_us / 1000U),
+			  (unsigned long)(aa.last_raw_delta_us / 1000U),
+			  aa.raw_releases != 0U ?
+				(long)(aa.first_release_delta_us / 1000U) : -1L,
+			  aa.raw_releases != 0U ?
+				(long)(aa.last_release_delta_us / 1000U) : -1L,
+			  (unsigned long)aa.first_x,
+			  (unsigned long)aa.first_y,
+			  (unsigned long)aa.last_x,
+			  (unsigned long)aa.last_y);
 	}
 #endif
 
@@ -3542,6 +3715,14 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 {
 	(void)sequence;
 }
+
+#if CONFIG_TOUCH_AA_COMMAND
+void carbox_touch_aa_command(void *arg)
+{
+	(void)arg;
+	rt_printf("[AAMARK] unavailable: touch profiler disabled\r\n");
+}
+#endif
 
 uint32_t carbox_touch_dispatch_sync_begin(void)
 {

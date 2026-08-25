@@ -2102,7 +2102,17 @@ void fATSF(void *arg)
 }
 #endif
 
+#ifndef CONFIG_TOUCH_AA_COMMAND
+#define CONFIG_TOUCH_AA_COMMAND 0
+#endif
+#if CONFIG_TOUCH_AA_COMMAND
+extern void carbox_touch_aa_command(void *arg);
+#endif
+
 log_item_t at_sys_items[] = {
+#if CONFIG_TOUCH_AA_COMMAND
+	{"aa", carbox_touch_aa_command,},
+#endif
 #if CONFIG_MMF_AUDIO_DEBUG
 	{"ATAD", fATAD,},
 	{"ATAS", fATAS,},

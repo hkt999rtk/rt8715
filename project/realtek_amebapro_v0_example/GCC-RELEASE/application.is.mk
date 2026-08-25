@@ -1266,6 +1266,14 @@ endif
 # Isolated vehicle-event -> iPhone HID bridge latency profile. This remains
 # independent of the screen, USB and crypto profilers.
 TOUCH_PATH_PROFILE ?= 0
+# Keep the manual release-lag marker available for focused tests without
+# exposing the console command in normal firmware.
+TOUCH_AA_COMMAND ?= 0
+ifeq ($(TOUCH_AA_COMMAND),1)
+ifneq ($(TOUCH_PATH_PROFILE),1)
+$(error TOUCH_AA_COMMAND requires TOUCH_PATH_PROFILE=1)
+endif
+endif
 # The compact report keeps only the fields needed to validate input cadence,
 # dequeue coalescing, actual write cadence, queue peak and release behavior.
 # Restore this switch for the older HTTP/ACK/sequence latency investigation.
@@ -1395,7 +1403,7 @@ $(SCREEN_FLOW_PROFILE_STAMP):
 # These switches affect several standalone profiler/wrapper objects.  Track
 # them explicitly so a diagnostic override cannot reuse release-mode objects.
 CRYPTO_ENGINE_PROFILE ?= 0
-DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-pcreport$(PC_PROFILER_SELF_REPORT)-platform$(PC_PROFILER_PLATFORM_REPORT)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)-touch$(TOUCH_PATH_PROFILE)-touchdetail$(TOUCH_PATH_REPORT_DETAIL)-airmutex$(AIRPLAY_MUTEX_PROFILE)-carack$(CAR_ACK_TCP_PROFILE)-iphonerx$(IPHONE_HTTP_RX_PROFILE)-gmttime$(GMT_TIME_PROFILE)-hidpipe$(AIRPLAY_HID_HTTP_PIPELINE_DEPTH)-hidbypass$(AIRPLAY_HID_HTTP_BYPASS)-touchsample$(TOUCH_MOVE_SAMPLE_HZ)-touchframe$(TOUCH_FRAME_PROFILE)-gcd$(GCD_SYNC_PROFILE)-gcdprio$(GCD_WORK_PRIORITY)-uisr$(USBH_ISR_TASK_PRIORITY)-umain$(USBH_MAIN_TASK_PRIORITY)-tcpclient$(TCP_CLIENT_PRIORITY)-rxrec$(SCREEN_RX_RECORD_PROFILE)-crypto$(CRYPTO_ENGINE_PROFILE)-cryptotmo$(CARBOX_CRYPTO_IRQ_TIMEOUT_MS)
+DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-pcreport$(PC_PROFILER_SELF_REPORT)-platform$(PC_PROFILER_PLATFORM_REPORT)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)-touch$(TOUCH_PATH_PROFILE)-aa$(TOUCH_AA_COMMAND)-touchdetail$(TOUCH_PATH_REPORT_DETAIL)-airmutex$(AIRPLAY_MUTEX_PROFILE)-carack$(CAR_ACK_TCP_PROFILE)-iphonerx$(IPHONE_HTTP_RX_PROFILE)-gmttime$(GMT_TIME_PROFILE)-hidpipe$(AIRPLAY_HID_HTTP_PIPELINE_DEPTH)-hidbypass$(AIRPLAY_HID_HTTP_BYPASS)-touchsample$(TOUCH_MOVE_SAMPLE_HZ)-touchframe$(TOUCH_FRAME_PROFILE)-gcd$(GCD_SYNC_PROFILE)-gcdprio$(GCD_WORK_PRIORITY)-uisr$(USBH_ISR_TASK_PRIORITY)-umain$(USBH_MAIN_TASK_PRIORITY)-tcpclient$(TCP_CLIENT_PRIORITY)-rxrec$(SCREEN_RX_RECORD_PROFILE)-crypto$(CRYPTO_ENGINE_PROFILE)-cryptotmo$(CARBOX_CRYPTO_IRQ_TIMEOUT_MS)
 $(DIAGNOSTIC_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.diagnostic_profile_*
@@ -1422,6 +1430,7 @@ $(CAR_ACK_TCP_PROFILE_STAMP):
 	../src/carbox/airplay_mutex_profiler.o \
 	../src/carbox/touch_path_profiler.o \
 	../src/carbox/touch_frame_profiler.o \
+	../../../component/common/api/at_cmd/atcmd_sys.o \
 	../src/carbox/crypto_priority_lock.o \
 	../src/carbox/screen_rx_record_profiler.o \
 	../src/carbox/chacha_key_alias_fix.o \
@@ -1702,6 +1711,7 @@ GCCFLAGS += -DCONFIG_USB_TX_LIFETIME_PROFILE=$(USB_TX_LIFETIME_PROFILE)
 GCCFLAGS += -DCONFIG_USB_CH4_QUEUE_FRONT=$(USB_CH4_QUEUE_FRONT)
 GCCFLAGS += -DCONFIG_USB_PROFILE_REPORT=$(USB_PROFILE_REPORT)
 GCCFLAGS += -DCONFIG_TOUCH_PATH_PROFILE=$(TOUCH_PATH_PROFILE)
+GCCFLAGS += -DCONFIG_TOUCH_AA_COMMAND=$(TOUCH_AA_COMMAND)
 GCCFLAGS += -DCONFIG_TOUCH_PATH_REPORT_DETAIL=$(TOUCH_PATH_REPORT_DETAIL)
 GCCFLAGS += -DCONFIG_AIRPLAY_MUTEX_PROFILE=$(AIRPLAY_MUTEX_PROFILE)
 GCCFLAGS += -DCONFIG_CAR_ACK_TCP_PROFILE=$(CAR_ACK_TCP_PROFILE)
