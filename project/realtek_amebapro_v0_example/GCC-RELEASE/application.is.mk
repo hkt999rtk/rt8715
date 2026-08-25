@@ -974,10 +974,10 @@ $(NCM_TX_PROFILE_STAMP):
 ../../../component/common/network/lwip/lwip_v2.1.2/port/realtek/freertos/ethernetif.o: $(NCM_TX_PROFILE_STAMP)
 ../src/carbox/ncm/ncm_tx.o: $(NCM_TX_PROFILE_STAMP)
 # Keep the boot-time PLL/SPIC result visible in the recurring 10-second report.
-PC_PROFILER ?= 1
+PC_PROFILER ?= 0
 # Keep the 10-second reporter task as the common clock for focused subsystem
 # reports, but suppress its own CPU/task table after scheduler diagnosis.
-PC_PROFILER_SELF_REPORT ?= 1
+PC_PROFILER_SELF_REPORT ?= 0
 # Keep task CPU utilization and the active subsystem report, but suppress the
 # already-validated recurring clock/PLL/SPIC, I2C pacing, and firmware-slot
 # dumps during normal soak tests. Set this to 1 when platform bring-up data is
@@ -1097,7 +1097,7 @@ endif
 SCREEN_DATAPATH_PROFILE ?= 0
 # Lightweight limiter/source-cadence diagnostics. Keep this independent of
 # the full screen datapath profiler so it can be left on for focused A/B runs.
-SCREEN_RX_RATE_LIMIT_PROFILE ?= 1
+SCREEN_RX_RATE_LIMIT_PROFILE ?= 0
 # Focused iPhone video-ingress probe.  This correlates source NTP cadence with
 # socket readiness, fixed-header arrival, record assembly, and the local TCP
 # receive window without enabling the heavyweight screen queue profiler.
@@ -1265,7 +1265,7 @@ endif
 endif
 # Isolated vehicle-event -> iPhone HID bridge latency profile. This remains
 # independent of the screen, USB and crypto profilers.
-TOUCH_PATH_PROFILE ?= 1
+TOUCH_PATH_PROFILE ?= 0
 # The compact report keeps only the fields needed to validate input cadence,
 # dequeue coalescing, actual write cadence, queue peak and release behavior.
 # Restore this switch for the older HTTP/ACK/sequence latency investigation.
@@ -1327,7 +1327,7 @@ IAP2_DEVICE_TIME_SYNC ?= 1
 IAP2_COND_TIMEDWAIT_FIX ?= 1
 # Sample the wall clock used by time(NULL) once per 10-second touch-path
 # report, including UTC text and progress relative to the monotonic interval.
-GMT_TIME_PROFILE ?= 1
+GMT_TIME_PROFILE ?= 0
 ifeq ($(GMT_TIME_PROFILE),1)
 ifneq ($(TOUCH_PATH_PROFILE),1)
 $(error GMT_TIME_PROFILE requires TOUCH_PATH_PROFILE=1)
