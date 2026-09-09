@@ -71,6 +71,10 @@
 #if CONFIG_WLAN
 #include <lwip_intf.h>
 #endif
+
+#ifndef CONFIG_CAR_ACK_USB_PRIORITY
+#define CONFIG_CAR_ACK_USB_PRIORITY 0
+#endif
 #if defined(CONFIG_PLATFORM_8195BHP)
 #include "cmsis.h"
 #include "hal_timer.h"
@@ -1199,6 +1203,7 @@ struct ncm_tx_async_item {
 	u32_t timer_generation;
 	u32_t timer_irq_us;
 	u8_t timer_event;
+	u8_t priority;
 };
 
 struct ncm_tx_async_stats {
@@ -1219,6 +1224,7 @@ struct ncm_tx_pipeline_slot {
 	u8_t buffer[NCM_TX_PIPELINE_NTB_CAPACITY] __attribute__((aligned(32)));
 	size_t len;
 	u16_t frames;
+	u8_t priority;
 };
 struct ncm_tx_pipeline_stats {
 	u32_t built_ntbs;
@@ -1261,6 +1267,11 @@ static struct ncm_tx_pipeline_slot g_ncm_tx_pipeline_slots[NCM_TX_PIPELINE_SLOTS
 static struct ncm_tx_pipeline_stats g_ncm_tx_pipeline_stats;
 static QueueHandle_t g_ncm_tx_free_queue;
 static QueueHandle_t g_ncm_tx_ready_queue;
+#if CONFIG_CAR_ACK_USB_PRIORITY
+static QueueHandle_t g_ncm_tx_ack_ready_queue;
+static volatile u16_t g_ncm_tx_ack_local_port;
+static volatile u16_t g_ncm_tx_ack_peer_port;
+#endif
 static TaskHandle_t g_ncm_tx_usb_task;
 static hal_timer_adapter_t g_ncm_tx_coalesce_timer;
 static volatile u32_t g_ncm_tx_coalesce_timer_available;
@@ -1273,6 +1284,88 @@ static volatile u32_t g_ncm_tx_arrival_gap_ewma_us;
 static struct ncm_tx_async_stats g_ncm_tx_async_stats;
 static volatile u32_t g_ncm_tx_inflight_packets;
 static volatile u32_t g_ncm_tx_inflight_start_us;
+
+#if CONFIG_NCM_TX_PIPELINE && CONFIG_CAR_ACK_USB_PRIORITY
+static u16_t ncm_tx_priority_be16(const u8_t *p)
+{
+	return (u16_t)(((u16_t)p[0] << 8) | p[1]);
+}
+
+void rltk_ncm_tx_priority_set_car_flow(u16_t local_port, u16_t peer_port)
+{
+	if (local_port == 0U || peer_port == 0U)
+		return;
+	taskENTER_CRITICAL();
+	g_ncm_tx_ack_local_port = local_port;
+	g_ncm_tx_ack_peer_port = peer_port;
+	taskEXIT_CRITICAL();
+}
+
+static int ncm_tx_priority_is_car_response(const struct pbuf *p)
+{
+	u8_t header[96];
+	u16_t frame_len;
+	u16_t ether_type;
+	u16_t local_port;
+	u16_t peer_port;
+	u32_t ip_offset = 14U;
+	u32_t tcp_offset;
+	u32_t network_end;
+	u32_t tcp_header;
+	u8_t protocol;
+
+	if (p == NULL || p->tot_len < 54U)
+		return 0;
+	taskENTER_CRITICAL();
+	local_port = g_ncm_tx_ack_local_port;
+	peer_port = g_ncm_tx_ack_peer_port;
+	taskEXIT_CRITICAL();
+	if (local_port == 0U || peer_port == 0U)
+		return 0;
+	frame_len = p->tot_len < sizeof(header) ? p->tot_len : sizeof(header);
+	if (pbuf_copy_partial((struct pbuf *)p, header, frame_len, 0U) != frame_len)
+		return 0;
+	ether_type = ncm_tx_priority_be16(header + 12U);
+	if (ether_type == 0x0800U) {
+		u32_t ip_header;
+		u32_t total_length;
+
+		if (frame_len < ip_offset + 20U || (header[ip_offset] >> 4) != 4U)
+			return 0;
+		ip_header = (u32_t)(header[ip_offset] & 0x0fU) * 4U;
+		if (ip_header < 20U || frame_len < ip_offset + ip_header + 20U)
+			return 0;
+		protocol = header[ip_offset + 9U];
+		total_length = ncm_tx_priority_be16(header + ip_offset + 2U);
+		network_end = ip_offset + total_length;
+		tcp_offset = ip_offset + ip_header;
+	} else if (ether_type == 0x86ddU) {
+		u32_t ipv6_payload;
+
+		if (frame_len < ip_offset + 60U || (header[ip_offset] >> 4) != 6U)
+			return 0;
+		protocol = header[ip_offset + 6U];
+		ipv6_payload = ncm_tx_priority_be16(header + ip_offset + 4U);
+		network_end = ip_offset + 40U + ipv6_payload;
+		tcp_offset = ip_offset + 40U;
+	} else {
+		return 0;
+	}
+	if (protocol != 6U || frame_len < tcp_offset + 20U)
+		return 0;
+	tcp_header = (u32_t)(header[tcp_offset + 12U] >> 4) * 4U;
+	if (tcp_header < 20U || network_end <= tcp_offset + tcp_header)
+		return 0;
+	return ncm_tx_priority_be16(header + tcp_offset) == local_port &&
+		ncm_tx_priority_be16(header + tcp_offset + 2U) == peer_port;
+}
+#else
+void rltk_ncm_tx_priority_set_car_flow(u16_t local_port, u16_t peer_port)
+{
+	(void)local_port;
+	(void)peer_port;
+}
+#endif
 
 int rltk_ncm_tx_diag_snapshot(rltk_ncm_tx_diag_t *diag)
 {
@@ -1307,6 +1400,10 @@ void rltk_ncm_tx_pipeline_report(u32 sequence)
 	taskEXIT_CRITICAL();
 	ready_now = g_ncm_tx_ready_queue != NULL ?
 		(u32_t)uxQueueMessagesWaiting(g_ncm_tx_ready_queue) : 0U;
+#if CONFIG_CAR_ACK_USB_PRIORITY
+	ready_now += g_ncm_tx_ack_ready_queue != NULL ?
+		(u32_t)uxQueueMessagesWaiting(g_ncm_tx_ack_ready_queue) : 0U;
+#endif
 	free_now = g_ncm_tx_free_queue != NULL ?
 		(u32_t)uxQueueMessagesWaiting(g_ncm_tx_free_queue) : 0U;
 	input_now = g_ncm_tx_async_queue != NULL ?
@@ -1487,8 +1584,19 @@ static void ncm_tx_usb_worker(void *arg)
 		u32_t input_depth;
 		int status;
 
+#if CONFIG_CAR_ACK_USB_PRIORITY
+		/* Both ready queues wake this sole USB owner. Always drain the
+		 * vehicle-response FIFO first; FIFO order within each lane remains
+		 * unchanged. */
+		if (xQueueReceive(g_ncm_tx_ack_ready_queue, &slot, 0) != pdTRUE &&
+		    xQueueReceive(g_ncm_tx_ready_queue, &slot, 0) != pdTRUE) {
+			(void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+			continue;
+		}
+#else
 		if (xQueueReceive(g_ncm_tx_ready_queue, &slot, portMAX_DELAY) != pdTRUE)
 			continue;
+#endif
 		start_us = hal_read_curtime_us();
 		if (last_completion_us != 0U && completion_had_ready != 0U) {
 			u32_t handoff_us = start_us - last_completion_us;
@@ -1516,8 +1624,12 @@ static void ncm_tx_usb_worker(void *arg)
 		}
 		slot->len = 0U;
 		slot->frames = 0U;
+		slot->priority = 0U;
 		(void)xQueueSend(g_ncm_tx_free_queue, &slot, portMAX_DELAY);
 		ready_depth = (u32_t)uxQueueMessagesWaiting(g_ncm_tx_ready_queue);
+#if CONFIG_CAR_ACK_USB_PRIORITY
+		ready_depth += (u32_t)uxQueueMessagesWaiting(g_ncm_tx_ack_ready_queue);
+#endif
 		input_depth = (u32_t)uxQueueMessagesWaiting(g_ncm_tx_async_queue);
 		if (ready_depth != 0U) {
 			g_ncm_tx_pipeline_stats.completion_ready++;
@@ -1570,6 +1682,10 @@ static void ncm_tx_async_worker(void *arg)
 			if (item_count < CONFIG_NCM_TX_BATCH_MIN) {
 				u32_t ready_depth = (u32_t)uxQueueMessagesWaiting(
 					g_ncm_tx_ready_queue);
+#if CONFIG_CAR_ACK_USB_PRIORITY
+				ready_depth += (u32_t)uxQueueMessagesWaiting(
+					g_ncm_tx_ack_ready_queue);
+#endif
 				if (g_ncm_tx_usb_busy != 0U || ready_depth != 0U) {
 					if (g_ncm_tx_coalesce_timer_available != 0U) {
 						u32_t generation =
@@ -1667,6 +1783,7 @@ static void ncm_tx_async_worker(void *arg)
 				u32_t build_index;
 				u32_t built_frames = 0U;
 				uint16_t sent_frames = 0U;
+				u8_t priority_slot = 0U;
 				int batch_status = CARBOX_NCM_TX_BATCH_RETRY_SINGLE;
 #if CONFIG_NCM_TX_PIPELINE
 				struct ncm_tx_pipeline_slot *slot = NULL;
@@ -1700,6 +1817,8 @@ static void ncm_tx_async_worker(void *arg)
 						memset(frame, 0, sizeof(*frame));
 						break;
 					}
+					if (items[build_index].priority != 0U)
+						priority_slot = 1U;
 					built_frames++;
 				}
 				batch.frame_count = (uint16_t)built_frames;
@@ -1733,6 +1852,7 @@ static void ncm_tx_async_worker(void *arg)
 
 						slot->len = ntb_len;
 						slot->frames = sent_frames;
+						slot->priority = priority_slot;
 						g_ncm_tx_pipeline_stats.built_ntbs++;
 						g_ncm_tx_pipeline_stats.built_frames += sent_frames;
 						g_ncm_tx_pipeline_stats.built_bytes += (u32_t)ntb_len;
@@ -1746,10 +1866,28 @@ static void ncm_tx_async_worker(void *arg)
 						 * higher-priority USB owner. */
 						g_ncm_tx_inflight_packets = item_count -
 							(send_index + sent_frames);
-						(void)xQueueSend(g_ncm_tx_ready_queue, &slot,
+						if (slot->priority != 0U) {
+#if CONFIG_CAR_ACK_USB_PRIORITY
+							(void)xQueueSend(g_ncm_tx_ack_ready_queue,
+								&slot, portMAX_DELAY);
+#else
+							(void)xQueueSend(g_ncm_tx_ready_queue, &slot,
 								 portMAX_DELAY);
+#endif
+						} else {
+							(void)xQueueSend(g_ncm_tx_ready_queue, &slot,
+								 portMAX_DELAY);
+						}
+#if CONFIG_CAR_ACK_USB_PRIORITY
+						if (g_ncm_tx_usb_task != NULL)
+							xTaskNotifyGive(g_ncm_tx_usb_task);
+#endif
 						ready_depth = (u32_t)uxQueueMessagesWaiting(
 							g_ncm_tx_ready_queue);
+#if CONFIG_CAR_ACK_USB_PRIORITY
+						ready_depth += (u32_t)uxQueueMessagesWaiting(
+							g_ncm_tx_ack_ready_queue);
+#endif
 						if (ready_depth >
 						    g_ncm_tx_pipeline_stats.ready_depth_max)
 							g_ncm_tx_pipeline_stats.ready_depth_max =
@@ -1757,6 +1895,7 @@ static void ncm_tx_async_worker(void *arg)
 					} else {
 						slot->len = 0U;
 						slot->frames = 0U;
+						slot->priority = 0U;
 						(void)xQueueSend(g_ncm_tx_free_queue, &slot,
 								 portMAX_DELAY);
 					}
@@ -1838,7 +1977,17 @@ static int ncm_tx_async_init(void)
 	if (g_ncm_tx_ready_queue == NULL)
 		g_ncm_tx_ready_queue = xQueueCreate(NCM_TX_PIPELINE_SLOTS,
 						  sizeof(struct ncm_tx_pipeline_slot *));
-	if (g_ncm_tx_free_queue == NULL || g_ncm_tx_ready_queue == NULL) {
+#if CONFIG_CAR_ACK_USB_PRIORITY
+	if (g_ncm_tx_ack_ready_queue == NULL)
+		g_ncm_tx_ack_ready_queue = xQueueCreate(
+			NCM_TX_PIPELINE_SLOTS,
+			sizeof(struct ncm_tx_pipeline_slot *));
+#endif
+	if (g_ncm_tx_free_queue == NULL || g_ncm_tx_ready_queue == NULL
+#if CONFIG_CAR_ACK_USB_PRIORITY
+	    || g_ncm_tx_ack_ready_queue == NULL
+#endif
+	    ) {
 		printf("[NCMTXASYNC] ERROR: pipeline queue allocation failed\n");
 		return 0;
 	}
@@ -1913,6 +2062,11 @@ static int ncm_tx_async_enqueue(struct pbuf *p)
 	item.enqueue_us = hal_read_curtime_us();
 	item.timer_generation = 0U;
 	item.timer_event = 0U;
+#if CONFIG_CAR_ACK_USB_PRIORITY
+	item.priority = ncm_tx_priority_is_car_response(p) ? 1U : 0U;
+#else
+	item.priority = 0U;
+#endif
 #if CONFIG_NCM_TX_PIPELINE
 	arrival_gap_us = item.enqueue_us - g_ncm_tx_arrival_last_us;
 	if (g_ncm_tx_arrival_last_us != 0U &&

@@ -8,6 +8,9 @@ extern "C" {
 #endif
 
 void carbox_usb_rx_priority_report(uint32_t sequence);
+void carbox_usb_rx_priority_set_car_flow(uint16_t local_port,
+					 uint16_t peer_port);
+void carbox_usb_rx_priority_mark_hid(uint32_t parser_time_us);
 
 #ifdef __cplusplus
 }

@@ -1,6 +1,7 @@
 #include "touch_path_profiler.h"
 #include "airplay_mutex_profiler.h"
 #include "car_ack_response_cache.h"
+#include "usb_rx_priority.h"
 
 #ifndef CONFIG_TOUCH_PATH_PROFILE
 #define CONFIG_TOUCH_PATH_PROFILE 0
@@ -16,6 +17,10 @@
 
 #ifndef CONFIG_CAR_ACK_TCP_PROFILE
 #define CONFIG_CAR_ACK_TCP_PROFILE 0
+#endif
+
+#ifndef CONFIG_CAR_ACK_USB_PRIORITY
+#define CONFIG_CAR_ACK_USB_PRIORITY 0
 #endif
 
 #ifndef CONFIG_IPHONE_HTTP_RX_PROFILE
@@ -47,6 +52,9 @@
 #include "diag.h"
 #include "hal_timer.h"
 #include "lwip/sockets.h"
+
+extern void rltk_ncm_tx_priority_set_car_flow(uint16_t local_port,
+					       uint16_t peer_port);
 
 #define TOUCH_HTTP_SLOTS            128U
 #define TOUCH_READ_ORIGINS            4U
@@ -1714,6 +1722,48 @@ int32_t __wrap_AirPlayInfoArrayAddHIDDevice(
 	return result;
 }
 
+static void touch_path_set_usb_car_flow(int socket_fd)
+{
+	struct sockaddr_storage local_address;
+	struct sockaddr_storage peer_address;
+	socklen_t local_length = sizeof(local_address);
+	socklen_t peer_length = sizeof(peer_address);
+	uint16_t local_port = 0U;
+	uint16_t peer_port = 0U;
+
+	memset(&local_address, 0, sizeof(local_address));
+	memset(&peer_address, 0, sizeof(peer_address));
+	if (socket_fd < 0 ||
+	    lwip_getsockname(socket_fd, (struct sockaddr *)&local_address,
+			     &local_length) != 0 ||
+	    lwip_getpeername(socket_fd, (struct sockaddr *)&peer_address,
+			     &peer_length) != 0 ||
+	    local_address.ss_family != peer_address.ss_family) {
+		return;
+	}
+	if (local_address.ss_family == AF_INET) {
+		const struct sockaddr_in *local =
+			(const struct sockaddr_in *)&local_address;
+		const struct sockaddr_in *peer =
+			(const struct sockaddr_in *)&peer_address;
+
+		local_port = ntohs(local->sin_port);
+		peer_port = ntohs(peer->sin_port);
+	} else if (local_address.ss_family == AF_INET6) {
+		const struct sockaddr_in6 *local =
+			(const struct sockaddr_in6 *)&local_address;
+		const struct sockaddr_in6 *peer =
+			(const struct sockaddr_in6 *)&peer_address;
+
+		local_port = ntohs(local->sin6_port);
+		peer_port = ntohs(peer->sin6_port);
+	}
+	carbox_usb_rx_priority_set_car_flow(local_port, peer_port);
+#if CONFIG_CAR_ACK_USB_PRIORITY
+	rltk_ncm_tx_priority_set_car_flow(local_port, peer_port);
+#endif
+}
+
 /* GetInfoType is the earliest externally visible point after a complete car request. */
 int32_t __wrap_AirPlayResponse_GetInfoType(
 	const void *body, uint32_t length, char *type)
@@ -1731,6 +1781,7 @@ int32_t __wrap_AirPlayResponse_GetInfoType(
 		int socket_fd;
 		int pending_valid;
 		int read_matched;
+		int update_car_flow = 0;
 
 		taskENTER_CRITICAL();
 		request_start_us = touch_read_origin_take(current, call_start_us,
@@ -1786,6 +1837,7 @@ int32_t __wrap_AirPlayResponse_GetInfoType(
 				if (!touch_path_state.car_socket_valid ||
 				    (touch_path_state.car_socket_fd != socket_fd)) {
 					touch_path_state.car_socket_nodelay_valid = 0U;
+					update_car_flow = 1;
 				}
 				touch_path_state.car_socket_fd = socket_fd;
 				touch_path_state.car_socket_valid = 1U;
@@ -1802,6 +1854,10 @@ int32_t __wrap_AirPlayResponse_GetInfoType(
 		touch_path_state.car_request_active = 1U;
 		touch_path_state.car_ack_write_started = 0U;
 		taskEXIT_CRITICAL();
+		if (update_car_flow) {
+			touch_path_set_usb_car_flow(socket_fd);
+		}
+		carbox_usb_rx_priority_mark_hid(now_us);
 	}
 	return result;
 }

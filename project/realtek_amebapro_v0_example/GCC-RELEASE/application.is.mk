@@ -1225,7 +1225,7 @@ SCREEN_FRAME_FORMAT_PROFILE ?= 0
 SCREEN_TCP_BUFFER_PROFILE ?= 0
 # When SCREEN_QUEUE_PROFILE is enabled, correlate the local tick used to
 # generate each outgoing screen NTP timestamp with that frame's receive time.
-SCREEN_TIMESTAMP_PROFILE ?= 1
+SCREEN_TIMESTAMP_PROFILE ?= 0
 # Generate AirPlay screen wire timestamps from the microsecond hardware system
 # timer. FreeRTOS's 64-bit tick epoch is used only to resolve 32-bit HW wraps.
 SCREEN_HW_TIMESTAMP ?= 1
@@ -1416,6 +1416,7 @@ $(CAR_ACK_TCP_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.car_ack_tcp_profile_*
 	@touch $@
+
 ../../../component/common/network/lwip/lwip_v2.1.2/src/api/sockets.o \
 	../../../component/common/network/lwip/lwip_v2.1.2/src/api/api_msg.o \
 	../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp.o \
@@ -1919,10 +1920,13 @@ endif
 ifeq ($(USB_CH4_QUEUE_FRONT),1)
 LFLAGS += -Wl,--wrap=usbh_hcd_hc_submit_request
 LFLAGS += -Wl,--wrap=usbh_hal_hc_read_interrupt
+LFLAGS += -Wl,--wrap=usbh_hal_hc_halt
+LFLAGS += -Wl,--wrap=usb_hal_enable_interrupt
 LFLAGS += -Wl,--wrap=usbh_core_notify_urb_state_change
 LFLAGS += -Wl,--wrap=usb_os_queue_send
 LFLAGS += -Wl,--wrap=usb_os_queue_receive
 LFLAGS += -Wl,--wrap=usbh_hcd_hc_get_urb_state
+LFLAGS += -Wl,--wrap=ncm_proc_data
 endif
 ifeq ($(SCREEN_USB_PROBE),1)
 ifneq ($(USB_HCD_PROFILE),1)

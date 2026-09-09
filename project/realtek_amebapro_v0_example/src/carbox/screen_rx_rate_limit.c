@@ -57,6 +57,17 @@ static uint64_t screen_rx_load_le64(const void *pointer);
 static uint32_t screen_rx_ntp_delta_us(uint64_t newer, uint64_t older);
 static uint64_t screen_source_previous_ntp;
 static uint8_t screen_source_previous_valid;
+
+/*
+ * AirPlayResponse_GetInfoInfoDisplays() stores the vehicle's negotiated
+ * maxFPS at offset 0x10 in the object returned by GetAccessoryInfo().
+ * AirPlayMainScreenDictCreate() subsequently advertises that value to the
+ * iPhone.  There is no separate selected-FPS field in the SETUP response;
+ * the iPhone's active cadence must be observed from its source timestamps.
+ */
+#define ACCESSORY_INFO_DISPLAY_MAX_FPS_OFFSET 0x10U
+extern void *GetAccessoryInfo(void);
+static uint32_t screen_iphone_peak_fps_last;
 #endif
 
 #if CONFIG_VIDEO_INGRESS_PROFILE
@@ -366,6 +377,32 @@ static uint32_t screen_rx_ntp_delta_us(uint64_t newer, uint64_t older)
 
 	return us > UINT32_MAX ? UINT32_MAX : (uint32_t)us;
 }
+
+static uint32_t screen_vehicle_max_fps(void)
+{
+	const uint8_t *accessory_info =
+		(const uint8_t *)GetAccessoryInfo();
+	uint32_t max_fps = 0U;
+
+	if (accessory_info != NULL) {
+		memcpy(&max_fps,
+		       accessory_info + ACCESSORY_INFO_DISPLAY_MAX_FPS_OFFSET,
+		       sizeof(max_fps));
+	}
+	return max_fps;
+}
+
+static uint32_t screen_iphone_peak_fps(
+	const screen_source_cadence_stats_t *stats)
+{
+	if (stats->interval_60fps >= 3U) {
+		return 60U;
+	}
+	if (stats->interval_30fps >= 3U) {
+		return 30U;
+	}
+	return 0U;
+}
 #endif
 
 static int screen_rx_is_receiver_task(void)
@@ -670,15 +707,27 @@ void carbox_screen_rx_rate_limit_report(uint32_t sequence)
 	source_stats = screen_source_stats;
 	screen_source_stats = (screen_source_cadence_stats_t){ 0 };
 	taskEXIT_CRITICAL();
-	if (source_stats.frames != 0U) {
-		const char *source_max_fps =
-			source_stats.interval_60fps >= 3U ? "60" :
-			(source_stats.interval_30fps >= 3U ? "30" : "unknown");
+	{
+		uint32_t vehicle_max_fps = screen_vehicle_max_fps();
+		uint32_t window_peak_fps =
+			screen_iphone_peak_fps(&source_stats);
 
+		if (window_peak_fps != 0U) {
+			screen_iphone_peak_fps_last = window_peak_fps;
+		}
+		rt_printf("[FPSNEGO][%lu] car_max_fps=%lu "
+			  "iphone_peak_fps window/last=%lu/%lu "
+			  "selected_field=absent basis=source_ntp\r\n",
+			  (unsigned long)sequence,
+			  (unsigned long)vehicle_max_fps,
+			  (unsigned long)window_peak_fps,
+			  (unsigned long)screen_iphone_peak_fps_last);
+	}
+	if (source_stats.frames != 0U) {
 		rt_printf("[IPHONEFPS][%lu] source_ntp headers/frames/paired/missing/overwrite="
 			  "%lu/%lu/%lu/%lu/%lu interval_us samples/avg/min/max="
 			  "%lu/%llu/%lu/%lu bins <12/12-20/20-28/28-38/>38ms="
-			  "%lu/%lu/%lu/%lu/%lu regress=%lu source_max_fps=%s\r\n",
+			  "%lu/%lu/%lu/%lu/%lu regress=%lu\r\n",
 			  (unsigned long)sequence,
 			  (unsigned long)source_stats.headers,
 			  (unsigned long)source_stats.frames,
@@ -696,8 +745,7 @@ void carbox_screen_rx_rate_limit_report(uint32_t sequence)
 			  (unsigned long)source_stats.interval_mid,
 			  (unsigned long)source_stats.interval_30fps,
 			  (unsigned long)source_stats.interval_over_38ms,
-			  (unsigned long)source_stats.regressions,
-			  source_max_fps);
+			  (unsigned long)source_stats.regressions);
 	}
 #endif
 }

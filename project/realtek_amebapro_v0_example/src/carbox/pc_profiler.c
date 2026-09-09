@@ -1887,7 +1887,8 @@ static void pcprof_task(void *arg)
 		pcprof_watch_progress(PCPROF_PHASE_USB, sequence);
 		usb_hcd_profiler_report(sequence);
 #endif
-#if defined(CONFIG_USB_CH4_QUEUE_FRONT) && CONFIG_USB_CH4_QUEUE_FRONT
+#if CONFIG_USB_PROFILE_REPORT && \
+	defined(CONFIG_USB_CH4_QUEUE_FRONT) && CONFIG_USB_CH4_QUEUE_FRONT
 		pcprof_watch_progress(PCPROF_PHASE_USB, sequence);
 		carbox_usb_rx_priority_report(sequence);
 #endif
