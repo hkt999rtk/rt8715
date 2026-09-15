@@ -792,6 +792,7 @@ SRC_C += ../src/carbox/audio_decode_profiler.c
 SRC_C += ../src/carbox/memcheck.c
 SRC_C += ../src/carbox/carbox_stubs.c
 SRC_C += ../src/carbox/libusb_ref_compat/libusb_ref_compat_hal.c
+SRC_C += ../src/carbox/libusb_ref_compat/libusb_ref_compat_delay.c
 SRC_C += ../src/carbox/libusb_ref_compat/libusb_ref_compat_os.c
 SRC_C += ../src/carbox/libusb_ref_compat/usb_ref_smart_compat.c
 SRC_C += ../src/carbox/libusb_ref_compat/usbsmart_otp_compat.c

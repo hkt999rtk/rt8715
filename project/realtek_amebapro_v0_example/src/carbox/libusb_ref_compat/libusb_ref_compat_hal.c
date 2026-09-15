@@ -19,12 +19,6 @@
  * as macros.  Undefine them so we can provide linker-visible symbols
  * that usb_hal.o (precompiled in libusb_ref.a) can resolve.
  */
-void DelayUs(uint32_t us)
-{
-	extern void hal_delay_us(uint32_t time_us);
-	hal_delay_us(us);
-}
-
 #define CARBOX_LIBUSB_REF_CACHE_ALL_ADDR 0xffffffffU
 
 typedef void (*carbox_libusb_ref_irq_handler_t)(void *data);
