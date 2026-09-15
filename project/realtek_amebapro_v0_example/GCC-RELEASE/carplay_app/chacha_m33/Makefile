@@ -36,6 +36,9 @@ CHACHA_ENABLE_CLEAR ?= 0
 CHACHA_MODE ?= 0
 CHACHA_HW_MIN_LEN ?= 4096
 SCREEN_TX_DIRECT_CRYPTO ?= 1
+SCREEN_RX_POLY_INPLACE ?= 0
+SCREEN_RX_CHACHA_SINGLE_PASS ?= 0
+CHACHA_AAD_POOL ?= 0
 CHACHA_NONALIGNED_SW_POLY ?= 0
 CHACHA_STATS_INTERVAL_MS ?= 5000
 CHACHA_RUNTIME_PROFILE ?= 0
@@ -48,6 +51,7 @@ OPT_FLAGS ?= -O3
 
 OPT_TAG := $(patsubst -%,%,$(firstword $(OPT_FLAGS)))
 OBJ_DIR := $(OUTPUT_DIR)/obj-mode$(CHACHA_MODE)-clear$(CHACHA_ENABLE_CLEAR)-min$(CHACHA_HW_MIN_LEN)-direct$(SCREEN_TX_DIRECT_CRYPTO)-naswp$(CHACHA_NONALIGNED_SW_POLY)-stats$(CHACHA_STATS_INTERVAL_MS)-runtimeprof$(CHACHA_RUNTIME_PROFILE)-selftest$(CHACHA_HW_SELFTEST)-partialtest$(CHACHA_COMBINED_PARTIAL_SELFTEST)-trace$(CHACHA_TRANSACTION_TRACE)-privmem$(CHACHA_PRIVATE_MEMORY)-prio$(CRYPTO_OWNER_BOOST_PRIORITY)-$(OPT_TAG)
+OBJ_DIR := $(OBJ_DIR)-rxpoly$(SCREEN_RX_POLY_INPLACE)-rxsingle$(SCREEN_RX_CHACHA_SINGLE_PASS)-aadpool$(CHACHA_AAD_POOL)
 CORE_OBJ := $(OBJ_DIR)/ChaCha20Poly1305.o
 RTL_OBJ := $(OBJ_DIR)/ChaCha20Poly1305_rtl8195b.o
 AES_PATCHED_OBJ := $(OBJ_DIR)/AESUtils.o
@@ -90,6 +94,9 @@ CFLAGS += $(COMMON_FLAGS) -DCHACHA_ENABLE_CLEAR=$(CHACHA_ENABLE_CLEAR) \
 	-DCARBOX_CHACHA_COMBINED_PARTIAL_SELFTEST=$(CHACHA_COMBINED_PARTIAL_SELFTEST) \
 	-DCARBOX_CHACHA_TRANSACTION_TRACE=$(CHACHA_TRANSACTION_TRACE) \
 	-DCARBOX_SCREEN_TX_DIRECT_CRYPTO=$(SCREEN_TX_DIRECT_CRYPTO) \
+	-DCONFIG_SCREEN_RX_POLY_INPLACE=$(SCREEN_RX_POLY_INPLACE) \
+	-DCONFIG_SCREEN_RX_CHACHA_SINGLE_PASS=$(SCREEN_RX_CHACHA_SINGLE_PASS) \
+	-DCONFIG_CHACHA_AAD_POOL=$(CHACHA_AAD_POOL) \
 	-DCARBOX_CRYPTO_OWNER_BOOST_PRIORITY=$(CRYPTO_OWNER_BOOST_PRIORITY) \
 	$(RTL_INCLUDES)
 ifeq ($(CHACHA_PRIVATE_MEMORY),1)
@@ -115,6 +122,7 @@ $(OUTPUT_DIR) $(OBJ_DIR):
 	mkdir -p $@
 
 $(OBJ_DIR)/ChaCha20Poly1305.o: ChaCha20Poly1305.c ChaCha20Poly1305.h Makefile \
+	$(SDK_ROOT)/project/realtek_amebapro_v0_example/src/carbox/screen_rx_poly_buffer.h \
 	$(SDK_ROOT)/project/realtek_amebapro_v0_example/src/carbox/screen_tx_direct_crypto.h \
 	$(SDK_ROOT)/project/realtek_amebapro_v0_example/src/carbox/crypto_priority_lock.h | $(OBJ_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -322,21 +330,57 @@ print-config:
 
 HOST_CC ?= cc
 HOST_TEST_FLAGS := -O2 -Wall -Wextra -I.
+RX_POLY_SOURCE_DIR := ../../../src/carbox
+
+.PHONY: host-aad-pool-check
+host-aad-pool-check: | $(OUTPUT_DIR)
+	@set -e; for pool in 0 1; do \
+		echo "HOST AAD POOL=$$pool"; \
+		$(HOST_CC) $(HOST_TEST_FLAGS) -g -fno-pie -no-pie -fno-builtin \
+			-fsanitize=address,undefined -fno-omit-frame-pointer \
+			-DCARBOX_CHACHA_MODE=2 -DCONFIG_CHACHA_AAD_POOL=$$pool \
+			-DCARBOX_SCREEN_TX_DIRECT_CRYPTO=0 -DCARBOX_CHACHA_STATS_INTERVAL_MS=0 \
+			ChaCha20Poly1305.c tests/rtl_backend_openssl_mock.c \
+			tests/host_aad_pool.c -lcrypto -pthread -Wl,--wrap=realloc \
+			-o $(OUTPUT_DIR)/host-aad-pool-$$pool; \
+		$(OUTPUT_DIR)/host-aad-pool-$$pool; \
+	done
+
+.PHONY: host-screen-rx-poly-check
+host-screen-rx-poly-check: | $(OUTPUT_DIR)
+	@set -e; for enabled in 0 1; do for single in 0 1; do \
+		echo "HOST SCREEN RX POLY=$$enabled SINGLE_PASS=$$single"; \
+		$(HOST_CC) $(HOST_TEST_FLAGS) -g -fno-pie -no-pie -fsanitize=address,undefined \
+			-fno-omit-frame-pointer -DCARBOX_CHACHA_MODE=2 \
+			-DCARBOX_SCREEN_TX_DIRECT_CRYPTO=0 \
+			-DCONFIG_SCREEN_RX_POLY_INPLACE=$$enabled \
+			-DCONFIG_SCREEN_RX_CHACHA_SINGLE_PASS=$$single \
+			-DCONFIG_CHACHA_AAD_POOL=1 \
+			-DCARBOX_CHACHA_STATS_INTERVAL_MS=0 \
+			-DCARBOX_CHACHA_RUNTIME_PROFILE=1 \
+			-I$(RX_POLY_SOURCE_DIR) -Itests/freertos \
+			ChaCha20Poly1305.c $(RX_POLY_SOURCE_DIR)/screen_rx_poly_buffer.c \
+			tests/rtl_backend_openssl_mock.c tests/host_screen_rx_poly.c -lcrypto \
+			-Wl,--wrap=malloc \
+			-o $(OUTPUT_DIR)/host-screen-rx-poly-$$enabled-single$$single; \
+		$(OUTPUT_DIR)/host-screen-rx-poly-$$enabled-single$$single; \
+	done; done
 
 host-check: | $(OUTPUT_DIR)
 	@set -e; \
-	for swpoly in 0 1; do \
+	for pool in 0 1; do for swpoly in 0 1; do \
 	  for mode in 0 1 2 3; do \
-		echo "HOST TEST CHACHA_MODE=$$mode NONALIGNED_SW_POLY=$$swpoly"; \
+		echo "HOST TEST CHACHA_MODE=$$mode NONALIGNED_SW_POLY=$$swpoly AAD_POOL=$$pool"; \
 		$(HOST_CC) $(HOST_TEST_FLAGS) -DCARBOX_CHACHA_MODE=$$mode \
 			-DCARBOX_SCREEN_TX_DIRECT_CRYPTO=0 \
 			-DCARBOX_CHACHA_NONALIGNED_SW_POLY=$$swpoly \
+			-DCONFIG_CHACHA_AAD_POOL=$$pool \
 			ChaCha20Poly1305.c tests/rtl_backend_openssl_mock.c \
 			tests/host_modes.c -lcrypto \
-			-o $(OUTPUT_DIR)/host-mode$$mode-swpoly$$swpoly; \
-		$(OUTPUT_DIR)/host-mode$$mode-swpoly$$swpoly; \
+			-o $(OUTPUT_DIR)/host-mode$$mode-swpoly$$swpoly-aadpool$$pool; \
+		$(OUTPUT_DIR)/host-mode$$mode-swpoly$$swpoly-aadpool$$pool; \
 	  done; \
-	done
+	done; done
 
 clean:
 	rm -rf $(OUTPUT_DIR)

@@ -92,9 +92,16 @@ project/realtek_amebapro_v0_example/GCC-RELEASE/**
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/ChaCha20Poly1305_rtl8195b.h
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/Makefile
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/README.md
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/SCREEN_RX_POLY_INPLACE.md
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/CHACHA_AAD_POOL.md
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/CUSTOMER_CHACHA_ROLLOUT_TEST_ZH-TW.md
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/tests/
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/tests/host_modes.c
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/tests/host_screen_rx_poly.c
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/tests/host_aad_pool.c
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/tests/freertos/
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/tests/freertos/FreeRTOS.h
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/tests/freertos/task.h
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/tests/rtl_backend_openssl_mock.c
 
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/aes_rtl8195b/

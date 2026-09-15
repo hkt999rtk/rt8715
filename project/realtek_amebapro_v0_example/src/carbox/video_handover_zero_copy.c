@@ -3,6 +3,7 @@
 #include "screen_queue_wait.h"
 #include "screen_rx_stage_profiler.h"
 #include "screen_rx_rate_limit.h"
+#include "screen_rx_poly_buffer.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -487,7 +488,7 @@ void *carbox_video_handover_source_malloc(size_t length)
 	 * fetch through ROUND_UP(length, 16), so retain the logical allocation
 	 * metadata while providing 15 bytes of physically readable tail padding.
 	 */
-	void *pointer = length <= SIZE_MAX - 15U ? malloc(length + 15U) : NULL;
+	void *pointer = carbox_screen_rx_poly_alloc(length);
 	TaskHandle_t task;
 	uint32_t i;
 
@@ -860,7 +861,7 @@ static void video_handover_release(void *pointer, uint8_t reference,
 		video_handover_gate_signal();
 	}
 	if (actual_free) {
-		free(pointer);
+		carbox_screen_rx_poly_free(pointer);
 	} else if (duplicate) {
 		/* Never turn a lifecycle anomaly into a double-free. */
 		video_handover_disable(duplicate_reason, pointer);

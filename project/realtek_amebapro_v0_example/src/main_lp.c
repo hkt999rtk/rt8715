@@ -31,7 +31,7 @@
 extern void shell_cmd_init (void);
 extern s32 shell_task(void);
 #if defined(CONFIG_PWM_EN)
-extern void led_test(void);
+#include "carbox/led_rgb_lp.h"
 #endif
 extern void main(void);
 
@@ -60,9 +60,12 @@ void main (void)
     dbg_printf ("Build @ %s, %s\r\n", __TIME__, __DATE__);
     shell_cmd_init ();
 #if defined(CONFIG_PWM_EN)
-    led_test();
+    (void)led_rgb_lp_init();
 #endif
     while (1) {
+#if defined(CONFIG_PWM_EN)
+        led_rgb_lp_poll();
+#endif
         shell_task ();
     }
 }

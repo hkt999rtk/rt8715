@@ -825,6 +825,8 @@ SRAM_C += ../src/carbox/vfs_compat/carbox_littlefs.c
 SRAM_C += ../../../component/soc/realtek/8195b/fwlib/hal-rtl8195b-hp/source/ram_s/hal_flash.c
 SRAM_C += ../src/carbox/system_overclock.c
 SRAM_C += ../src/carbox/spic_overclock.c
+SRAM_C += ../src/carbox/nor_uuid.c
+SRC_C += ../src/carbox/led_rgb_hp.c
 # This wrapper intercepts every device lock, including FLASH locks used before
 # external RAM is ready, so it must execute from internal SRAM.
 SRAM_C += ../src/carbox/crypto_engine_profiler.c
@@ -834,6 +836,7 @@ SRAM_C += ../src/carbox/crypto_priority_lock.c
 SRAM_C += ../src/carbox/memcpy_task_profiler.c
 SRAM_C += ../src/carbox/large_memcpy_gdma.c
 SRAM_C += ../src/carbox/video_handover_zero_copy.c
+SRAM_C += ../src/carbox/screen_rx_poly_buffer.c
 SRAM_C += ../src/carbox/screen_queue_wait.c
 SRAM_C += ../src/carbox/screen_tx_direct_crypto.c
 # The customer archive leaves the NCM TX builder unresolved.  Keep the source
@@ -942,18 +945,23 @@ NCM_TX_PROFILE ?= 0
 NCM_TX_ASYNC ?= 1
 # Combine at most this many Ethernet frames into one NCM NTB in the owner task.
 # The negotiated device limit is reported by NCMTXCFG.
-NCM_TX_BATCH_MAX ?= 16
+# Default: one Ethernet frame per NTB; do not drain the queue into a batch.
+# Keep NCM_TX_COMPAT_SINGLE_DATAGRAM=1 above: it selects the compatible TX
+# implementation (including the exported builder ABI), not aggregation policy.
+NCM_TX_BATCH_MAX ?= 1
 # When USB already has work in flight, briefly coalesce toward this many frames.
 # The deadline follows the recent within-burst packet spacing, but is always
 # clamped to this explicit lower/upper range.  USB-idle traffic is sent at once.
-NCM_TX_BATCH_MIN ?= 4
+NCM_TX_BATCH_MIN ?= 1
 NCM_TX_BATCH_TIMEOUT_LOWER_US ?= 100
 NCM_TX_BATCH_TIMEOUT_UPPER_US ?= 1000
 # Keep one 16-KiB NTB in USB, one ready, and a third available to the builder
 # while the customer HAL synchronously waits for bulk OUT completion.
 # Queue arrival drives assembly.  The adaptive one-shot timer is used only
 # while USB already owns work; it never delays the first NTB after an idle gap.
-NCM_TX_PIPELINE ?= 1
+# Default single-immediate mode keeps the async owner but bypasses the
+# prebuilt-NTB pipeline and its coalescing timer entirely.
+NCM_TX_PIPELINE ?= 0
 # Put NCM NTBs carrying vehicle-event RTSP responses on a separate FIFO. The
 # USB owner finishes its current transfer, then services this FIFO before the
 # normal NCM ready queue. Flow identification is independent of diagnostics.
@@ -1190,6 +1198,40 @@ $(AAC_DECODER_BENCHMARK_STAMP):
 # the supplied vendor archives are never modified.
 VIDEO_HANDOVER_ZERO_COPY ?= 1
 VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES ?= 4096
+# RX-only Poly1305 input reuse, enabled by default for board validation.
+# Set to 0 for the scratch-buffer A/B baseline.
+SCREEN_RX_POLY_INPLACE ?= 1
+# Merge standalone RX raw-ChaCha prefix/tail submissions for managed buffers.
+# Set to 0 to retain two submissions without disabling Poly1305 input reuse.
+SCREEN_RX_CHACHA_SINGLE_PASS ?= 1
+# Reuse small AAD snapshots; larger/full-pool requests retain heap fallback.
+CHACHA_AAD_POOL ?= 1
+ifeq ($(filter 0 1,$(CHACHA_AAD_POOL)),)
+$(error CHACHA_AAD_POOL must be 0 or 1)
+endif
+ifeq ($(filter 0 1,$(SCREEN_RX_CHACHA_SINGLE_PASS)),)
+$(error SCREEN_RX_CHACHA_SINGLE_PASS must be 0 or 1)
+endif
+ifeq ($(filter 0 1,$(SCREEN_RX_POLY_INPLACE)),)
+$(error SCREEN_RX_POLY_INPLACE must be 0 or 1)
+endif
+ifeq ($(SCREEN_RX_POLY_INPLACE),1)
+ifneq ($(VIDEO_HANDOVER_ZERO_COPY),1)
+$(error SCREEN_RX_POLY_INPLACE requires VIDEO_HANDOVER_ZERO_COPY=1 for allocation/free hooks)
+endif
+ifneq ($(CHACHA_MODE),2)
+$(error SCREEN_RX_POLY_INPLACE requires CHACHA_MODE=2)
+endif
+ifneq ($(filter 1,$(CHACHA_VENDOR_TRACE) $(CHACHA_PRE_RX_VENDOR) $(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_API_TRACE)),)
+$(error SCREEN_RX_POLY_INPLACE requires the normal local ChaCha replacement)
+endif
+endif
+SCREEN_RX_POLY_STAMP := $(OBJ_DIR)/.screen_rx_poly_$(SCREEN_RX_POLY_INPLACE)-single$(SCREEN_RX_CHACHA_SINGLE_PASS)-aadpool$(CHACHA_AAD_POOL)
+$(SCREEN_RX_POLY_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.screen_rx_poly_*
+	@touch $@
+../src/carbox/screen_rx_poly_buffer.o: $(SCREEN_RX_POLY_STAMP)
 # Bound queued plus actively-sent screen frames before entering the closed
 # AirPlayScreen mutex.  This lets downstream TCP/USB pressure stop the receiver
 # callback and naturally close the upstream TCP window toward the iPhone.
@@ -1346,7 +1388,7 @@ endif
 # AirPlay/HID handover. Touch edges pass immediately; intermediate moves retain
 # only the newest position. The downstream HTTP queue remains an unpaced FIFO.
 # Set to 0 to restore the unmodified one-report-in/one-report-out behaviour.
-TOUCH_MOVE_SAMPLE_HZ ?= 30
+TOUCH_MOVE_SAMPLE_HZ ?= 0
 ifneq ($(TOUCH_MOVE_SAMPLE_HZ),0)
 ifneq ($(AIRPLAY_HID_HTTP_BYPASS),1)
 $(error TOUCH_MOVE_SAMPLE_HZ requires AIRPLAY_HID_HTTP_BYPASS=1)
@@ -1692,6 +1734,8 @@ GCCFLAGS += -DAAC_DECODER_BENCHMARK_TASK_PRIORITY=$(AAC_DECODER_BENCHMARK_TASK_P
 GCCFLAGS += -DAAC_DECODER_BENCHMARK_RUN_PRIORITY=$(AAC_DECODER_BENCHMARK_RUN_PRIORITY)
 GCCFLAGS += -DAAC_DECODER_BENCHMARK_TASK_STACK=$(AAC_DECODER_BENCHMARK_TASK_STACK)
 GCCFLAGS += -DCONFIG_VIDEO_HANDOVER_ZERO_COPY=$(VIDEO_HANDOVER_ZERO_COPY)
+GCCFLAGS += -DCONFIG_SCREEN_RX_POLY_INPLACE=$(SCREEN_RX_POLY_INPLACE)
+GCCFLAGS += -DCONFIG_SCREEN_RX_CHACHA_SINGLE_PASS=$(SCREEN_RX_CHACHA_SINGLE_PASS)
 GCCFLAGS += -DCONFIG_SCREEN_QUEUE_EVENT_WAIT=$(SCREEN_QUEUE_EVENT_WAIT)
 GCCFLAGS += -DVIDEO_HANDOVER_ZERO_COPY_MIN_BYTES=$(VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES)
 GCCFLAGS += -DCONFIG_VIDEO_HANDOVER_BACKPRESSURE=$(VIDEO_HANDOVER_BACKPRESSURE)
@@ -1784,6 +1828,10 @@ CPPFLAGS += -w
 CPPFLAGS += -Wall -Wpointer-arith -Wundef -Wno-write-strings -Wno-maybe-uninitialized
 
 LFLAGS = 
+# Keep this callable diagnostic API even before an application caller is added.
+LFLAGS += -Wl,--undefined=carbox_nor_read_uuid
+LFLAGS += -Wl,--undefined=carplay_nor_read_otp
+LFLAGS += -Wl,--undefined=led_rgb -Wl,--undefined=led_rgb_get_status
 LFLAGS += -march=armv8-m.main+dsp -mthumb -mcmse -mfloat-abi=softfp -mfpu=fpv5-sp-d16 -Os -nostartfiles -specs=nosys.specs -nodefaultlibs -nostdlib
 LFLAGS += -Wl,--gc-sections -Wl,-Map=$(BIN_DIR)/$(TARGET).map -Wl,--cref -Wl,--build-id=none -Wl,--use-blx 
 ifeq ($(LPDDR_RE_OBSERVE),1)
@@ -2133,6 +2181,17 @@ $(CARBOX_ACCESSORY_PATCH_STAMP):
 	@rm -f $(OBJ_DIR)/.accessory_patch_*
 	@touch $@
 CARBOX_ACCESSORY2_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2.a
+ifeq ($(SCREEN_RX_POLY_INPLACE),1)
+SCREEN_RX_POLY_VENDOR_CHECK := ../src/carbox/tools/check_screen_rx_poly_vendor.sh
+SCREEN_RX_POLY_VENDOR_STAMP := $(OBJ_DIR)/.screen_poly_vendor_audit
+$(SCREEN_RX_POLY_VENDOR_STAMP): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
+		$(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) $(SCREEN_RX_POLY_VENDOR_CHECK)
+	@mkdir -p $(OBJ_DIR)
+	sh $(SCREEN_RX_POLY_VENDOR_CHECK) "$(AR)" \
+		$(CARBOX_CARPLAY_VENDOR_ARCHIVE) $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE)
+	@touch $@
+$(CARBOX_CARPLAY_ARCHIVE): $(SCREEN_RX_POLY_VENDOR_STAMP)
+endif
 CARBOX_ACCESSORY2_HANDOVER_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2_handover.a
 CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_Accessory2_vendor_private_mem.a
 CARBOX_SYSTEMLIB_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_SystemLib.a
@@ -2167,6 +2226,8 @@ $(CARBOX_CARPLAY_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/ChaCha20Poly1305.h \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/ChaCha20Poly1305_rtl8195b.c \
 		../src/carbox/crypto_priority_lock.h \
+		../src/carbox/screen_rx_poly_buffer.h \
+		$(SCREEN_RX_POLY_STAMP) \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/Makefile \
 		$(CARBOX_CHACHA_CONFIG_STAMP)
 	# The output archive has a fixed name while its objects are mode-specific.
@@ -2175,6 +2236,9 @@ $(CARBOX_CARPLAY_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) replacement \
 		CHACHA_MODE=$(CHACHA_MODE) CHACHA_HW_MIN_LEN=$(CHACHA_HW_MIN_LEN) \
 		SCREEN_TX_DIRECT_CRYPTO=$(SCREEN_TX_DIRECT_CRYPTO) \
+		SCREEN_RX_POLY_INPLACE=$(SCREEN_RX_POLY_INPLACE) \
+		SCREEN_RX_CHACHA_SINGLE_PASS=$(SCREEN_RX_CHACHA_SINGLE_PASS) \
+		CHACHA_AAD_POOL=$(CHACHA_AAD_POOL) \
 		CHACHA_STATS_INTERVAL_MS=$(CHACHA_STATS_INTERVAL_MS) \
 		CHACHA_RUNTIME_PROFILE=$(CHACHA_RUNTIME_PROFILE) \
 		CHACHA_HW_SELFTEST=$(CHACHA_HW_SELFTEST) \

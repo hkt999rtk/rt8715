@@ -146,7 +146,7 @@ SRC_C += ../../../component/soc/realtek/8195b/fwlib/hal-rtl8195b-lp/source/hal_t
 
 #user
 SRC_C += ../src/main_lp.c
-SRC_C += ../src/carbox/test/test_led.c
+SRC_C += ../src/carbox/led_rgb_lp.c
 
 
 # Generate obj list

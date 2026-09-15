@@ -64,7 +64,8 @@ icc_user_msg_ns_entry_t icc_hal_msg_tbl[ICC_HAL_MSG_TBL_SIZE];
 #else   // else of "#if defined (CONFIG_BUILD_NONSECURE)"
 // For (Ignore) Secure region
 /// The size of the ICC HAL command callback register table
-#define ICC_HAL_CMD_TBL_SIZE        5
+/* Five SDK handlers plus the application RGB LED acknowledgement. */
+#define ICC_HAL_CMD_TBL_SIZE        6
 /// The size of the ICC HAL message callback register table
 #define ICC_HAL_MSG_TBL_SIZE        0
 /// The size (in number of ICC command) of ICC command RX queue

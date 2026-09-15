@@ -14,10 +14,25 @@ static unsigned int g_mock_chacha_operations;
 static unsigned int g_mock_chacha_inplace_operations;
 static unsigned int g_mock_poly1305_operations;
 static unsigned int g_mock_fail_chacha_call;
+static unsigned int g_mock_fail_chacha_after_write_call;
+static size_t g_mock_last_chacha_len;
+static uint32_t g_mock_last_chacha_counter;
+static const void *g_mock_last_chacha_input;
+static void *g_mock_last_chacha_output;
 static unsigned int g_mock_fail_poly1305_call;
 static unsigned int g_mock_fail_aad_snapshot;
 static unsigned int g_mock_interrupt_context;
 static unsigned int g_mock_transaction_active;
+static const void *g_mock_poly_input;
+
+const void *mock_rtl_last_poly_input(void) { return g_mock_poly_input; }
+size_t mock_rtl_last_chacha_len(void) { return g_mock_last_chacha_len; }
+uint32_t mock_rtl_last_chacha_counter(void) { return g_mock_last_chacha_counter; }
+const void *mock_rtl_last_chacha_input(void) { return g_mock_last_chacha_input; }
+void *mock_rtl_last_chacha_output(void) { return g_mock_last_chacha_output; }
+void mock_rtl_fail_chacha_after_write_on(unsigned int call_index) {
+  g_mock_fail_chacha_after_write_call = call_index;
+}
 
 void mock_rtl_reset_stats(void) {
   g_mock_decrypt_successes = 0;
@@ -29,10 +44,16 @@ void mock_rtl_reset_stats(void) {
   g_mock_chacha_inplace_operations = 0;
   g_mock_poly1305_operations = 0;
   g_mock_fail_chacha_call = 0;
+  g_mock_fail_chacha_after_write_call = 0;
+  g_mock_last_chacha_len = 0;
+  g_mock_last_chacha_counter = 0;
+  g_mock_last_chacha_input = NULL;
+  g_mock_last_chacha_output = NULL;
   g_mock_fail_poly1305_call = 0;
   g_mock_fail_aad_snapshot = 0;
   g_mock_interrupt_context = 0;
   g_mock_transaction_active = 0;
+  g_mock_poly_input = NULL;
 }
 
 unsigned int mock_rtl_decrypt_successes(void) {
@@ -88,12 +109,13 @@ unsigned int mock_rtl_transaction_active(void) {
 }
 
 #if CARBOX_CHACHA_MODE != CARBOX_CHACHA_MODE_SOFTWARE_ONLY
+void *carbox_chacha_aad_realloc_default(void *ptr, size_t len);
 void *carbox_chacha_aad_realloc(void *ptr, size_t len) {
   if (g_mock_fail_aad_snapshot) {
     g_mock_fail_aad_snapshot = 0u;
     return NULL;
   }
-  return realloc(ptr, len);
+  return carbox_chacha_aad_realloc_default(ptr, len);
 }
 #endif
 
@@ -241,6 +263,10 @@ int chacha_rtl8195b_chacha_xor(
   if ((input_len == 0u) || (input_len > 65536u) ||
       ((input_len & 15u) != 0u)) return CHACHA_RTL_SKIP_LENGTH;
   ++g_mock_chacha_operations;
+  g_mock_last_chacha_len = input_len;
+  g_mock_last_chacha_counter = counter;
+  g_mock_last_chacha_input = input;
+  g_mock_last_chacha_output = output;
   if (input == output) ++g_mock_chacha_inplace_operations;
   if (g_mock_fail_chacha_call == g_mock_chacha_operations) {
     return CHACHA_RTL_ERROR_OPERATION;
@@ -261,6 +287,8 @@ int chacha_rtl8195b_chacha_xor(
        out_len == (int)input_len;
   EVP_CIPHER_CTX_free(ctx);
   if (!ok) return CHACHA_RTL_ERROR_OPERATION;
+  if (g_mock_fail_chacha_after_write_call == g_mock_chacha_operations)
+    return CHACHA_RTL_ERROR_OPERATION;
   return CHACHA_RTL_OK;
 }
 
@@ -324,6 +352,7 @@ int chacha_rtl8195b_poly1305_locked(
   const void *message, size_t message_len,
   uint8_t digest[16]
 ) {
+  g_mock_poly_input = message;
   return chacha_rtl8195b_poly1305(
     poly_key, message, message_len, digest
   );

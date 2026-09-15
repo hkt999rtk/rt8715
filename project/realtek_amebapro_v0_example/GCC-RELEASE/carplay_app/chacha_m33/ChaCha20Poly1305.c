@@ -5,6 +5,16 @@
 #include <stdlib.h>
 #include "ChaCha20Poly1305.h"
 
+#ifndef CONFIG_SCREEN_RX_POLY_INPLACE
+#define CONFIG_SCREEN_RX_POLY_INPLACE 0
+#endif
+#ifndef CONFIG_SCREEN_RX_CHACHA_SINGLE_PASS
+#define CONFIG_SCREEN_RX_CHACHA_SINGLE_PASS 0
+#endif
+#if CONFIG_SCREEN_RX_POLY_INPLACE || CONFIG_SCREEN_RX_CHACHA_SINGLE_PASS
+#include "screen_rx_poly_buffer.h"
+#endif
+
 #ifndef CARBOX_SCREEN_TX_DIRECT_CRYPTO
 #define CARBOX_SCREEN_TX_DIRECT_CRYPTO 0
 #endif
@@ -133,11 +143,81 @@ static int chacha_trace_wanted(uint32_t sequence, size_t data_len) {
 #define CHACHA_CLEAR(p, n) do { (void)(p); (void)(n); } while (0)
 #endif
 
+#ifndef CONFIG_CHACHA_AAD_POOL
+#define CONFIG_CHACHA_AAD_POOL 0
+#endif
+
+#if CONFIG_CHACHA_AAD_POOL && \
+    CARBOX_CHACHA_MODE != CARBOX_CHACHA_MODE_SOFTWARE_ONLY
+#define CHACHA_AAD_POOL_SLOTS 16u
+#define CHACHA_AAD_POOL_BYTES 128u
+static uint8_t g_chacha_aad_pool[CHACHA_AAD_POOL_SLOTS][CHACHA_AAD_POOL_BYTES]
+  __attribute__((section(".lpddr.bss.chacha_aad_pool"), aligned(32)));
+static volatile uint32_t g_chacha_aad_pool_busy;
+
+static int chacha_aad_pool_slot(const void *ptr) {
+  uintptr_t address = (uintptr_t)ptr;
+  uintptr_t base = (uintptr_t)&g_chacha_aad_pool[0][0];
+  uintptr_t offset;
+  if (address < base) return -1;
+  offset = address - base;
+  if (offset >= sizeof(g_chacha_aad_pool) ||
+      (offset % CHACHA_AAD_POOL_BYTES) != 0u) return -1;
+  return (int)(offset / CHACHA_AAD_POOL_BYTES);
+}
+#endif
+
+/* AAD snapshots are released only by final/verify. Keep this independent of
+ * the caller's RX/TX buffer ownership and of the closed state layout. */
+static void chacha_aad_free(void *ptr) {
+#if CONFIG_CHACHA_AAD_POOL && \
+    CARBOX_CHACHA_MODE != CARBOX_CHACHA_MODE_SOFTWARE_ONLY
+  int slot = chacha_aad_pool_slot(ptr);
+  if (slot >= 0) {
+    /* Publish the slot after its last reader/copy is finished. No pool wait,
+     * global heap lock or payload clear is needed for this AAD snapshot. */
+    __sync_fetch_and_and(&g_chacha_aad_pool_busy, ~(1u << (unsigned)slot));
+    return;
+  }
+#endif
+  free(ptr);
+}
+
 #if CARBOX_CHACHA_MODE != CARBOX_CHACHA_MODE_SOFTWARE_ONLY
-/* Testable allocation seam; products normally use the weak default. */
+/* Internal implementation also used by the fault-injecting host seam. */
+void *carbox_chacha_aad_realloc_default(void *ptr, size_t len) {
+#if CONFIG_CHACHA_AAD_POOL
+  int slot = chacha_aad_pool_slot(ptr);
+  unsigned i;
+  if (len == 0u) {
+    chacha_aad_free(ptr);
+    return NULL;
+  }
+  if (slot >= 0) {
+    void *larger;
+    if (len <= CHACHA_AAD_POOL_BYTES) return ptr;
+    larger = realloc(NULL, len);
+    if (!larger) return NULL; /* Preserve the old snapshot on allocation failure. */
+    memcpy(larger, ptr, CHACHA_AAD_POOL_BYTES);
+    chacha_aad_free(ptr);
+    return larger;
+  }
+  if (ptr == NULL && len <= CHACHA_AAD_POOL_BYTES) {
+    for (i = 0; i < CHACHA_AAD_POOL_SLOTS; ++i) {
+      uint32_t mask = 1u << i;
+      /* Bounded, nonblocking acquisition; each state owns its slot until
+       * final/verify, even when another task performs that final operation. */
+      if ((__sync_fetch_and_or(&g_chacha_aad_pool_busy, mask) & mask) == 0u)
+        return g_chacha_aad_pool[i];
+    }
+  }
+#endif
+  return realloc(ptr, len);
+}
+
 __attribute__((weak))
 void *carbox_chacha_aad_realloc(void *ptr, size_t len) {
-  return realloc(ptr, len);
+  return carbox_chacha_aad_realloc_default(ptr, len);
 }
 #endif
 
@@ -2135,7 +2215,9 @@ static CHACHA_UNUSED int chacha_build_poly_input(
   if (aad_padded != aad_len) {
     memset(buffer + aad_len, 0, aad_padded - aad_len);
   }
-  chacha_copy_bytes(buffer + aad_padded, ciphertext, ciphertext_len);
+  if (buffer + aad_padded != ciphertext) {
+    chacha_copy_bytes(buffer + aad_padded, ciphertext, ciphertext_len);
+  }
   if (data_padded != ciphertext_len) {
     memset(
       buffer + aad_padded + ciphertext_len, 0,
@@ -2167,10 +2249,13 @@ static volatile uint32_t g_chacha_poly_scratch_hits;
 static volatile uint32_t g_chacha_poly_scratch_fallbacks;
 static volatile uint32_t g_chacha_poly_scratch_alloc_failures;
 static volatile uint32_t g_chacha_poly_scratch_bytes;
+static volatile uint32_t g_chacha_poly_inplace_hits;
+static volatile uint32_t g_chacha_poly_inplace_bytes;
 static volatile uint32_t g_chacha_multi_tx_transactions;
 static volatile uint32_t g_chacha_multi_tx_errors;
 static volatile uint32_t g_chacha_multi_rx_transactions;
 static volatile uint32_t g_chacha_multi_rx_errors;
+static volatile uint32_t g_chacha_rx_single_pass_operations;
 
 #define CHACHA_RUNTIME_ADD(counter, value) \
   ((void)__sync_fetch_and_add(&(counter), (uint32_t)(value)))
@@ -2180,28 +2265,36 @@ void chacha_poly_scratch_report(unsigned window_index) {
   static uint32_t reported_fallbacks;
   static uint32_t reported_alloc_failures;
   static uint32_t reported_bytes;
+  static uint32_t reported_inplace_hits;
+  static uint32_t reported_inplace_bytes;
   uint32_t hits = __sync_fetch_and_add(&g_chacha_poly_scratch_hits, 0u);
   uint32_t fallbacks =
     __sync_fetch_and_add(&g_chacha_poly_scratch_fallbacks, 0u);
   uint32_t alloc_failures =
     __sync_fetch_and_add(&g_chacha_poly_scratch_alloc_failures, 0u);
   uint32_t bytes = __sync_fetch_and_add(&g_chacha_poly_scratch_bytes, 0u);
+  uint32_t inplace_hits = __sync_fetch_and_add(&g_chacha_poly_inplace_hits, 0u);
+  uint32_t inplace_bytes = __sync_fetch_and_add(&g_chacha_poly_inplace_bytes, 0u);
 
   printf(
     "[CHACHASCRATCH][%u] hit/fallback/alloc_fail=%lu/%lu/%lu "
-    "bytes=%lu capacity=%u busy=%lu\n",
+    "bytes=%lu capacity=%u busy=%lu inplace=%lu saved_bytes=%lu\n",
     window_index,
     (unsigned long)(hits - reported_hits),
     (unsigned long)(fallbacks - reported_fallbacks),
     (unsigned long)(alloc_failures - reported_alloc_failures),
     (unsigned long)(bytes - reported_bytes),
     (unsigned)CHACHA_POLY_SCRATCH_CAPACITY,
-    (unsigned long)__sync_fetch_and_add(&g_chacha_poly_scratch_busy, 0u)
+    (unsigned long)__sync_fetch_and_add(&g_chacha_poly_scratch_busy, 0u),
+    (unsigned long)(inplace_hits - reported_inplace_hits),
+    (unsigned long)(inplace_bytes - reported_inplace_bytes)
   );
   reported_hits = hits;
   reported_fallbacks = fallbacks;
   reported_alloc_failures = alloc_failures;
   reported_bytes = bytes;
+  reported_inplace_hits = inplace_hits;
+  reported_inplace_bytes = inplace_bytes;
 }
 
 void chacha_crypto_transaction_report(unsigned window_index) {
@@ -2209,24 +2302,29 @@ void chacha_crypto_transaction_report(unsigned window_index) {
   static uint32_t reported_tx_errors;
   static uint32_t reported_rx;
   static uint32_t reported_rx_errors;
+  static uint32_t reported_single_pass;
   uint32_t tx = __sync_fetch_and_add(&g_chacha_multi_tx_transactions, 0u);
   uint32_t tx_errors = __sync_fetch_and_add(&g_chacha_multi_tx_errors, 0u);
   uint32_t rx = __sync_fetch_and_add(&g_chacha_multi_rx_transactions, 0u);
   uint32_t rx_errors = __sync_fetch_and_add(&g_chacha_multi_rx_errors, 0u);
+  uint32_t single_pass =
+    __sync_fetch_and_add(&g_chacha_rx_single_pass_operations, 0u);
 
   printf(
     "[CHACHATXN][%u] shared_engine=1 multi_stage tx/error=%lu/%lu "
-    "rx/error=%lu/%lu irq_wait_yields_cpu=1\n",
+    "rx/error=%lu/%lu rx_single_pass=%lu irq_wait_yields_cpu=1\n",
     window_index,
     (unsigned long)(tx - reported_tx),
     (unsigned long)(tx_errors - reported_tx_errors),
     (unsigned long)(rx - reported_rx),
-    (unsigned long)(rx_errors - reported_rx_errors)
+    (unsigned long)(rx_errors - reported_rx_errors),
+    (unsigned long)(single_pass - reported_single_pass)
   );
   reported_tx = tx;
   reported_tx_errors = tx_errors;
   reported_rx = rx;
   reported_rx_errors = rx_errors;
+  reported_single_pass = single_pass;
 }
 #else
 #define CHACHA_RUNTIME_ADD(counter, value) do { \
@@ -2243,7 +2341,7 @@ static CHACHA_UNUSED int chacha_hardware_auth_standalone_locked(
   const uint8_t key[32], const uint8_t nonce[8],
   const void *aad, size_t aad_len,
   const uint8_t *ciphertext, size_t ciphertext_len,
-  uint8_t tag[16]
+  uint8_t tag[16], int screen_rx
 ) {
   uint8_t poly_key[32];
   uint8_t *poly_input = NULL;
@@ -2266,6 +2364,34 @@ static CHACHA_UNUSED int chacha_hardware_auth_standalone_locked(
       aad_len, ciphertext_len, &poly_input_len
     );
   }
+#if CONFIG_SCREEN_RX_POLY_INPLACE && \
+    CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+  if (status == CHACHA_RTL_OK && screen_rx) {
+    uint8_t *input = carbox_screen_rx_poly_input(
+      ciphertext, ciphertext_len, aad_len, poly_input_len);
+    if (input != NULL) {
+      uint8_t saved_wire_tag[16];
+      uint8_t *wire_tag = input + aad_len + ciphertext_len;
+      /* Restore even after a HAL error, before raw decrypt, tag comparison,
+       * diagnostics or nonce recovery can inspect the caller's tag again. */
+      chacha_copy_bytes(saved_wire_tag, wire_tag, sizeof(saved_wire_tag));
+      status = chacha_build_poly_input(
+        aad, aad_len, ciphertext, ciphertext_len,
+        input, poly_input_len, &poly_input_len);
+      if (status == CHACHA_RTL_OK) {
+        CHACHA_RUNTIME_ADD(g_chacha_poly_inplace_hits, 1u);
+        CHACHA_RUNTIME_ADD(g_chacha_poly_inplace_bytes, ciphertext_len);
+        status = chacha_rtl8195b_poly1305_locked(
+          poly_key, input, poly_input_len, tag);
+      }
+      chacha_copy_bytes(wire_tag, saved_wire_tag, sizeof(saved_wire_tag));
+      chacha_secure_clear(poly_key, sizeof(poly_key));
+      return status;
+    }
+  }
+#else
+  (void)screen_rx;
+#endif
   if (status == CHACHA_RTL_OK) {
     if (__sync_bool_compare_and_swap(
           &g_chacha_poly_scratch_busy, 0u, 1u)) {
@@ -2349,7 +2475,7 @@ static CHACHA_UNUSED int chacha_hardware_encrypt_auto(
   if (status == CHACHA_RTL_OK &&
       *backend == CHACHA_HW_BACKEND_STANDALONE) {
     status = chacha_hardware_auth_standalone_locked(
-      key, nonce, aad, aad_len, ciphertext, len, tag
+      key, nonce, aad, aad_len, ciphertext, len, tag, 0
     );
   }
   chacha_rtl8195b_transaction_end();
@@ -2362,6 +2488,40 @@ static CHACHA_UNUSED int chacha_hardware_encrypt_auto(
     key, nonce, aad, aad_len, ciphertext, len, tag
   );
   return CHACHA_RTL_OK;
+}
+
+/* Called only after standalone RX authentication has consumed the original
+ * ciphertext. Owned screen buffers have a writable tag/tail and full cache
+ * lines, allowing one rounded raw-ChaCha submission. Wire and AEAD lengths
+ * stay unchanged; this is not a padded combined ChaCha/Poly1305 decrypt. */
+static CHACHA_UNUSED int chacha_hardware_screen_rx_xor_locked(
+  const uint8_t key[32], const uint8_t nonce[8], size_t aad_len,
+  const uint8_t *ciphertext, size_t len, uint8_t *plaintext
+) {
+#if CONFIG_SCREEN_RX_CHACHA_SINGLE_PASS && \
+    CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+  size_t poly_len;
+  if (ciphertext == plaintext && len != 0u && len <= 65536u &&
+      (len & 15u) != 0u &&
+      chacha_poly_input_size(aad_len, len, &poly_len) == CHACHA_RTL_OK &&
+      carbox_screen_rx_poly_input(ciphertext, len, aad_len, poly_len) != NULL) {
+    size_t padded_len = (len + 15u) & ~(size_t)15u;
+    uint8_t saved_wire_tag[16];
+    int status;
+    chacha_copy_bytes(saved_wire_tag, plaintext + len, sizeof(saved_wire_tag));
+    memset(plaintext + len, 0, padded_len - len);
+    CHACHA_RUNTIME_ADD(g_chacha_rx_single_pass_operations, 1u);
+    status = chacha_rtl8195b_chacha_xor_locked(
+      key, nonce, 1u, ciphertext, padded_len, plaintext);
+    /* A HAL failure may already have overwritten the tail. Always restore
+     * the complete original tag, then propagate the error without retry. */
+    chacha_copy_bytes(plaintext + len, saved_wire_tag, sizeof(saved_wire_tag));
+    return status;
+  }
+#else
+  (void)aad_len;
+#endif
+  return chacha_hardware_xor_chunks_locked(key, nonce, ciphertext, len, plaintext);
 }
 
 static CHACHA_UNUSED int chacha_hardware_decrypt_auto(
@@ -2386,11 +2546,11 @@ static CHACHA_UNUSED int chacha_hardware_decrypt_auto(
     if (status != CHACHA_RTL_OK) return status;
     CHACHA_RUNTIME_ADD(g_chacha_multi_rx_transactions, 1u);
     status = chacha_hardware_auth_standalone_locked(
-      key, nonce, aad, aad_len, ciphertext, len, calculated_tag
+      key, nonce, aad, aad_len, ciphertext, len, calculated_tag, 1
     );
     if (status == CHACHA_RTL_OK) {
-      status = chacha_hardware_xor_chunks_locked(
-        key, nonce, ciphertext, len, plaintext
+      status = chacha_hardware_screen_rx_xor_locked(
+        key, nonce, aad_len, ciphertext, len, plaintext
       );
     }
     chacha_rtl8195b_transaction_end();
@@ -2828,7 +2988,7 @@ size_t chacha20_poly1305_final(
   chacha_secure_clear(key, sizeof(key));
   chacha_secure_clear(nonce, sizeof(nonce));
   if (input_snapshot) free(input_snapshot);
-  if (aad_snapshot) free(aad_snapshot);
+  if (aad_snapshot) chacha_aad_free(aad_snapshot);
   return written;
 }
 
@@ -2986,7 +3146,7 @@ size_t chacha20_poly1305_verify(
   chacha_secure_clear(key, sizeof(key));
   chacha_secure_clear(nonce, sizeof(nonce));
   if (input_snapshot) free(input_snapshot);
-  if (aad_snapshot) free(aad_snapshot);
+  if (aad_snapshot) chacha_aad_free(aad_snapshot);
   return written;
 }
 
