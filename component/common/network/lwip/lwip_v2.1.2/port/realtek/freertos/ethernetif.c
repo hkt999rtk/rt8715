@@ -1649,7 +1649,9 @@ static void ncm_tx_usb_worker(void *arg)
 static void ncm_tx_async_worker(void *arg)
 {
 	struct ncm_tx_async_item items[CARBOX_NCM_TX_BATCH_MAX_DATAGRAMS];
+#if CONFIG_NCM_TX_BATCH_MAX > 1 || CONFIG_NCM_TX_PIPELINE
 	struct carbox_ncm_tx_batch batch;
+#endif
 
 	(void)arg;
 	for (;;) {
@@ -1658,7 +1660,9 @@ static void ncm_tx_async_worker(void *arg)
 			u32_t now = hal_read_curtime_us();
 			u32_t item_count = 1U;
 			u32_t item_index;
+#if CONFIG_NCM_TX_BATCH_MAX > 1 || CONFIG_NCM_TX_PIPELINE
 			u32_t send_index = 0U;
+#endif
 			err_t result = ERR_OK;
 
 			/* Timer expirations share the input queue so a sub-tick GTimer IRQ can
@@ -1779,6 +1783,13 @@ static void ncm_tx_async_worker(void *arg)
 			g_ncm_tx_inflight_start_us = now;
 			taskEXIT_CRITICAL();
 
+#if CONFIG_NCM_TX_BATCH_MAX == 1 && !CONFIG_NCM_TX_PIPELINE
+			/* Single-immediate mode has no batch consumer. Skip its scratch
+			 * allocation, clearing and duplicate pbuf-chain traversal, while
+			 * retaining the common accounting and reference release below. */
+			if (ncm_send_pbuf_sync(items[0].p) != ERR_OK)
+				result = ERR_BUF;
+#else
 			while (send_index < item_count) {
 				u32_t build_index;
 				u32_t built_frames = 0U;
@@ -1920,6 +1931,7 @@ static void ncm_tx_async_worker(void *arg)
 				send_index++;
 #endif
 			}
+#endif
 			taskENTER_CRITICAL();
 			g_ncm_tx_inflight_packets = 0U;
 			g_ncm_tx_inflight_start_us = 0U;
