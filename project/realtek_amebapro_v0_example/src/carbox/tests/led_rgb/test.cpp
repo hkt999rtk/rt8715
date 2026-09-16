@@ -74,7 +74,7 @@ static void expect_duty(float r, float g, float b) {
 int main() {
     assert(led_rgb_get_status() == LED_RGB_NOT_READY);
     assert(led_rgb_lp_init() == 0);
-    expect_duty(0,0,0);
+    expect_duty(1,1,1);
     register_status = HAL_NOT_READY;
     led_rgb(1,0,0); assert(led_rgb_get_status() == LED_RGB_NOT_READY);
     register_status = HAL_OK;

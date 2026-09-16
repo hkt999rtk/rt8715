@@ -50,9 +50,11 @@ int led_rgb_lp_init(void)
     pwmout_period_us(&red, 1000);
     pwmout_period_us(&green, 1000);
     pwmout_period_us(&blue, 1000);
-    set_channel(&red, 0);
-    set_channel(&green, 0);
-    set_channel(&blue, 0);
+    /* Initial RGB is (1, 1, 1): high outputs turn this board's LEDs off.
+     * Keep the existing runtime duty mapping unchanged. */
+    set_channel(&red, 255);
+    set_channel(&green, 255);
+    set_channel(&blue, 255);
     if (hal_icc_hal_cmd_register(&icc_hal_adp, LED_RGB_ICC_SET,
                                  led_rgb_request, 0) != HAL_OK)
         return -1;

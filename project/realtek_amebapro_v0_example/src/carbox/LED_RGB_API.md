@@ -68,7 +68,9 @@ PWM period 1000 us (1 kHz), active-high by default. Common-anode hardware needs
 the LP build define `RGB_LED_ACTIVE_LOW=1`. Do not define it only in the HP
 customer application. Rebuild LP after changing polarity.
 
-LP boots with all three channels off and retains the last requested values.
+LP initializes RGB to `(1, 1, 1)` and retains the last requested values.
+With the unchanged default duty mapping, all three outputs start high,
+which turns the LEDs off on this active-low board.
 The old rainbow/breathing test source is preserved but no longer linked or
 called. Main-loop servicing replaces its infinite animation loop.
 
