@@ -1,6 +1,7 @@
 #include "touch_path_profiler.h"
 #include "airplay_mutex_profiler.h"
 #include "car_ack_response_cache.h"
+#include "car_ack_timestamp.h"
 #include "usb_rx_priority.h"
 
 #ifndef CONFIG_TOUCH_PATH_PROFILE
@@ -40,7 +41,7 @@
 #define CONFIG_GMT_TIME_PROFILE 0
 #endif
 
-#if CONFIG_TOUCH_PATH_PROFILE || CONFIG_AIRPLAY_HID_HTTP_BYPASS
+#if CONFIG_TOUCH_PATH_PROFILE || CONFIG_AIRPLAY_HID_HTTP_BYPASS || CONFIG_CAR_ACK_TIMESTAMP
 
 #include <string.h>
 #if CONFIG_GMT_TIME_PROFILE
@@ -1871,6 +1872,12 @@ int32_t __wrap_AirPlayResponse_GetInfoType(
 int32_t __wrap_AirPlayResponse_GetInfoHIDReportCommand(
 	const void *body, uint32_t length)
 {
+	car_ack_timestamp_hid_stage(0);
+#if CONFIG_CAR_ACK_TIMESTAMP && !CONFIG_TOUCH_PATH_PROFILE
+	int32_t trace_result = __real_AirPlayResponse_GetInfoHIDReportCommand(body, length);
+	car_ack_timestamp_hid_stage(1);
+	return trace_result;
+#else
 	TaskHandle_t current = xTaskGetCurrentTaskHandle();
 	uint32_t start_us = hal_read_curtime_us();
 	uint32_t event_start_us = start_us;
@@ -1904,6 +1911,7 @@ int32_t __wrap_AirPlayResponse_GetInfoHIDReportCommand(
 	taskEXIT_CRITICAL();
 
 	result = __real_AirPlayResponse_GetInfoHIDReportCommand(body, length);
+	car_ack_timestamp_hid_stage(1);
 
 	taskENTER_CRITICAL();
 #if CONFIG_TOUCH_AA_COMMAND
@@ -1930,6 +1938,7 @@ int32_t __wrap_AirPlayResponse_GetInfoHIDReportCommand(
 	touch_path_state.event_task = NULL;
 	taskEXIT_CRITICAL();
 	return result;
+#endif
 }
 
 void __wrap_acc_carplay_cb_hid_report(uint32_t uid, const void *report,
@@ -2765,6 +2774,12 @@ ssize_t __wrap_lwip_read(int socket_fd, void *buffer, size_t length)
 int32_t __wrap_HTTPMessageReadMessage(
 	void *message, void *read_f, void *read_context)
 {
+#if CONFIG_CAR_ACK_TIMESTAMP && !CONFIG_TOUCH_PATH_PROFILE
+	/* Do not activate the unrelated full touch profiler for this probe. */
+	int32_t trace_result = __real_HTTPMessageReadMessage(message, read_f, read_context);
+	car_ack_timestamp_http_done(trace_result);
+	return trace_result;
+#else
 	int touch_http;
 	int car_event_read;
 	TaskHandle_t current = xTaskGetCurrentTaskHandle();
@@ -2830,6 +2845,7 @@ int32_t __wrap_HTTPMessageReadMessage(
 	}
 
 	result = __real_HTTPMessageReadMessage(message, read_f, read_context);
+	car_ack_timestamp_http_done(result);
 	if (touch_http) {
 		taskENTER_CRITICAL();
 #if CONFIG_IPHONE_HTTP_RX_PROFILE
@@ -2928,6 +2944,7 @@ int32_t __wrap_HTTPMessageReadMessage(
 		taskEXIT_CRITICAL();
 	}
 	return result;
+#endif
 }
 
 static unsigned long touch_path_stage_avg(const touch_path_stage_t *stage)

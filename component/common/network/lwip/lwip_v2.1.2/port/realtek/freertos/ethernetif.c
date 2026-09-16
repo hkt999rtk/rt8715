@@ -81,6 +81,7 @@
 #if defined(CONFIG_USBH_CDC_NCM)
 #include "usb_hcd_profiler.h"
 #include "ncm/ncm_tx_batch.h"
+#include "car_ack_timestamp.h"
 #endif
 #endif
 
@@ -1199,6 +1200,9 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 
 struct ncm_tx_async_item {
 	struct pbuf *p;
+#if CONFIG_CAR_ACK_TIMESTAMP
+	u32_t ack_trace;
+#endif
 	u32_t enqueue_us;
 	u32_t timer_generation;
 	u32_t timer_irq_us;
@@ -1225,6 +1229,9 @@ struct ncm_tx_pipeline_slot {
 	size_t len;
 	u16_t frames;
 	u8_t priority;
+#if CONFIG_CAR_ACK_TIMESTAMP
+	u32_t ack_trace;
+#endif
 };
 struct ncm_tx_pipeline_stats {
 	u32_t built_ntbs;
@@ -1606,7 +1613,14 @@ static void ncm_tx_usb_worker(void *arg)
 				g_ncm_tx_pipeline_stats.handoff_us_max = handoff_us;
 		}
 		g_ncm_tx_usb_busy = 1U;
+#if CONFIG_CAR_ACK_TIMESTAMP
+		car_ack_timestamp_usb_begin(slot->ack_trace, slot->buffer);
+#endif
 		status = carbox_ncm_tx_send_prebuilt(slot->buffer, slot->len);
+#if CONFIG_CAR_ACK_TIMESTAMP
+		car_ack_timestamp_usb_end(slot->ack_trace, status);
+		slot->ack_trace = 0U;
+#endif
 		g_ncm_tx_usb_busy = 0U;
 		end_us = hal_read_curtime_us();
 		elapsed_us = end_us - start_us;
@@ -1864,6 +1878,9 @@ static void ncm_tx_async_worker(void *arg)
 						slot->len = ntb_len;
 						slot->frames = sent_frames;
 						slot->priority = priority_slot;
+#if CONFIG_CAR_ACK_TIMESTAMP
+						slot->ack_trace = items[send_index].ack_trace;
+#endif
 						g_ncm_tx_pipeline_stats.built_ntbs++;
 						g_ncm_tx_pipeline_stats.built_frames += sent_frames;
 						g_ncm_tx_pipeline_stats.built_bytes += (u32_t)ntb_len;
@@ -2071,6 +2088,15 @@ static int ncm_tx_async_enqueue(struct pbuf *p)
 		return 0;
 	}
 	item.p = p;
+#if CONFIG_CAR_ACK_TIMESTAMP
+	item.ack_trace = car_ack_timestamp_ncm(p);
+	if (item.ack_trace != 0U)
+		car_ack_timestamp_queue(item.ack_trace,
+			uxQueueMessagesWaiting(g_ncm_tx_async_queue),
+			uxQueueMessagesWaiting(g_ncm_tx_ready_queue),
+			uxQueueMessagesWaiting(g_ncm_tx_free_queue),
+			g_ncm_tx_usb_busy);
+#endif
 	item.enqueue_us = hal_read_curtime_us();
 	item.timer_generation = 0U;
 	item.timer_event = 0U;
@@ -2097,6 +2123,9 @@ static int ncm_tx_async_enqueue(struct pbuf *p)
 	 * extra reference and releases that reference after TX completion. */
 	pbuf_ref(p);
 	if (xQueueSend(g_ncm_tx_async_queue, &item, 0) != pdPASS) {
+#if CONFIG_CAR_ACK_TIMESTAMP
+		car_ack_timestamp_usb_end(item.ack_trace, ERR_BUF);
+#endif
 		pbuf_free(p);
 #if CONFIG_NCM_TX_ASYNC_PROFILE
 		taskENTER_CRITICAL();
@@ -2309,6 +2338,9 @@ void ethernetif_mii_recv(u8 *buf, u32 frame_len)
 		frame_data += q->len;
 	}
 
+#if CONFIG_CAR_ACK_TIMESTAMP
+	car_ack_timestamp_rx(p);
+#endif
 	if (ERR_OK != netif->input(p, netif)) {
 		pbuf_free(p);
 	}

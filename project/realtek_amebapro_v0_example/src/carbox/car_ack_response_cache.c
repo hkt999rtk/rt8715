@@ -1,4 +1,5 @@
 #include "car_ack_response_cache.h"
+#include "car_ack_timestamp.h"
 
 #ifndef CONFIG_CAR_ACK_RESPONSE_CACHE
 #define CONFIG_CAR_ACK_RESPONSE_CACHE 0
@@ -261,6 +262,7 @@ void carbox_airplay_event_send_fast_response(const void *body,
 	time_t now;
 	uint32_t start_us;
 	int32_t result;
+	uint32_t trace_id = car_ack_timestamp_begin();
 
 	(void)body;
 	(void)body_length;
@@ -277,6 +279,7 @@ void carbox_airplay_event_send_fast_response(const void *body,
 	if ((slot == NULL) || (slot->length >= CAR_ACK_HEADER_CAPACITY)) {
 		car_ack_stats.create_errors++;
 		AirPlayEvent_SendResponse(body, body_length);
+		car_ack_timestamp_end(trace_id, -2); /* fallback has no return status */
 		return;
 	}
 
@@ -287,6 +290,7 @@ void carbox_airplay_event_send_fast_response(const void *body,
 		if ((result != 0) || (message == NULL)) {
 			car_ack_stats.create_errors++;
 			AirPlayEvent_SendResponse(body, body_length);
+			car_ack_timestamp_end(trace_id, -2);
 			return;
 		}
 		car_ack_apply_header(message, slot);
@@ -306,6 +310,7 @@ void carbox_airplay_event_send_fast_response(const void *body,
 	}
 
 	result = AirPlayEvent_SendMessage(message);
+	car_ack_timestamp_end(trace_id, result);
 	if (result != 0) {
 		car_ack_stats.send_errors++;
 	} else {

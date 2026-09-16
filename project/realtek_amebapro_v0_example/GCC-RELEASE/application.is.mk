@@ -770,6 +770,7 @@ SRC_C += ../src/carbox/pc_profiler.c
 SRC_C += ../src/carbox/lpddr_margin_test.c
 SRC_C += ../src/carbox/touch_path_profiler.c
 SRC_C += ../src/carbox/car_ack_response_cache.c
+SRC_C += ../src/carbox/car_ack_timestamp.c
 SRC_C += ../src/carbox/iap2_device_time_sync.c
 SRC_C += ../src/carbox/iap2_cond_timedwait_fix.c
 SRC_C += ../src/carbox/touch_frame_profiler.c
@@ -956,13 +957,13 @@ NCM_TX_BATCH_MAX ?= 1
 NCM_TX_BATCH_MIN ?= 1
 NCM_TX_BATCH_TIMEOUT_LOWER_US ?= 100
 NCM_TX_BATCH_TIMEOUT_UPPER_US ?= 1000
-# Keep one 16-KiB NTB in USB, one ready, and a third available to the builder
+# Keep one 12-KiB NTB buffer in USB, one ready, and a third available to the builder
 # while the customer HAL synchronously waits for bulk OUT completion.
 # Queue arrival drives assembly.  The adaptive one-shot timer is used only
 # while USB already owns work; it never delays the first NTB after an idle gap.
-# Default single-immediate mode keeps the async owner but bypasses the
-# prebuilt-NTB pipeline and its coalescing timer entirely.
-NCM_TX_PIPELINE ?= 0
+# Default single-packet pipeline overlaps NTB preparation with USB transmission.
+# BATCH_MAX=1 and BATCH_MIN=1 keep one frame per NTB without coalescing waits.
+NCM_TX_PIPELINE ?= 1
 # Put NCM NTBs carrying vehicle-event RTSP responses on a separate FIFO. The
 # USB owner finishes its current transfer, then services this FIFO before the
 # normal NCM ready queue. Flow identification is independent of diagnostics.
@@ -1073,9 +1074,13 @@ GCD_WORK_PRIORITY ?= 4
 # The closed USB HCD bottom half is short and must run immediately after the
 # top-half ISR masks USB_IRQn.  Keep it above all normal networking tasks.
 USBH_ISR_TASK_PRIORITY ?= 11
-# Preserve the closed HCD main worker's established priority while testing
-# channel-4-first interrupt service as a single isolated behavior change.
-USBH_MAIN_TASK_PRIORITY ?= 6
+# Run the HCD main worker at networking priority to reduce USB submission
+# latency while keeping it below the USB ISR task and TCPClient.
+USBH_MAIN_TASK_PRIORITY ?= 10
+# Per-response clock_gettime timestamps through NCM and USB HAL submission.
+# Bounded trace buffers and a priority-2 reporter keep printing off the path.
+# Also enables the customer HID handler's synchronous hid/end timing prints.
+CAR_ACK_TIMESTAMP ?= 0
 # The CarPlay control/event socket is latency-sensitive and performs only the
 # short vehicle-event read/HTTP-200/queue handoff path.  Run it at the highest
 # FreeRTOS task priority so an incoming event can be acknowledged immediately.
@@ -1460,6 +1465,17 @@ $(CAR_ACK_TCP_PROFILE_STAMP):
 	@rm -f $(OBJ_DIR)/.car_ack_tcp_profile_*
 	@touch $@
 
+CAR_ACK_TIMESTAMP_STAMP := $(OBJ_DIR)/.car_ack_timestamp_v2_$(CAR_ACK_TIMESTAMP)
+$(CAR_ACK_TIMESTAMP_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.car_ack_timestamp_*
+	@touch $@
+../src/carbox/car_ack_timestamp.o \
+	../src/carbox/touch_path_profiler.o \
+	../src/carbox/car_ack_response_cache.o \
+	../../../component/common/network/lwip/lwip_v2.1.2/port/realtek/freertos/ethernetif.o: \
+	$(CAR_ACK_TIMESTAMP_STAMP)
+
 ../../../component/common/network/lwip/lwip_v2.1.2/src/api/sockets.o \
 	../../../component/common/network/lwip/lwip_v2.1.2/src/api/api_msg.o \
 	../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp.o \
@@ -1687,6 +1703,7 @@ GCCFLAGS += -DCONFIG_GCD_SYNC_PROFILE=$(GCD_SYNC_PROFILE)
 GCCFLAGS += -DCONFIG_GCD_WORK_PRIORITY=$(GCD_WORK_PRIORITY)
 GCCFLAGS += -DCONFIG_USBH_ISR_TASK_PRIORITY=$(USBH_ISR_TASK_PRIORITY)
 GCCFLAGS += -DCONFIG_USBH_MAIN_TASK_PRIORITY=$(USBH_MAIN_TASK_PRIORITY)
+GCCFLAGS += -DCONFIG_CAR_ACK_TIMESTAMP=$(CAR_ACK_TIMESTAMP)
 GCCFLAGS += -DCONFIG_TCP_CLIENT_PRIORITY=$(TCP_CLIENT_PRIORITY)
 GCCFLAGS += -DCONFIG_SCREEN_QUEUE_PROFILE=$(SCREEN_QUEUE_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_FPS_PROFILE=$(SCREEN_FPS_PROFILE)
@@ -1867,6 +1884,23 @@ LFLAGS += -Wl,--wrap=lib_carplay_hid_report
 endif
 ifneq ($(strip $(filter-out -1,$(GCD_WORK_PRIORITY) $(USBH_ISR_TASK_PRIORITY) $(USBH_MAIN_TASK_PRIORITY) $(TCP_CLIENT_PRIORITY))),)
 LFLAGS += -Wl,--wrap=xTaskCreate
+endif
+ifeq ($(CAR_ACK_TIMESTAMP),1)
+ifneq ($(CAR_ACK_RESPONSE_CACHE),1)
+$(error CAR_ACK_TIMESTAMP requires CAR_ACK_RESPONSE_CACHE=1)
+endif
+ifneq ($(NCM_TX_ASYNC)$(NCM_TX_PIPELINE)$(NCM_TX_BATCH_MAX),111)
+$(error CAR_ACK_TIMESTAMP requires NCM_TX_ASYNC=1 NCM_TX_PIPELINE=1 NCM_TX_BATCH_MAX=1)
+endif
+ifeq ($(USB_CH4_QUEUE_FRONT),1)
+$(error CAR_ACK_TIMESTAMP requires USB_CH4_QUEUE_FRONT=0 for FIFO event tracking)
+endif
+LFLAGS += -Wl,--wrap=tcp_write -Wl,--wrap=usbh_hal_hc_start_transfer
+LFLAGS += -Wl,--wrap=HTTPMessageReadMessage -Wl,--wrap=AirPlayResponse_GetInfoHIDReportCommand
+LFLAGS += -Wl,--wrap=usb_os_queue_send -Wl,--wrap=usb_os_queue_receive
+LFLAGS += -Wl,--wrap=usbh_get_urb_state -Wl,--wrap=usbh_get_elapsed_ticks
+LFLAGS += -Wl,--wrap=usbh_check_nak_timeout -Wl,--wrap=usbh_trigger_rexfer
+LFLAGS += -Wl,--wrap=usbh_enable_nak_interrupt
 endif
 ifeq ($(SCREEN_QUEUE_PROFILE),1)
 LFLAGS += -Wl,--wrap=AirPlayScreen_SendVideo
@@ -2176,7 +2210,7 @@ CARBOX_SCREEN_WAIT_RELOC_PATCH := ../src/carbox/tools/patch_screen_wait_relocati
 CARBOX_REDUNDANT_COPY_PATCH := ../src/carbox/tools/patch_airplay_redundant_copy.py
 CARBOX_EVENT_RESPONSE_PATCH := ../src/carbox/tools/patch_airplay_event_response.py
 CARBOX_EVENT_READAHEAD_PATCH := ../src/carbox/tools/patch_airplay_event_readahead.py
-CARBOX_ACCESSORY_PATCH_STAMP := $(OBJ_DIR)/.accessory_patch_v6-zc$(VIDEO_HANDOVER_ZERO_COPY)-direct$(SCREEN_TX_DIRECT_CRYPTO)-wait$(SCREEN_QUEUE_EVENT_WAIT)-ackcache$(CAR_ACK_RESPONSE_CACHE)-readahead$(CAR_EVENT_READAHEAD_FIX)-iap2wait$(IAP2_COND_TIMEDWAIT_FIX)
+CARBOX_ACCESSORY_PATCH_STAMP := $(OBJ_DIR)/.accessory_patch_v7-zc$(VIDEO_HANDOVER_ZERO_COPY)-direct$(SCREEN_TX_DIRECT_CRYPTO)-wait$(SCREEN_QUEUE_EVENT_WAIT)-ackcache$(CAR_ACK_RESPONSE_CACHE)-readahead$(CAR_EVENT_READAHEAD_FIX)-iap2wait$(IAP2_COND_TIMEDWAIT_FIX)-ackts$(CAR_ACK_TIMESTAMP)
 $(CARBOX_ACCESSORY_PATCH_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.accessory_patch_*
@@ -2285,7 +2319,7 @@ $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
 		$(if $(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO)),accessory,accessory-wait) \
 		$(AR) $(OBJCOPY) $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) $@ \
 		"AirPlayScreen.o $(if $(filter 1,$(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX)),AirPlayEvent.o) $(if $(filter 1,$(IAP2_COND_TIMEDWAIT_FIX)),iAP2Ctrl.o)" \
-		$(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX)
+		$(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX) $(CAR_ACK_TIMESTAMP)
 application: $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
 endif
 ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
@@ -2296,7 +2330,7 @@ $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
 	sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
 		$(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) $@ \
 		"AirPlayScreen.o $(if $(filter 1,$(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX)),AirPlayEvent.o) $(if $(filter 1,$(IAP2_COND_TIMEDWAIT_FIX)),iAP2Ctrl.o)" \
-		$(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX)
+		$(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX) $(CAR_ACK_TIMESTAMP)
 application: $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE)
 endif
 ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW)),)

@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 10 ]; then
-	echo "usage: $0 MODE AR OBJCOPY INPUT OUTPUT MEMBERS SCREEN_WAIT ACK_CACHE EVENT_READAHEAD_FIX IAP2_WAIT_FIX" >&2
+if [ "$#" -ne 10 ] && [ "$#" -ne 11 ]; then
+	echo "usage: $0 MODE AR OBJCOPY INPUT OUTPUT MEMBERS SCREEN_WAIT ACK_CACHE EVENT_READAHEAD_FIX IAP2_WAIT_FIX [ACK_TIMING_PRINTS]" >&2
 	exit 2
 fi
 
@@ -16,6 +16,7 @@ screen_wait=$7
 ack_cache=$8
 event_readahead_fix=$9
 iap2_wait_fix=${10}
+ack_timing_prints=${11:-0}
 script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 screen_wait_patcher=$script_directory/../../src/carbox/tools/patch_screen_wait_relocation.py
 redundant_copy_patcher=$script_directory/../../src/carbox/tools/patch_airplay_redundant_copy.py
@@ -134,7 +135,7 @@ cp "$input_archive" "$output_archive"
 				carbox_airplay_event_send_fast_response=0,global \
 				"patched.o" "patched-with-ack-cache.o"
 			mv "patched-with-ack-cache.o" "patched.o"
-			python3 "$event_response_patcher" "patched.o"
+			python3 "$event_response_patcher" "patched.o" "$ack_timing_prints"
 		fi
 		if [ "$event_readahead_fix" = 1 ] && [ "$member" = AirPlayEvent.o ]; then
 			# HTTPMessageReset intentionally preserves read-ahead bytes.  Retry

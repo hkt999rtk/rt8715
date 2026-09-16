@@ -604,23 +604,18 @@ netconn_recv_data(struct netconn *conn, void **new_buf, u8_t apiflags)
   if (netconn_is_nonblocking(conn) || (apiflags & NETCONN_DONTBLOCK) ||
       (conn->flags & NETCONN_FLAG_MBOXCLOSED) || (conn->pending_err != ERR_OK)) {
     err_t err;
-    /* tryfetch first, then short timed retry to close recv-vs-arrival race */
+    /* Never wait in a nonblocking receive, including a follow-up read after
+       sockets.c has already collected data to return to the application. */
     if (sys_arch_mbox_tryfetch(&conn->recvmbox, &buf) == SYS_ARCH_TIMEOUT) {
-#if LWIP_SO_RCVTIMEO
-      /* retry once with 10ms timeout to catch just-arrived data */
-      if (sys_arch_mbox_fetch(&conn->recvmbox, &buf, 10) == SYS_ARCH_TIMEOUT)
-#endif
-      {
-        NETCONN_MBOX_WAITING_DEC(conn);
-        err = netconn_err(conn);
-        if (err != ERR_OK) {
-          return err;
-        }
-        if (conn->flags & NETCONN_FLAG_MBOXCLOSED) {
-          return ERR_CONN;
-        }
-        return ERR_WOULDBLOCK;
+      NETCONN_MBOX_WAITING_DEC(conn);
+      err = netconn_err(conn);
+      if (err != ERR_OK) {
+        return err;
       }
+      if (conn->flags & NETCONN_FLAG_MBOXCLOSED) {
+        return ERR_CONN;
+      }
+      return ERR_WOULDBLOCK;
     }
   } else {
 #if LWIP_SO_RCVTIMEO
