@@ -6,7 +6,9 @@ for its interface, read-only command sequence, and additional test coverage.
 `../../nor_uuid.h` exposes `carbox_nor_read_uuid(buffer, capacity)`. It returns
 12 bytes in increasing UID address order, or a negative error code defined in
 the header. This is a 96-bit factory UID, not an RFC 128-bit UUID. There is no
-automatic boot call, logging, allocation, flash programming or OTP modification.
+automatic boot call, allocation, flash programming or OTP modification.
+UUID error diagnostics are currently enabled for customer bring-up; successful
+calls are silent. OTP logging is unchanged.
 
 Example, from a normal task after flash initialization:
 
@@ -57,6 +59,38 @@ the SDK register bitfield types. They check byte sequences, lengths, channels,
 output bounds, unchanged output on errors, register restoration, QPI restoration,
 invalid arguments/chips/modes, bad response data and per-transaction timeouts.
 They do NOT emulate physical SPIC FIFO/address decoding, clocks, or flash timing.
+
+## Customer timeout diagnostics
+
+`CARBOX_NOR_UUID_DIAG` defaults to 1 in `nor_uuid.h` for this investigation.
+Compile with `-DCARBOX_NOR_UUID_DIAG=0` (or change the header default and rebuild)
+to remove capture/logging. The same host test command above also accepts that
+define and verifies the silent configuration.
+
+On an error, collect every `[nor-uuid]` line. The summary contains the return
+code, cached JEDEC ID, original SDK mode/command channel, transaction count and
+timeout count. No UID/OTP bytes are printed. Each timeout records:
+
+- `seq`: transaction number; normally 1=FF, 2=9F, 3=SFDP signature,
+  4=first UID read, 5=second UID read. QPI restore/38 is the next transaction
+  after success or failure, so its number depends on where a failure occurred.
+- `phase`: `pre-busy` (before any command; seq/op=0), `rx-wait` (FIFO empty),
+  or `complete-wait` (enable/busy did not clear).
+- `op`, `addr`, `rx=received/expected`, `SR`, `SSIENR`, `TXFLR`, `RXFLR`.
+- `CTRLR0/1/2`, `ADDR_LENGTH`, `BAUDR`, `FBAUDR`, `AUTO_LENGTH`, `VALID_CMD`.
+
+The polling limit is an iteration count, NOT microseconds. Snapshot registers
+are read before disable/flush, without reading the data FIFO or clear-on-read
+interrupt registers. Up to two snapshots preserve both the original timeout
+and a subsequent QPI-restore timeout. Snapshots are per-call RAM data, not a
+shared global. Printing happens only after restoring controller registers and
+releasing the flash lock (argument errors print before taking the lock).
+Restoration after a hardware timeout remains best-effort; these logs cannot
+guarantee reporting if the flash can no longer support XIP.
+
+Host tests check initial-busy, FIFO wait, completed RX with stuck enable,
+partial UID RX, dual failure during QPI recovery, snapshot-before-clear, and
+logging-after-unlock/register-restoration, in addition to existing UID/OTP tests.
 
 ## Board validation still required
 

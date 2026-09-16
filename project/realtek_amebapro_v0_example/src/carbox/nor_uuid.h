@@ -15,10 +15,17 @@ extern "C" {
 #define CARBOX_NOR_UUID_INVALID_DATA     (-4)
 #define CARBOX_NOR_UUID_NOT_READY        (-5)
 
+/* Temporary customer bring-up diagnostics: errors only, never UID contents.
+ * Set to 0 at compile time to remove capture and logging. */
+#ifndef CARBOX_NOR_UUID_DIAG
+#define CARBOX_NOR_UUID_DIAG 1
+#endif
+
 /* EN25S64A factory UID, in wire/address order (not a 128-bit RFC UUID).
  * Call from a normal task AFTER flash/system initialization, with a writable
  * RAM buffer of at least 12 bytes. Returns 12 on success, a negative code above
- * otherwise; the output buffer is unchanged on failure. No allocation or log.
+ * otherwise; the output buffer is unchanged on failure. No allocation.
+ * With CARBOX_NOR_UUID_DIAG, errors are logged after restoring/unlocking flash.
  * Uses the SDK flash resource lock; do not call with that lock already held.
  * Only supported STR SPI/dual/quad/QPI configurations are accepted.
  * Code must be linked into SRAM: flash is temporarily unavailable for XIP.

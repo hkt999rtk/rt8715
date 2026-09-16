@@ -3,7 +3,14 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
+#include <string>
+#include <cstdarg>
 #include "hal_spic.h"
+#include "../../nor_uuid.h"
+#if CARBOX_NOR_UUID_DIAG
+static int test_log(const char *, ...);
+#endif
+#define NOR_UUID_LOG test_log
 #include "../../nor_uuid.c"
 
 static SPIC_Type device;
@@ -17,6 +24,26 @@ static bool in_otp;
 static uint8_t status_register;
 static int otp_fill, fail_read_byte;
 static unsigned otp_reads, otp_exits, otp_enters;
+static std::string logs;
+static int complete_timeout_at;
+static bool restore_timeout;
+
+#if CARBOX_NOR_UUID_DIAG
+static int test_log(const char *format, ...) {
+    assert(lock_depth == 0); // Never call logging while flash is locked.
+    assert(device.ctrlr0 == 0x00400300 && device.ctrlr1 == 17);
+    assert(device.ctrlr2 == 9 && device.addr_length == 3);
+    assert(device.valid_cmd == 0x1234 && device.ssienr == 0);
+    char line[1024];
+    va_list args;
+    va_start(args, format);
+    int size = vsnprintf(line, sizeof(line), format, args);
+    va_end(args);
+    assert(size >= 0 && (unsigned)size < sizeof(line));
+    logs += line;
+    return size;
+}
+#endif
 
 void flash_resource_lock() { assert(lock_depth++ == 0); }
 void flash_resource_unlock() { assert(--lock_depth == 0); }
@@ -25,12 +52,14 @@ MockFifo::operator uint8_t() {
     assert(read_pos < rx.size());
     uint8_t value = rx[read_pos++];
     device.sr_b.rfne = read_pos < rx.size() &&
-        !((int)read_pos == fail_read_byte && !tx.empty() && tx[0] == 0x03);
+        !((int)read_pos == fail_read_byte && !tx.empty() &&
+          (tx[0] == 0x03 || (tx[0] == 0x5a && tx[3] == 0x80)));
     return value;
 }
 void spic_disable_rtl8195bhp(SPIC_Type *dev) {
     dev->ssienr = 0;
     dev->sr = 0;
+    dev->txflr = dev->rxflr = 0;
     tx.clear();
 }
 void spic_enable_rtl8195bhp(SPIC_Type *dev) {
@@ -91,9 +120,13 @@ void spic_enable_rtl8195bhp(SPIC_Type *dev) {
     }
     if ((int)transactions == bad_at && !rx.empty())
         rx[0] ^= 0x80;
-    dev->ssienr = ((int)transactions == timeout_at);
+    bool timeout = (int)transactions == timeout_at ||
+                   (restore_timeout && tx[0] == 0x38);
+    dev->ssienr = timeout || (int)transactions == complete_timeout_at;
     dev->sr = 0;
-    dev->sr_b.rfne = !rx.empty() && (int)transactions != timeout_at;
+    dev->sr_b.rfne = !rx.empty() && !timeout;
+    dev->txflr = timeout ? (unsigned)tx.size() : 0;
+    dev->rxflr = timeout ? 0 : (unsigned)rx.size();
 }
 
 static void setup(bool qpi) {
@@ -117,6 +150,9 @@ static void setup(bool qpi) {
     status_register = 0;
     otp_fill = fail_read_byte = -1;
     otp_reads = otp_enters = otp_exits = 0;
+    complete_timeout_at = -1;
+    restore_timeout = false;
+    logs.clear();
 }
 
 static void run_otp(uint32_t offset, size_t length, int expected) {
@@ -154,14 +190,47 @@ static void run(int expected) {
 int main() {
     for (bool qpi : {false, true}) {
         setup(qpi); run(12);
+        assert(logs.empty());
         assert(transactions == (qpi ? 6U : 5U));
         for (int step = 1; step <= (qpi ? 6 : 5); ++step) {
             setup(qpi); timeout_at = step; run(CARBOX_NOR_UUID_TIMEOUT);
+#if CARBOX_NOR_UUID_DIAG
+            assert(logs.find("ret=-3") != std::string::npos);
+            assert(logs.find("id=1c3817") != std::string::npos);
+            assert(logs.find("timeouts=1") != std::string::npos);
+            assert(logs.find("SSIENR=00000001") != std::string::npos);
+            assert(logs.find("BAUDR=00000003") != std::string::npos);
+            if (step == 1 || step == 2 || step == 6)
+                assert(logs.find("TXFLR=1 RXFLR=0") != std::string::npos);
+            assert(logs.find("phase=" + std::string(step == 1 || step == 6 ?
+                "complete-wait" : "rx-wait")) != std::string::npos);
+#else
+            assert(logs.empty());
+#endif
         }
         for (int step = 2; step <= 5; ++step) {
             setup(qpi); bad_at = step; run(CARBOX_NOR_UUID_INVALID_DATA);
         }
     }
+    setup(false); device.sr_b.busy = 1; run(CARBOX_NOR_UUID_TIMEOUT);
+#if CARBOX_NOR_UUID_DIAG
+    assert(logs.find("seq=0 phase=pre-busy") != std::string::npos);
+#endif
+    setup(false); complete_timeout_at = 2; run(CARBOX_NOR_UUID_TIMEOUT);
+#if CARBOX_NOR_UUID_DIAG
+    assert(logs.find("seq=2 phase=complete-wait op=9f") != std::string::npos);
+    assert(logs.find("rx=3/3") != std::string::npos);
+#endif
+    setup(false); fail_read_byte = 7; run(CARBOX_NOR_UUID_TIMEOUT);
+#if CARBOX_NOR_UUID_DIAG
+    assert(logs.find("seq=4 phase=rx-wait op=5a addr=000080 rx=7/12") != std::string::npos);
+#endif
+    setup(true); timeout_at = 2; restore_timeout = true; run(CARBOX_NOR_UUID_TIMEOUT);
+#if CARBOX_NOR_UUID_DIAG
+    assert(logs.find("timeouts=2") != std::string::npos);
+    assert(logs.find("seq=2 phase=rx-wait op=9f") != std::string::npos);
+    assert(logs.find("seq=3 phase=complete-wait op=38") != std::string::npos);
+#endif
     setup(false);
     assert(carbox_nor_read_uuid(nullptr, 12) == CARBOX_NOR_UUID_INVALID_ARGUMENT);
     uint8_t short_buffer[11];

@@ -21,6 +21,7 @@ struct SPIC_Type {
     union { uint32_t baudr; decltype(spic_baudr_t::b) baudr_b; };
     union { uint32_t valid_cmd; decltype(spic_valid_cmd_t::b) valid_cmd_b; };
     uint32_t flush_fifo;
+    uint32_t txflr, rxflr, fbaudr, auto_length;
     MockFifo dr_byte;
 };
 enum { SingleChnl = 0, QuadChnl = 2, TxMode = 0, RxMode = 3,
