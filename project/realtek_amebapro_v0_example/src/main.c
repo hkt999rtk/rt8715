@@ -17,6 +17,7 @@
 #include "carbox/screen_tx_direct_crypto.h"
 #include "carbox/spic_overclock.h"
 #include "carbox/system_overclock.h"
+#include "carbox/fault_dump.h"
 #if defined(CONFIG_MEMCHECK)
 #include "carbox/memcheck.h"
 #include "shell.h"
@@ -490,6 +491,8 @@ void main(void)
 #endif
         console_init();
     hal_uart_set_baudrate(&log_uart, CARBOX_LOGUART_BAUD);
+    rt_printf("[FAULT] dump install status=%d (0=enabled)\r\n",
+              carbox_fault_dump_init());
     rt_printf("main build_version %s\r\n",BOX_APP_VERSION);
 	rt_printf("[CLOCK] overclock status=%d requested=%lu Hz\r\n",
 		  clock_status, (unsigned long)CONFIG_SYS_PLL_TARGET_HZ);

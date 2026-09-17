@@ -826,6 +826,9 @@ SRAM_C += ../../../component/common/file_system/fatfs/disk_if/src/flash_fatfs.c
 SRAM_C += ../src/carbox/vfs_compat/carbox_littlefs.c
 SRAM_C += ../../../component/soc/realtek/8195b/fwlib/hal-rtl8195b-hp/source/ram_s/hal_flash.c
 SRAM_C += ../src/carbox/system_overclock.c
+SRAM_C += ../src/carbox/fault_dump.c
+# The fatal handler must not trigger lazy FP stacking on a damaged stack.
+../src/carbox/fault_dump.o: CFLAGS += -mfloat-abi=soft
 SRAM_C += ../src/carbox/spic_overclock.c
 SRAM_C += ../src/carbox/nor_uuid.c
 SRC_C += ../src/carbox/led_rgb_hp.c
@@ -2522,9 +2525,9 @@ ifeq ($(CARBOX_BUILD_RTK264),1)
 application: carbox_rtk264
 endif
 # build_info is phony and refreshes BOX_APP_VERSION on every build.  Keep the
-# object embedding that value ordered behind it so versions.json and the
+# objects embedding that value ordered behind it so versions.json and the
 # running firmware cannot get different version names during parallel builds.
-../src/main.o: build_info
+../src/main.o ../src/carbox/fault_dump.o: build_info
 application: prerequirement $(SRC_O) $(ERAM_O) $(SRAM_O) $(CINIT_O) $(ASM_O) $(ITCM_O) $(CPP_O)
 # Fixup: when ram_lp runs first and creates .o in source tree, make skips
 # our compile step but then cp to OBJ_DIR never happens.  Copy any
