@@ -1078,17 +1078,16 @@ GCD_WORK_PRIORITY ?= 4
 # top-half ISR masks USB_IRQn.  Keep it above all normal networking tasks.
 USBH_ISR_TASK_PRIORITY ?= 11
 # Run the HCD main worker at networking priority to reduce USB submission
-# latency while keeping it below the USB ISR task and TCPClient.
+# latency while keeping it below the USB ISR task.
 USBH_MAIN_TASK_PRIORITY ?= 10
 # Per-response clock_gettime timestamps through NCM and USB HAL submission.
 # Bounded trace buffers and a priority-2 reporter keep printing off the path.
 # Also enables the customer HID handler's synchronous hid/end timing prints.
 CAR_ACK_TIMESTAMP ?= 0
-# The CarPlay control/event socket is latency-sensitive and performs only the
-# short vehicle-event read/HTTP-200/queue handoff path.  Run it at the highest
-# FreeRTOS task priority so an incoming event can be acknowledged immediately.
-# Set to -1 to preserve the priority requested by the closed CarPlay library.
-TCP_CLIENT_PRIORITY ?= 11
+# Preserve the priority requested by the closed CarPlay library. The fixed
+# 10 ms response delay was caused by the lwIP nonblocking receive retry.
+# A nonnegative value explicitly overrides the library's requested priority.
+TCP_CLIENT_PRIORITY ?= -1
 # Overnight UI-freeze diagnosis: trace the CarPlay screen RX, handover queue,
 # and TX stages in the existing 10-second profiler report.
 SCREEN_QUEUE_PROFILE ?= 0
