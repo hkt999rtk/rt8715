@@ -1418,7 +1418,7 @@ static void chacha_announce_mode(void) {
 #elif CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
     printf(
       "[CHACHA] mode=HARDWARE_ONLY "
-      "(in-place hardware; runtime HW failure is reported, not retried)\n"
+      "(generic HW errors propagate; registered RX retries in SW)\n"
     );
 #elif CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_SPLIT_RX_SW_TX_HW
     printf(
@@ -2501,21 +2501,26 @@ static CHACHA_UNUSED int chacha_hardware_screen_rx_xor_locked(
 #if CONFIG_SCREEN_RX_CHACHA_SINGLE_PASS && \
     CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
   size_t poly_len;
-  if (ciphertext == plaintext && len != 0u && len <= 65536u &&
+  if (len != 0u && len <= 65536u &&
       (len & 15u) != 0u &&
       chacha_poly_input_size(aad_len, len, &poly_len) == CHACHA_RTL_OK &&
-      carbox_screen_rx_poly_input(ciphertext, len, aad_len, poly_len) != NULL) {
+      carbox_screen_rx_poly_input(ciphertext, len, aad_len, poly_len) != NULL &&
+      (ciphertext == plaintext ||
+       carbox_screen_rx_poly_input(plaintext, len, aad_len, poly_len) != NULL)) {
     size_t padded_len = (len + 15u) & ~(size_t)15u;
     uint8_t saved_wire_tag[16];
     int status;
-    chacha_copy_bytes(saved_wire_tag, plaintext + len, sizeof(saved_wire_tag));
-    memset(plaintext + len, 0, padded_len - len);
+    if (ciphertext == plaintext) {
+      chacha_copy_bytes(saved_wire_tag, plaintext + len, sizeof(saved_wire_tag));
+      memset(plaintext + len, 0, padded_len - len);
+    }
     CHACHA_RUNTIME_ADD(g_chacha_rx_single_pass_operations, 1u);
     status = chacha_rtl8195b_chacha_xor_locked(
       key, nonce, 1u, ciphertext, padded_len, plaintext);
     /* A HAL failure may already have overwritten the tail. Always restore
      * the complete original tag, then propagate the error without retry. */
-    chacha_copy_bytes(plaintext + len, saved_wire_tag, sizeof(saved_wire_tag));
+    if (ciphertext == plaintext)
+      chacha_copy_bytes(plaintext + len, saved_wire_tag, sizeof(saved_wire_tag));
     return status;
   }
 #else
@@ -2992,10 +2997,128 @@ size_t chacha20_poly1305_final(
   return written;
 }
 
+/* Explicitly registered single-update RX records. Retain the untouched SW
+ * accumulator (including AAD) until the hardware result is known. */
+#define CHACHA_RX_DIRECT_BASE 16u
+static uint32_t g_chacha_rx_record;
+__attribute__((weak)) void carbox_chacha_rx_result(
+  const void *state, void *output, unsigned id, unsigned kind,
+  int retried, int32_t error
+) {
+  (void)state; (void)output; (void)id; (void)kind; (void)retried; (void)error;
+}
+int chacha20_poly1305_is_direct_rx(const void *opaque) {
+  const chacha20_poly1305_state *s = opaque;
+  return s->rtl_direction >= CHACHA_RX_DIRECT_BASE &&
+         s->rtl_direction < CHACHA_RX_DIRECT_BASE + 6u;
+}
+
+size_t chacha20_poly1305_decrypt_rx(
+  chacha20_poly1305_state *s, const void *src, size_t len, void *dst,
+  unsigned kind, int allow_hardware
+) {
+  uintptr_t a = (uintptr_t)src, b = (uintptr_t)dst;
+  int separate = a < b ? len <= b - a : b < a && len <= a - b;
+  /* Adapters are audited to call exactly once, before any payload processing. */
+  if (s->rtl_direction != CHACHA_RTL_DIRECTION_NONE || kind > 2u)
+    abort();
+  s->rtl_direction = CHACHA_RX_DIRECT_BASE + 2u * kind +
+                     (allow_hardware && separate ? 1u : 0u);
+  s->rtl_input_snapshot_len = __sync_add_and_fetch(&g_chacha_rx_record, 1u);
+  s->rtl_input_base = src;
+  s->rtl_input_next = (const uint8_t *)src + len;
+  s->rtl_output_base = dst;
+  s->rtl_output_next = (uint8_t *)dst + len;
+  return len;
+}
+
+static size_t chacha_rx_verify(
+  chacha20_poly1305_state *s, void *dst, const uint8_t tag[16], int32_t *error
+) {
+  uint8_t key[32], nonce[8], calculated[16], saved_tag[16];
+  uint8_t *aad_snapshot = s->rtl_aad;
+  const uint8_t *src = s->rtl_input_base;
+  uint8_t *out = s->rtl_output_base;
+  size_t len = (size_t)(s->rtl_input_next - src);
+  unsigned kind = (s->rtl_direction - CHACHA_RX_DIRECT_BASE) / 2u;
+  int status = CHACHA_RTL_SKIP_LAYOUT, backend = CHACHA_HW_BACKEND_NONE;
+  int retried = 0;
+  unsigned record = (unsigned)s->rtl_input_snapshot_len;
+  uint32_t started_ms = 0;
+  static unsigned pending_hw[3];
+#if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+  started_ms = chacha_post_timeout_time_ms();
+#endif
+  chacha_copy_bytes(saved_tag, tag, 16u);
+  *error = -1;
+  if (dst != s->rtl_output_next) goto cleanup;
+  if (src != out) {
+    uintptr_t a = (uintptr_t)src, b = (uintptr_t)out;
+    if (a < b ? len > b - a : len > a - b) goto cleanup;
+  }
+#if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+  if ((s->rtl_direction & 1u) && s->rtl_eligible) {
+    status = chacha_hardware_precheck(len, s->rtl_aad_len);
+    if (status == CHACHA_RTL_OK) {
+      chacha_export_key_nonce(s, key, nonce);
+      status = chacha_hardware_decrypt_auto(key, nonce, s->rtl_aad,
+        s->rtl_aad_len, src, len, out, calculated, &backend);
+    }
+  }
+  if (status == CHACHA_RTL_OK) {
+    *error = chacha20_poly1305_tag_equal(calculated, saved_tag) ? 0 : -1;
+    ++g_chacha_hw_operations;
+    chacha_stats_record_hardware(backend, len);
+    if (__sync_lock_test_and_set(&pending_hw[kind], 0u))
+      printf("[CHACHARXREC] id=%u kind=%u next_hw_complete=1 tag_ok=%u len=%lu\n",
+             record, kind, *error == 0, (unsigned long)len);
+    goto cleanup;
+  }
+  /* Every backend error returns only after DMA is quiescent, or before DMA
+   * submission. Unquiesced failures never return (fatal containment). */
+  retried = status == CHACHA_RTL_ERROR_OPERATION ||
+            status == CHACHA_RTL_ERROR_OPERATION_DISABLED;
+#else
+  (void)backend;
+  (void)pending_hw;
+  (void)kind;
+#endif
+  {
+    size_t written = chacha20_poly1305_decrypt_software(s, src, len, out);
+    (void)chacha20_poly1305_verify_software(s, out + written, saved_tag, error);
+    chacha_stats_record_software(len, retried);
+  }
+#if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+  if (retried) {
+    __sync_lock_test_and_set(&pending_hw[kind], 1u);
+    printf("[CHACHARXREC] id=%u kind=%u len=%lu hw_status=%d dma_quiesced=1 "
+           "engine_ready=%u sw_retry=1 tag_ok=%u verify_ms=%lu\n", record,
+           kind, (unsigned long)len, status,
+           status == CHACHA_RTL_ERROR_OPERATION, *error == 0,
+           (unsigned long)(chacha_post_timeout_time_ms() - started_ms));
+  }
+#else
+  (void)started_ms;
+  (void)status;
+#endif
+cleanup:
+  /* Persistent vendor keys may overlap the backend bookkeeping tail and are
+   * restored by the outer alias wrapper. Never publish outcomes in that tail. */
+  carbox_chacha_rx_result(s, out, record, kind, retried, *error);
+  chacha_secure_clear(s, sizeof(*s));
+  chacha_secure_clear(key, sizeof(key));
+  chacha_secure_clear(nonce, sizeof(nonce));
+  chacha_secure_clear(calculated, sizeof(calculated));
+  if (aad_snapshot) chacha_aad_free(aad_snapshot);
+  return 0u; /* decrypt_rx reported the complete logical length */
+}
+
 size_t chacha20_poly1305_verify(
   chacha20_poly1305_state *state, void *dst,
   const uint8_t tag[16], int32_t *out_error
 ) {
+  if (chacha20_poly1305_is_direct_rx(state))
+    return chacha_rx_verify(state, dst, tag, out_error);
   uint8_t key[32];
   uint8_t nonce[8];
   const uint8_t *aad = state->rtl_aad;

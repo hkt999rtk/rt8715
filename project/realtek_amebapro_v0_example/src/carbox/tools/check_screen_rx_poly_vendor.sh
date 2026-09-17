@@ -20,7 +20,7 @@ check_member() {
     fi
 }
 check_member "$carplay" AirPlayReceiverSessionScreen.o 9b051d06928cfb1c7e861ebfca52fd4e902cf0542353c64430c88cf6db1d2126
-check_member "$carplay" ScreenUtils.o 28cac6f8e9861922b8d879ee00f439b86ace2338cc91bd4b88e5b7dc6366ba98
+check_member "$carplay" ScreenUtilsStub.o 64dd1ef290c6bfc9024611adacf01cd3d4e72389dbc1de62afe1f567f22e7a67
 check_member "$carplay" AppleCarPlay_AppStub.o beab94a28bcda7b8ad9303086cc38e8c3d74f48fe1b1d23ba5b8d2c27ac00650
 check_member "$accessory" AirPlayScreen.o 8c1a6d380cd90ab4630ad1c77d232e92eafdd2e0a4b3db0c46de472f3fecd400
 echo "SCREEN_RX_POLY_INPLACE: audited vendor objects match"

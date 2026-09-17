@@ -35,6 +35,7 @@ int carbox_crypto_irq_controller_enable(void);
 void carbox_crypto_irq_controller_vendor_enable(
 	void *adapter, void (*ignored_handler)(int, int)
 );
+int carbox_crypto_irq_controller_quiesce(void);
 void carbox_crypto_irq_controller_engine_reset(void);
 int carbox_crypto_irq_controller_last_timed_out(void);
 void carbox_crypto_irq_controller_report(unsigned window_index);

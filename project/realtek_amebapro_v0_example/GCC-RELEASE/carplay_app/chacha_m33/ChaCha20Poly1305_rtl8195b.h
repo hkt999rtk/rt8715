@@ -15,7 +15,10 @@ enum {
   CHACHA_RTL_SKIP_THRESHOLD = 7,
   CHACHA_RTL_SKIP_POLY_LENGTH = 8,
   CHACHA_RTL_ERROR_INIT = -1,
-  CHACHA_RTL_ERROR_OPERATION = -2
+  /* Operation failed, DMA quiesced, reinitialization succeeded. */
+  CHACHA_RTL_ERROR_OPERATION = -2,
+  /* Operation failed, DMA quiesced, future hardware disabled. */
+  CHACHA_RTL_ERROR_OPERATION_DISABLED = -3
 };
 
 int chacha_rtl8195b_encrypt(

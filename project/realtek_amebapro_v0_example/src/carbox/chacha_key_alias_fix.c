@@ -8,6 +8,7 @@
 #include "hal_timer.h"
 #include "diag.h"
 #include "chacha_key_alias_fix.h"
+#include "../../GCC-RELEASE/carplay_app/chacha_m33/ChaCha20Poly1305.h"
 #include "crypto_priority_lock.h"
 #include "screen_rx_record_profiler.h"
 #include "screen_rx_stage_profiler.h"
@@ -411,6 +412,23 @@ size_t __wrap_chacha20_poly1305_decrypt(
   return written;
 }
 
+#if CONFIG_CHACHA_RX_SEPARATE_BUFFER
+size_t carbox_chacha_decrypt_rx(void *state, const void *src, size_t len,
+                                void *dst, unsigned kind, int allow_hardware)
+{
+#if CONFIG_SCREEN_FPS_PROFILE
+  uint32_t profile_start_us = chacha_rx_decrypt_begin(state, len);
+#endif
+  size_t written = chacha20_poly1305_decrypt_rx(
+    state, src, len, dst, kind, allow_hardware);
+#if CONFIG_SCREEN_FPS_PROFILE
+  chacha_rx_decrypt_end(profile_start_us);
+#endif
+  carbox_screen_rx_crypto_decrypt(len, written);
+  return written;
+}
+#endif
+
 size_t __wrap_chacha20_poly1305_final(
   void *state, void *dst, uint8_t tag[16]
 ) {
@@ -425,13 +443,18 @@ size_t __wrap_chacha20_poly1305_verify(
 ) {
   carbox_chacha_alias_slot *slot = find_slot(state);
   int nonce_resync;
+#if CONFIG_CHACHA_RX_SEPARATE_BUFFER
+  int direct_rx = chacha20_poly1305_is_direct_rx(state);
+#else
+  int direct_rx = 0;
+#endif
 #if CONFIG_SCREEN_FPS_PROFILE
   uint32_t profile_start_us = chacha_rx_verify_begin(state);
 #endif
   size_t written =
     __real_chacha20_poly1305_verify(state, dst, tag, out_error);
-  chacha20_poly1305_rx_nonce_resync_observe(*out_error);
-  nonce_resync = chacha20_poly1305_take_rx_nonce_resync(state);
+  if (!direct_rx) chacha20_poly1305_rx_nonce_resync_observe(*out_error);
+  nonce_resync = direct_rx ? 0 : chacha20_poly1305_take_rx_nonce_resync(state);
   if (nonce_resync > 0) {
     int applied = slot && slot->nonce_target;
     if (applied) {

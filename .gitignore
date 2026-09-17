@@ -112,3 +112,9 @@ project/realtek_amebapro_v0_example/GCC-RELEASE/**
 
 # Convenience copies of generated full-flash images are local artifacts.
 /flash_is.bin
+
+# Host tests for preserved-ciphertext RX and the actual key-alias wrapper.
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/tests/host_rx_recovery.c
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/tests/rx_profile_stubs.c
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/tests/freertos/hal_timer.h
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/tests/freertos/diag.h

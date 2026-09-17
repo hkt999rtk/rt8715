@@ -384,3 +384,19 @@ host-check: | $(OUTPUT_DIR)
 
 clean:
 	rm -rf $(OUTPUT_DIR)
+
+.PHONY: host-rx-recovery-check
+host-rx-recovery-check: | $(OUTPUT_DIR)
+	$(HOST_CC) $(HOST_TEST_FLAGS) -g -fno-pie -no-pie -fsanitize=address,undefined \
+		-fno-omit-frame-pointer -DCARBOX_CHACHA_MODE=2 -DCARBOX_CHACHA_HW_MIN_LEN=1024 \
+		-DCARBOX_SCREEN_TX_DIRECT_CRYPTO=0 -DCONFIG_SCREEN_RX_POLY_INPLACE=1 \
+		-DCONFIG_SCREEN_RX_CHACHA_SINGLE_PASS=1 -DCONFIG_CHACHA_AAD_POOL=1 \
+		-DCARBOX_CHACHA_STATS_INTERVAL_MS=0 -I$(RX_POLY_SOURCE_DIR) -Itests/freertos \
+		ChaCha20Poly1305.c $(RX_POLY_SOURCE_DIR)/screen_rx_poly_buffer.c \
+		tests/rtl_backend_openssl_mock.c tests/host_rx_recovery.c \
+		$(RX_POLY_SOURCE_DIR)/chacha_key_alias_fix.c tests/rx_profile_stubs.c \
+		-DCONFIG_CHACHA_RX_SEPARATE_BUFFER=1 -I$(SDK_ROOT)/component/os/os_dep/include -lcrypto \
+		-Wl,--wrap=chacha20_poly1305_init_64x64 -Wl,--wrap=chacha20_poly1305_add_aad \
+		-Wl,--wrap=chacha20_poly1305_decrypt -Wl,--wrap=chacha20_poly1305_verify \
+		-Wl,--wrap=chacha20_poly1305_final -Wl,--wrap=malloc -o $(OUTPUT_DIR)/host-rx-recovery
+	$(OUTPUT_DIR)/host-rx-recovery

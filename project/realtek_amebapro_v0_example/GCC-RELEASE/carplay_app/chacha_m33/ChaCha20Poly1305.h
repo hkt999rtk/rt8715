@@ -162,6 +162,16 @@ size_t chacha20_poly1305_verify(
   const uint8_t tag[CHACHA20_POLY1305_TAG_BYTES], int32_t *out_error
 );
 
+/* Audited RX adapters only: one complete update followed by verify. Source
+ * remains alive and unchanged through verify. No staging or copy-back. With
+ * allow_hardware=0 this also supports the original in-place software path.
+ * kind: 0=screen, 1=general audio, 2=main/alternate audio. State ABI unchanged. */
+size_t chacha20_poly1305_decrypt_rx(
+  chacha20_poly1305_state *state, const void *src, size_t len, void *dst,
+  unsigned kind, int allow_hardware
+);
+int chacha20_poly1305_is_direct_rx(const void *state);
+
 /* Internal bridge used by the closed NetTransport ABI wrapper.  A positive
  * return requests one little-endian increment of its persistent RX nonce.
  * The request is emitted only after the post-timeout record authenticates

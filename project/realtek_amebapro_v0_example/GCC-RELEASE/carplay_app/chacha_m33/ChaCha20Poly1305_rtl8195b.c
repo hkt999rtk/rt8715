@@ -175,45 +175,24 @@ static int chacha_rtl_prepare_locked(void) {
  * "available" state after a ChaCha-side reset.
  */
 static int chacha_rtl_recover_locked(int dma_may_be_active) {
-  int deinit_result = rtl_cryptoEngine_deinit();
-  int init_result = -1;
-
+  int deinit_result, init_result = -1;
+  (void)dma_may_be_active;
+  /* Reset before HAL deinit can gate the clock. This also prevents a late
+   * IRQ from satisfying the next transaction's semaphore. */
+  if (carbox_crypto_irq_controller_quiesce() != 0)
+    carbox_chacha_hw_fatal("DMA reset remained busy");
+  deinit_result = rtl_cryptoEngine_deinit();
   carbox_crypto_irq_controller_engine_reset();
-
-  if (deinit_result != 0) {
-    g_chacha_hw_state = -1;
-    printf(
-      "[CHACHA][HW] engine quiesce failed: deinit_err=%d\n",
-      deinit_result
-    );
-    if (dma_may_be_active) {
-      carbox_chacha_hw_fatal("DMA quiesce failed");
-    }
-    return 1;
-  }
-
-  /*
-   * A successful deinit is the safety boundary: DMA is stopped and software
-   * fallback may touch caller buffers. Re-init failure only disables future HW.
-   */
-  init_result = rtl_cryptoEngine_init();
-  if (init_result == 0) {
+  if (deinit_result == 0) init_result = rtl_cryptoEngine_init();
+  if (init_result == 0 && carbox_crypto_irq_controller_enable() == 0) {
     g_chacha_hw_state = 0;
-    if (carbox_crypto_irq_controller_enable() == 0) {
-      printf("[CHACHA][HW] engine recovered after operation failure\n");
-    } else {
-      g_chacha_hw_state = -1;
-      init_result = -1;
-    }
-  } else {
-    g_chacha_hw_state = -1;
-    printf(
-      "[CHACHA][HW] engine recovery failed: deinit_err=%d init_err=%d; "
-      "future hardware use disabled\n",
-      deinit_result, init_result
-    );
+    printf("[CHACHA][HW] dma_quiesced=1 engine_ready=1 (reinitialized)\n");
+    return CHACHA_RTL_ERROR_OPERATION;
   }
-  return 1;
+  g_chacha_hw_state = -1;
+  printf("[CHACHA][HW] dma_quiesced=1 engine_ready=0 deinit=%d init=%d\n",
+         deinit_result, init_result);
+  return CHACHA_RTL_ERROR_OPERATION_DISABLED;
 }
 
 static int chacha_rtl_validate(size_t msg_len, size_t aad_len) {
@@ -1330,8 +1309,7 @@ static int chacha_rtl_run(
       } else {
         printf("[CHACHA][HW] operation failed: decrypt=%d err=%d\n",
                decrypt, result);
-        (void)chacha_rtl_recover_locked(1);
-        result = CHACHA_RTL_ERROR_OPERATION;
+        result = chacha_rtl_recover_locked(1);
       }
     } else {
       printf("[CHACHA][HW] key init failed: err=%d\n", result);
@@ -1340,8 +1318,7 @@ static int chacha_rtl_run(
        * DMA. Recovery is still useful but fallback remains safe after a
        * successful deinit even if re-init fails.
        */
-      (void)chacha_rtl_recover_locked(0);
-      result = CHACHA_RTL_ERROR_OPERATION;
+      result = chacha_rtl_recover_locked(0);
     }
   }
   chacha_rtl_clear_key_material();
@@ -1414,14 +1391,12 @@ int chacha_rtl8195b_encrypt_partial_padded(
       } else {
         printf("[CHACHA][HW] partial combined encrypt failed: err=%d\n",
                result);
-        (void)chacha_rtl_recover_locked(1);
-        result = CHACHA_RTL_ERROR_OPERATION;
+        result = chacha_rtl_recover_locked(1);
       }
     } else {
       printf("[CHACHA][HW] partial combined key init failed: err=%d\n",
              result);
-      (void)chacha_rtl_recover_locked(0);
-      result = CHACHA_RTL_ERROR_OPERATION;
+      result = chacha_rtl_recover_locked(0);
     }
   }
   chacha_rtl_clear_key_material();
@@ -1474,14 +1449,12 @@ int chacha_rtl8195b_chacha_xor_locked(
         result = CHACHA_RTL_OK;
       } else {
         printf("[CHACHA][HW] standalone ChaCha failed: err=%d\n", result);
-        (void)chacha_rtl_recover_locked(1);
-        result = CHACHA_RTL_ERROR_OPERATION;
+        result = chacha_rtl_recover_locked(1);
       }
     } else {
       printf("[CHACHA][HW] standalone ChaCha key init failed: err=%d\n",
              result);
-      (void)chacha_rtl_recover_locked(0);
-      result = CHACHA_RTL_ERROR_OPERATION;
+      result = chacha_rtl_recover_locked(0);
     }
   }
   chacha_rtl_clear_key_material();
@@ -1524,8 +1497,7 @@ int chacha_rtl8195b_poly1305_locked(
       result = CHACHA_RTL_OK;
     } else {
       printf("[CHACHA][HW] standalone Poly1305 failed: err=%d\n", result);
-      (void)chacha_rtl_recover_locked(1);
-      result = CHACHA_RTL_ERROR_OPERATION;
+      result = chacha_rtl_recover_locked(1);
     }
   }
   chacha_rtl_clear_key_material();
@@ -1646,6 +1618,7 @@ const char *chacha_rtl8195b_status_string(int status) {
     case CHACHA_RTL_SKIP_POLY_LENGTH: return "poly1305-input-too-large";
     case CHACHA_RTL_ERROR_INIT: return "hardware-init-failed";
     case CHACHA_RTL_ERROR_OPERATION: return "hardware-operation-failed";
+    case CHACHA_RTL_ERROR_OPERATION_DISABLED: return "hardware-operation-failed-engine-disabled";
     default: return "unknown";
   }
 }

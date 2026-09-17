@@ -1103,6 +1103,7 @@ SCREEN_QUEUE_EVENT_WAIT ?= 1
 # by verify/finalize, so labelling the first phase as software throughput is
 # misleading.
 CHACHA_MODE ?= 2
+CHACHA_HW_MIN_LEN ?= 1024
 ifeq ($(SCREEN_QUEUE_PROFILE)$(SCREEN_FPS_PROFILE),11)
 $(error SCREEN_FPS_PROFILE and SCREEN_QUEUE_PROFILE are mutually exclusive)
 endif
@@ -1202,8 +1203,36 @@ $(AAC_DECODER_BENCHMARK_STAMP):
 # then frees it immediately.  The build creates derived archives whose hooks
 # are redirected only in AirPlayScreen.o and AirPlayReceiverSessionScreen.o;
 # the supplied vendor archives are never modified.
+# Audited RX A/B experiment. Switches are independent; both use local mode 2.
+SCREEN_RX_SEPARATE_BUFFER ?= 0
+AUDIO_RX_SEPARATE_BUFFER ?= 0
+ifneq ($(filter-out 0 1,$(SCREEN_RX_SEPARATE_BUFFER) $(AUDIO_RX_SEPARATE_BUFFER)),)
+$(error RX_SEPARATE_BUFFER switches must be 0 or 1)
+endif
+ifneq ($(filter 1,$(SCREEN_RX_SEPARATE_BUFFER) $(AUDIO_RX_SEPARATE_BUFFER)),)
+ifneq ($(CHACHA_MODE)$(CHACHA_KEY_ALIAS_FIX),21)
+$(error RX separate buffers require CHACHA_MODE=2 and CHACHA_KEY_ALIAS_FIX=1)
+endif
+ifneq ($(CHACHA_API_TRACE)$(CHACHA_VENDOR_TRACE)$(CHACHA_PRE_RX_VENDOR)$(CHACHA_VENDOR_PRIVATE_MEM)$(CHACHA_VENDOR_PRIVATE_SW),00000)
+$(error RX separate buffers require the normal local ChaCha replacement)
+endif
+SRC_C += ../src/carbox/rx_crypto_buffers.c
+endif
+RX_CRYPTO_STAMP := $(OBJ_DIR)/.rx_crypto_screen$(SCREEN_RX_SEPARATE_BUFFER)-audio$(AUDIO_RX_SEPARATE_BUFFER)-min$(CHACHA_HW_MIN_LEN)
+$(RX_CRYPTO_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.rx_crypto_screen*
+	@touch $@
+../src/carbox/rx_crypto_buffers.o ../src/carbox/chacha_key_alias_fix.o: $(RX_CRYPTO_STAMP)
+GCCFLAGS += -DCONFIG_CHACHA_RX_SEPARATE_BUFFER=$(if $(filter 1,$(SCREEN_RX_SEPARATE_BUFFER) $(AUDIO_RX_SEPARATE_BUFFER)),1,0)
+GCCFLAGS += -DCONFIG_CHACHA_HW_MIN_LEN=$(CHACHA_HW_MIN_LEN)
 VIDEO_HANDOVER_ZERO_COPY ?= 1
 VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES ?= 4096
+ifneq ($(filter 1,$(SCREEN_RX_SEPARATE_BUFFER) $(AUDIO_RX_SEPARATE_BUFFER)),)
+ifneq ($(VIDEO_HANDOVER_ZERO_COPY),1)
+$(error RX separate buffers currently require VIDEO_HANDOVER_ZERO_COPY=1)
+endif
+endif
 # RX-only Poly1305 input reuse, enabled by default for board validation.
 # Set to 0 for the scratch-buffer A/B baseline.
 SCREEN_RX_POLY_INPLACE ?= 1
@@ -2192,7 +2221,6 @@ CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/li
 #   1 = software authoritative plus hardware verification
 #   2 = hardware only for RX and TX
 #   3 = screen RX software, TX hardware (reliability isolation build)
-CHACHA_HW_MIN_LEN ?= 4096
 CHACHA_STATS_INTERVAL_MS ?= 0
 CHACHA_RUNTIME_PROFILE ?= 0
 CHACHA_HW_SELFTEST ?= 0
@@ -2347,9 +2375,21 @@ application: $(CARBOX_UILIB_PRIVATE_MEM_ARCHIVE)
 endif
 ifeq ($(VIDEO_HANDOVER_ZERO_COPY),1)
 $(CARBOX_CARPLAY_HANDOVER_ARCHIVE): $(CARBOX_CARPLAY_ARCHIVE) \
-		$(CARBOX_VIDEO_HANDOVER_PATCH)
-	sh $(CARBOX_VIDEO_HANDOVER_PATCH) receiver $(AR) $(OBJCOPY) \
-		$(CARBOX_CARPLAY_ARCHIVE) $@ AirPlayReceiverSessionScreen.o 0 0 0 0
+		$(CARBOX_VIDEO_HANDOVER_PATCH) $(RX_CRYPTO_STAMP) \
+		../src/carbox/tools/patch_rx_crypto_archive.py $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
+		application.is.mk
+	# Publish only after both patch stages succeed; failed audits must remain
+	# failures on the next make, even when a previous valid archive exists.
+	@set -eu; \
+		staging_dir=$$(mktemp -d "$(@D)/.rx-archive.XXXXXX"); \
+		trap 'rm -rf -- "$$staging_dir"' EXIT; \
+		trap 'exit 1' HUP INT TERM; \
+		sh $(CARBOX_VIDEO_HANDOVER_PATCH) receiver $(AR) $(OBJCOPY) \
+			$(CARBOX_CARPLAY_ARCHIVE) "$$staging_dir/archive.a" AirPlayReceiverSessionScreen.o 0 0 0 0; \
+		python3 ../src/carbox/tools/patch_rx_crypto_archive.py $(AR) $(OBJCOPY) \
+			$(CARBOX_CARPLAY_VENDOR_ARCHIVE) $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) "$$staging_dir/archive.a" \
+			$(SCREEN_RX_SEPARATE_BUFFER) $(AUDIO_RX_SEPARATE_BUFFER); \
+		mv -f -- "$$staging_dir/archive.a" "$@"
 
 application: $(CARBOX_CARPLAY_HANDOVER_ARCHIVE)
 endif
