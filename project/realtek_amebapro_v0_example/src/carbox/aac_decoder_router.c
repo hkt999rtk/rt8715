@@ -203,17 +203,36 @@ static void aac_router_profile_record(aac_router_t *router,
 #endif
 }
 
+/* Configure the real FDK instance before the caller supplies ConfigRaw.
+ * Bypass the router so this preference cannot switch a Helix decoder to FDK. */
+static HANDLE_AACDECODER aac_router_open_fdk(TRANSPORT_TYPE transport, UINT layers)
+{
+	HANDLE_AACDECODER fdk = __real_aacDecoder_Open(transport, layers);
+	AAC_DECODER_ERROR error;
+
+	if (fdk == NULL) {
+		return NULL;
+	}
+	error = __real_aacDecoder_SetParam(fdk, AAC_QMF_LOWPOWER, 1);
+	if (error != AAC_DEC_OK) {
+		/* An optional processing preference must not prevent audio startup. */
+		printf("[AACROUTE] FDK QMF low-power request failed: 0x%x\n",
+			(unsigned int)error);
+	}
+	return fdk;
+}
+
 HANDLE_AACDECODER __wrap_aacDecoder_Open(TRANSPORT_TYPE transport, UINT layers)
 {
 #if CARBOX_AAC_DECODER_MODE == CARBOX_AAC_DECODER_FDK_ONLY
-	return __real_aacDecoder_Open(transport, layers);
+	return aac_router_open_fdk(transport, layers);
 #else
 	aac_router_t *router = calloc(1U, sizeof(*router));
 
 	if (router == NULL) {
 		return NULL;
 	}
-	router->fdk = __real_aacDecoder_Open(transport, layers);
+	router->fdk = aac_router_open_fdk(transport, layers);
 	if (router->fdk == NULL) {
 		free(router);
 		return NULL;
