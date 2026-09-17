@@ -1418,7 +1418,7 @@ static void chacha_announce_mode(void) {
 #elif CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
     printf(
       "[CHACHA] mode=HARDWARE_ONLY "
-      "(generic HW errors propagate; registered RX retries in SW)\n"
+      "(TX/RX preserve input; quiesced HW failures retry in SW)\n"
     );
 #elif CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_SPLIT_RX_SW_TX_HW
     printf(
@@ -1600,19 +1600,58 @@ static CHACHA_UNUSED void chacha_log_hw_failure(
   const char *operation, int status, int backend,
   size_t len, size_t aad_len
 ) {
-  /*
-   * Do not rate-limit this message. A submitted DMA/HAL transaction failing
-   * is exceptional and Mode 2 deliberately cannot retry it in software:
-   * in-place hardware may already have overwritten part of the only input.
-   */
+  /* Exceptional failures remain visible with routine profiling disabled. */
   ++g_chacha_hw_failures;
   printf(
     "[CHACHA][HW][FAIL] op=%s reason=%s status=%d backend=%d "
-    "len=%lu aad_len=%lu input_may_be_overwritten=1 count=%lu\n",
+    "len=%lu aad_len=%lu input_preserved=1 output_may_be_partial=1 count=%lu\n",
     operation, chacha_rtl8195b_status_string(status), status, backend,
     (unsigned long)len, (unsigned long)aad_len,
     (unsigned long)g_chacha_hw_failures
   );
+}
+
+/* These events are unconditional. They describe local record recovery, not
+ * peer receipt. IDs are assigned before hardware starts so a concurrent older
+ * operation cannot be mistaken for evidence of post-recovery hardware success. */
+static unsigned g_chacha_recovery_id;
+static unsigned g_chacha_recovery_pending[2];
+static CHACHA_UNUSED unsigned chacha_recovery_begin(void) {
+  return __sync_add_and_fetch(&g_chacha_recovery_id, 1u);
+}
+static CHACHA_UNUSED int chacha_recovery_failed(
+  unsigned rx, unsigned id, int status, int backend, size_t len, size_t aad_len
+) {
+  if (status != CHACHA_RTL_ERROR_OPERATION &&
+      status != CHACHA_RTL_ERROR_OPERATION_DISABLED) return 0;
+  /* The backend must stop DMA before returning either operation error.
+   * Failure to stop DMA takes the non-returning fatal containment path. */
+  chacha_log_hw_failure(rx ? "decrypt" : "encrypt", status, backend, len, aad_len);
+  __sync_lock_test_and_set(&g_chacha_recovery_pending[rx], id);
+  printf("[CHACHAREC][%s] id=%u op=%s event=hw_fail len=%lu "
+         "status=%d dma_quiesced=1 engine_ready=%u input_preserved=1\n",
+         rx ? "RX" : "TX", id, rx ? "decrypt" : "encrypt",
+         (unsigned long)len, status, status == CHACHA_RTL_ERROR_OPERATION);
+  return 1;
+}
+static CHACHA_UNUSED void chacha_recovery_software_done(
+  unsigned rx, unsigned id, size_t len, int error
+) {
+  printf("[CHACHAREC][%s] id=%u op=%s event=sw_retry_done len=%lu "
+         "sw_retry=1 recovered=%u %s=%u error=%d\n",
+         rx ? "RX" : "TX", id, rx ? "decrypt" : "encrypt",
+         (unsigned long)len, error == 0, rx ? "tag_ok" : "ciphertext_tag_ready",
+         error == 0, error);
+}
+static CHACHA_UNUSED void chacha_recovery_hardware_done(
+  unsigned rx, unsigned id, size_t len, int error
+) {
+  unsigned failed = __sync_fetch_and_add(&g_chacha_recovery_pending[rx], 0u);
+  if (error == 0 && failed && (int32_t)(id - failed) > 0 &&
+      __sync_bool_compare_and_swap(&g_chacha_recovery_pending[rx], failed, 0u))
+    printf("[CHACHAREC][%s] id=%u after_fail_id=%u event=next_hw_success "
+           "len=%lu hw_complete=1 %s=1\n", rx ? "RX" : "TX", id, failed,
+           (unsigned long)len, rx ? "tag_ok" : "ciphertext_tag_ready");
 }
 
 static CHACHA_UNUSED int chacha_hardware_precheck(
@@ -1854,6 +1893,7 @@ static void chacha_post_timeout_finish(
 ) {
   chacha_post_timeout_diag_t *diag = &g_chacha_post_timeout_diag;
   carbox_crypto_irq_snapshot_t irq;
+  (void)plaintext;
   uint8_t nonce_plus[8];
   uint8_t nonce_minus[8];
   uint8_t software_tag[16];
@@ -1895,22 +1935,8 @@ static void chacha_post_timeout_finish(
     );
     diag->software_minus_one_ok =
       chacha20_poly1305_tag_equal(software_tag, supplied_tag) ? 1u : 0u;
-    if (!diag->software_same_ok && diag->software_plus_one_ok &&
-        !diag->software_minus_one_ok && !diag->resync_pending &&
-        chacha20_poly1305_decrypt_all_64x64_software(
-          key, nonce_plus, aad, aad_len, diag->ciphertext, data_len,
-          plaintext, supplied_tag
-        ) == 0) {
-      /* NetTransport advances its persistent RX nonce only after verify
-       * succeeds.  Repair this record here, then ask the ABI wrapper to add
-       * the missed timeout record before NetTransport performs its normal
-       * success increment. */
-      *out_error = 0;
-      diag->resync_state = state;
-      diag->resync_pending = 1u;
-      diag->resync_detected++;
-      diag->resync_current_ok++;
-    }
+    /* Observation only: recovery replays the SAME record and nonce. Never
+     * accept a failed authentication by silently trying another nonce. */
     chacha_secure_clear(nonce_plus, sizeof(nonce_plus));
     chacha_secure_clear(nonce_minus, sizeof(nonce_minus));
     chacha_secure_clear(software_tag, sizeof(software_tag));
@@ -2035,10 +2061,9 @@ static void chacha_post_timeout_report(unsigned window_index) {
     (CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_SPLIT_RX_SW_TX_HW)
 /*
  * Hardware TX defers payload processing so the final record length can select
- * a backend. Software is used only when hardware has not been submitted (for
- * example, below threshold or unsupported layout). Once an in-place hardware
- * transaction is submitted, a failure must not enter these helpers because
- * the original plaintext may already be partially overwritten.
+ * a backend. Before a hardware attempt we retain an independent input. After
+ * a quiesced failure the caller restores that input before using these helpers;
+ * the software accumulator still contains the original key, nonce and AAD.
  */
 static size_t chacha_deferred_finish_encrypt_software(
   chacha20_poly1305_state *state, uint8_t *buffer, size_t len,
@@ -2841,6 +2866,8 @@ size_t chacha20_poly1305_final(
   const void *direct_input = output_base;
   int direct_tx = 0;
   int direct_status = 0;
+  uint8_t *retry_input = NULL;
+  unsigned recovery_id = chacha_recovery_begin();
   size_t total_len;
   size_t written;
 #if CARBOX_CHACHA_TRANSACTION_TRACE
@@ -2886,17 +2913,21 @@ size_t chacha20_poly1305_final(
     int hardware_submitted = 0;
 
     if (status == CHACHA_RTL_OK) {
-      /*
-       * 2026-07-31 board tests passed raw, chunked and combined in-place
-       * operation. Mode 2 is performance-first: avoid a payload-sized commit
-       * buffer and the successful-path copy. If DMA/HAL fails after this
-       * point, output_base may be partially overwritten, so log and fail the
-       * record instead of attempting software fallback with corrupted input.
-       *
-       * The encrypt ABI has no error return. Clear the tag before submission
-       * so a failed transaction cannot accidentally reuse a previous tag;
-       * the mandatory failure log is the available diagnostic channel.
-       */
+      /* The audited direct sender owns an independent source until final()
+       * returns. Generic/streaming callers may alias or release their sources:
+       * retain the assembled record before submitting any DMA. Allocation
+       * failure selects software while the staged input is still untouched. */
+      if (!direct_tx) {
+        retry_input = (uint8_t *)malloc(total_len);
+        if (retry_input) {
+          chacha_copy_bytes(retry_input, output_base, total_len);
+          direct_input = retry_input;
+        } else {
+          status = CHACHA_RTL_SKIP_MEMORY;
+        }
+      }
+    }
+    if (status == CHACHA_RTL_OK) {
       memset(tag, 0, 16u);
       hardware_submitted = 1;
       status = chacha_hardware_encrypt_auto(
@@ -2908,12 +2939,20 @@ size_t chacha20_poly1305_final(
     if (status == CHACHA_RTL_OK) {
       ++g_chacha_hw_operations;
       chacha_stats_record_hardware(backend, total_len);
+      chacha_recovery_hardware_done(0u, recovery_id, total_len, 0);
     } else if (hardware_submitted) {
-	  direct_status = status;
-      memset(tag, 0, 16u);
-      chacha_log_hw_failure(
-        "encrypt", status, backend, total_len, aad_len
-      );
+      int recovered = chacha_recovery_failed(
+        0u, recovery_id, status, backend, total_len, aad_len);
+      /* Backend errors return only after DMA has stopped (or before submit).
+       * Never retry partially overwritten output as if it were plaintext. */
+      chacha_copy_bytes(output_base, direct_input, total_len);
+      if (direct_tx)
+        carbox_screen_tx_crypto_materialized(output_base, total_len);
+      (void)chacha_deferred_finish_encrypt_software(
+        state, output_base, total_len, tag);
+      chacha_stats_record_software(total_len, 1);
+      if (recovered)
+        chacha_recovery_software_done(0u, recovery_id, total_len, 0);
     } else {
       if (status != CHACHA_RTL_SKIP_THRESHOLD) {
         ++g_chacha_hw_fallbacks;
@@ -2992,6 +3031,11 @@ size_t chacha20_poly1305_final(
   chacha_clear_state_key_material(state);
   chacha_secure_clear(key, sizeof(key));
   chacha_secure_clear(nonce, sizeof(nonce));
+  if (retry_input) {
+    chacha_secure_clear(retry_input, total_len);
+    free(retry_input);
+  }
+  (void)recovery_id;
   if (input_snapshot) free(input_snapshot);
   if (aad_snapshot) chacha_aad_free(aad_snapshot);
   return written;
@@ -3045,7 +3089,7 @@ static size_t chacha_rx_verify(
   int retried = 0;
   unsigned record = (unsigned)s->rtl_input_snapshot_len;
   uint32_t started_ms = 0;
-  static unsigned pending_hw[3];
+  unsigned recovery_id = chacha_recovery_begin();
 #if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
   started_ms = chacha_post_timeout_time_ms();
 #endif
@@ -3069,18 +3113,16 @@ static size_t chacha_rx_verify(
     *error = chacha20_poly1305_tag_equal(calculated, saved_tag) ? 0 : -1;
     ++g_chacha_hw_operations;
     chacha_stats_record_hardware(backend, len);
-    if (__sync_lock_test_and_set(&pending_hw[kind], 0u))
-      printf("[CHACHARXREC] id=%u kind=%u next_hw_complete=1 tag_ok=%u len=%lu\n",
-             record, kind, *error == 0, (unsigned long)len);
+    chacha_recovery_hardware_done(1u, recovery_id, len, *error);
     goto cleanup;
   }
   /* Every backend error returns only after DMA is quiescent, or before DMA
    * submission. Unquiesced failures never return (fatal containment). */
-  retried = status == CHACHA_RTL_ERROR_OPERATION ||
-            status == CHACHA_RTL_ERROR_OPERATION_DISABLED;
+  retried = chacha_recovery_failed(
+    1u, recovery_id, status, backend, len, s->rtl_aad_len);
 #else
   (void)backend;
-  (void)pending_hw;
+  (void)recovery_id;
   (void)kind;
 #endif
   {
@@ -3090,9 +3132,9 @@ static size_t chacha_rx_verify(
   }
 #if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
   if (retried) {
-    __sync_lock_test_and_set(&pending_hw[kind], 1u);
-    printf("[CHACHARXREC] id=%u kind=%u len=%lu hw_status=%d dma_quiesced=1 "
-           "engine_ready=%u sw_retry=1 tag_ok=%u verify_ms=%lu\n", record,
+    chacha_recovery_software_done(1u, recovery_id, len, *error);
+    printf("[CHACHARXREC][RX] recovery_id=%u id=%u kind=%u len=%lu hw_status=%d dma_quiesced=1 "
+           "engine_ready=%u sw_retry=1 tag_ok=%u verify_ms=%lu\n", recovery_id, record,
            kind, (unsigned long)len, status,
            status == CHACHA_RTL_ERROR_OPERATION, *error == 0,
            (unsigned long)(chacha_post_timeout_time_ms() - started_ms));
@@ -3119,6 +3161,12 @@ size_t chacha20_poly1305_verify(
 ) {
   if (chacha20_poly1305_is_direct_rx(state))
     return chacha_rx_verify(state, dst, tag, out_error);
+  uint8_t *retry_input = NULL;
+  uint8_t saved_tag[16];
+  unsigned recovery_id = chacha_recovery_begin();
+  /* The supplied tag may be the output tail. Preserve it across DMA/retry. */
+  chacha_copy_bytes(saved_tag, tag, sizeof(saved_tag));
+  tag = saved_tag;
   uint8_t key[32];
   uint8_t nonce[8];
   const uint8_t *aad = state->rtl_aad;
@@ -3170,29 +3218,34 @@ size_t chacha20_poly1305_verify(
     int hardware_submitted = 0;
 
     if (status == CHACHA_RTL_OK) {
-      /*
-       * Mode 2 decrypt also runs directly in output_base. The caller must
-       * ignore plaintext whenever out_error is non-zero: an invalid tag or a
-       * DMA/HAL failure can leave unauthenticated/partial plaintext in place.
-       * This removes the payload commit allocation and copy from the normal
-       * path. Never software-fallback after hardware_submitted becomes true.
-       */
+      retry_input = (uint8_t *)malloc(total_len);
+      if (retry_input)
+        chacha_copy_bytes(retry_input, output_base, total_len);
+      else
+        status = CHACHA_RTL_SKIP_MEMORY;
+    }
+    if (status == CHACHA_RTL_OK) {
       hardware_submitted = 1;
       diagnostic_hardware_submitted = 1;
       status = chacha_hardware_decrypt_auto(
         key, nonce, aad, aad_len,
-        output_base, total_len, output_base, calculated, &backend
+        retry_input, total_len, output_base, calculated, &backend
       );
     }
     if (status == CHACHA_RTL_OK) {
       *out_error = chacha20_poly1305_tag_equal(calculated, tag) ? 0 : -1;
       ++g_chacha_hw_operations;
       chacha_stats_record_hardware(backend, total_len);
+      chacha_recovery_hardware_done(1u, recovery_id, total_len, *out_error);
     } else if (hardware_submitted) {
-      *out_error = (int32_t)status;
-      chacha_log_hw_failure(
-        "decrypt", status, backend, total_len, aad_len
-      );
+      int recovered = chacha_recovery_failed(
+        1u, recovery_id, status, backend, total_len, aad_len);
+      chacha_copy_bytes(output_base, retry_input, total_len);
+      (void)chacha_deferred_finish_decrypt_software(
+        state, output_base, total_len, tag, out_error);
+      chacha_stats_record_software(total_len, 1);
+      if (recovered)
+        chacha_recovery_software_done(1u, recovery_id, total_len, *out_error);
     } else {
       if (status != CHACHA_RTL_SKIP_THRESHOLD) {
         ++g_chacha_hw_fallbacks;
@@ -3268,6 +3321,11 @@ size_t chacha20_poly1305_verify(
   chacha_clear_state_key_material(state);
   chacha_secure_clear(key, sizeof(key));
   chacha_secure_clear(nonce, sizeof(nonce));
+  if (retry_input) {
+    chacha_secure_clear(retry_input, total_len);
+    free(retry_input);
+  }
+  (void)recovery_id;
   if (input_snapshot) free(input_snapshot);
   if (aad_snapshot) chacha_aad_free(aad_snapshot);
   return written;

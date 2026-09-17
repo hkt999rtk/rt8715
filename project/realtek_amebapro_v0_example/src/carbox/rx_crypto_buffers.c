@@ -104,7 +104,7 @@ int carbox_screen_rx_process(void *stream, const void *input, size_t len,
     }
     result = ScreenStreamProcessData(stream, input, len, r3,s0,s1,s2,s3,s4);
     if (recovered)
-        printf("[CHACHARXREC] id=%u kind=0 recovered_delivery=%d len=%lu\n",
+        printf("[CHACHARXREC][RX] id=%u kind=0 recovered_delivery=%d len=%lu\n",
                record, result, (unsigned long)len);
     return result;
 }
@@ -231,7 +231,7 @@ int carbox_audio_put_busy(void *jitter, void *node)
     /* No code touches B after publication: a consumer may run immediately. */
     audio_release(r);
     result = RTPJitterBufferPutBusyNode(jitter, node);
-    if (recovered) printf("[CHACHARXREC] id=%u kind=2 recovered_queue=%d\n", record, result);
+    if (recovered) printf("[CHACHARXREC][RX] id=%u kind=2 recovered_queue=%d\n", record, result);
     return result;
 }
 
@@ -253,6 +253,6 @@ void carbox_chacha_rx_result(const void *state, void *output, unsigned id,
         audio_record *r = audio_find((uint8_t *)output - 20u);
         if (r) { r->recovered = retried && !error; r->record = id; }
     } else if (retried && !error) {
-        printf("[CHACHARXREC] id=%u kind=1 recovered_verified=1\n", id);
+        printf("[CHACHARXREC][RX] id=%u kind=1 recovered_verified=1\n", id);
     }
 }

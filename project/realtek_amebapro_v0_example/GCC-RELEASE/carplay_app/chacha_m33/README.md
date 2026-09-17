@@ -68,7 +68,7 @@ make -f application.is.mk all \
   CARBOX_EXPERIMENTAL_SMART_A_LINK=1 CARBOX_CHACHA_MODE=1 \
   CARBOX_CHACHA_HW_SELFTEST=1
 
-# Hardware preferred; submitted HW failures are logged and not retried
+# Hardware preferred; quiesced HW failures retry from preserved input
 make -f application.is.mk all \
   CARBOX_EXPERIMENTAL_SMART_A_LINK=1 CARBOX_CHACHA_MODE=2
 
@@ -119,26 +119,49 @@ RTL8195B board results from 2026-07-31 establish two different boundaries:
 - Poly1305 split `init/process` tests produced incorrect tags even though a
   single process call passed. Do not treat that SDK API as streaming state.
 
-Mode 1 therefore performs shadow encryption and decryption in-place in its
-disposable scratch buffers. Mode 2 is performance-first and also submits the
-payload in-place, eliminating the payload-sized commit allocation and the
-successful-path copy. Exact `src == dst` staging copies are skipped.
+Mode 1 performs shadow encryption and decryption in disposable scratch buffers.
+Mode 2 (and mode 3 TX) preserves the input of every hardware attempt. Generic
+streaming final/verify snapshots the assembled payload before DMA; the audited
+direct screen TX and separate RX adapters already own independent input/output
+buffers. Snapshot allocation failure chooses software before any DMA submission.
+Payload snapshots are cleared before release. The caller ABI is unchanged.
 
-All hardware paths also require the contiguous layout observed in the supplied
-CarPlay libraries, task context, and successful temporary-buffer allocation.
-Mode 2 may select software only before a hardware transaction is submitted
-(for example below threshold, unsupported layout, interrupt context, or
-snapshot allocation failure). A submitted DMA/HAL failure is always printed as
-`[CHACHA][HW][FAIL]` and is not retried because the in-place input may already
-be partially overwritten. Decrypt returns the negative HAL wrapper status via
-`out_error`; the legacy encrypt ABI has no error return, so it prints the
-failure and clears the tag. Callers must never consume decrypt output after an
-authentication or hardware error.
+A hardware operation error returns only after DMA quiescence. Software then
+replays the complete original record with the same key, nonce and AAD, replacing
+any partial output. TX regenerates ciphertext AND tag before returning or marking
+the direct sender ready. RX must pass the original tag before delivery; a bad tag
+remains a failure. No nonce adjustment is made to rescue a failed authentication.
+If DMA cannot be stopped, the existing fatal containment path must not return.
+Engine reinitialization failure still permits software recovery after quiescence,
+but subsequent hardware use is disabled.
 
-Every hardware transaction is serialized by `RT_DEV_LOCK_CRYPTO`. Completion
-uses the RTL crypto IRQ and an RTOS semaphore with a 1000 ms timeout; timeout
-falls through to the ROM's bounded completion check. Key, nonce, plaintext and
-ciphertext contents are never printed.
+The following recovery events remain enabled with routine profiling disabled:
+
+```text
+[CHACHAREC][TX] id=77 op=encrypt event=hw_fail ... dma_quiesced=1 engine_ready=1 input_preserved=1
+[CHACHAREC][TX] id=77 op=encrypt event=sw_retry_done ... sw_retry=1 recovered=1 ciphertext_tag_ready=1 error=0
+[CHACHAREC][TX] id=78 after_fail_id=77 event=next_hw_success ... hw_complete=1 ciphertext_tag_ready=1
+[CHACHAREC][RX] id=81 op=decrypt event=hw_fail ... dma_quiesced=1 engine_ready=1 input_preserved=1
+[CHACHAREC][RX] id=81 op=decrypt event=sw_retry_done ... sw_retry=1 recovered=1 tag_ok=1 error=0
+[CHACHAREC][RX] id=82 after_fail_id=81 event=next_hw_success ... hw_complete=1 tag_ok=1
+```
+
+`sw_retry_done recovered=1` proves local recovery of that record. TX does not
+claim peer receipt; RX does not claim queue delivery at this point.
+`recovered=0 tag_ok=0` means RX retry failed authentication and must be rejected.
+`next_hw_success` is emitted only after a later same-direction hardware operation
+completes successfully (and RX tag verifies). It may belong to another stream;
+it proves engine operation, not recovery of the earlier application session.
+`engine_ready=1` alone reports reinitialization, not either of these successes.
+
+Scoped audio/video RX additionally prints `[CHACHARXREC][RX] recovery_id=... id=...
+kind=...`, linking the common recovery ID to the adapter ID. `kind=0` is screen,
+`1` general audio, `2` main/alternate audio. Adapter `recovered_delivery` and
+`recovered_queue` fields contain the **raw return status (0 = success)**, not a
+boolean. `recovered_verified=1` is general audio verification only.
+
+The engine is serialized by `RT_DEV_LOCK_CRYPTO`. The configured IRQ timeout is
+20 ms. Recovery does not print keys, nonce values, plaintext or ciphertext.
 
 The RTL8195B in-place capability has been board-tested, but customer rollout
 must still start with mode `1`. Do not promote mode `2` until the target log shows no
@@ -152,7 +175,7 @@ Host regression, including an OpenSSL hardware mock:
 make host-check
 ```
 
-It checks all three modes, fragmented streaming, in-place decrypt, valid and
+It checks all four modes, fragmented streaming, in-place decrypt, valid and
 invalid tags, 4095/4096/4097-byte threshold behavior, standalone Poly1305
 boundaries, 64 KiB and multi-chunk counter continuity, and injected failures
 after a partial hardware operation. In verify
@@ -162,6 +185,20 @@ place. The temporary ciphertext copy is released by `verify`; allocation
 failure skips only the shadow comparison and leaves the software result
 authoritative. Host testing does not validate the physical RTL engine, IRQ
 wiring, DMA or cache behavior.
+
+Recovery regression with ASan/UBSan and OpenSSL reference ciphertext/tags:
+
+```bash
+make host-tx-rx-recovery-check
+make host-rx-recovery-check
+```
+
+The TX/RX test covers partial DMA writes, standalone/combined/chunked backends,
+the reported 4849-byte direct TX shape, in-place streaming, separate buffers,
+allocation failure, disabled hardware after recovery, invalid tags, and the next
+successful hardware record. Its log checker pairs failure/retry IDs and rejects
+false success logs for invalid tags. These are host fault-injection results;
+physical IRQ/DMA/cache recovery still requires testing the firmware on the board.
 
 When the repository-local toolchain is unavailable:
 

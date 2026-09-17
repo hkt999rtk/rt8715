@@ -182,9 +182,29 @@ int chacha_rtl8195b_encrypt(
   if (aad_len > 496u) return CHACHA_RTL_SKIP_AAD_LENGTH;
   ++g_mock_combined_encrypts;
   if (plaintext == ciphertext) ++g_mock_combined_inplace_encrypts;
+  if (g_mock_fail_combined_after_write) {
+    memset(ciphertext, 0xcd, plaintext_len / 2u);
+    memset(tag, 0xcd, 16u);
+    return mock_operation_error();
+  }
   return mock_encrypt(
     key, nonce, aad, aad_len, plaintext, plaintext_len, ciphertext, tag
   );
+}
+
+/* Model the audited direct sender's padded destination DMA contract. */
+int chacha_rtl8195b_encrypt_partial_padded(
+  const uint8_t key[32], const uint8_t nonce[8],
+  const void *aad, size_t aad_len, const void *plaintext, size_t len,
+  void *ciphertext, uint8_t tag[16]
+) {
+  ++g_mock_combined_encrypts;
+  if (g_mock_fail_combined_after_write) {
+    memset(ciphertext, 0xcd, (len + 15u) & ~(size_t)15u);
+    memset(tag, 0xcd, 16u);
+    return mock_operation_error();
+  }
+  return mock_encrypt(key, nonce, aad, aad_len, plaintext, len, ciphertext, tag);
 }
 
 int chacha_rtl8195b_decrypt(

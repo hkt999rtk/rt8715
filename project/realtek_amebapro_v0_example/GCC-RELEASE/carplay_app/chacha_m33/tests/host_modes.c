@@ -139,19 +139,19 @@ static int run_case(size_t len, size_t aad_len) {
     const int combined_backend =
       (len <= 65536u) && ((len & 15u) == 0u) && (aad_len <= 496u);
     if (combined_backend) {
-      if (mock_rtl_combined_inplace_encrypts() != 1u) {
+      if (mock_rtl_combined_inplace_encrypts() != (CARBOX_CHACHA_MODE == 1 ? 1u : 0u)) {
         fprintf(
           stderr,
-          "combined hardware encrypt was not in-place: "
+          "combined hardware encrypt input preservation policy mismatch: "
           "mode=%d len=%zu aad=%zu\n",
           CARBOX_CHACHA_MODE, len, aad_len
         );
         return 0;
       }
-    } else if (mock_rtl_chacha_inplace_operations() == 0u) {
+    } else if ((mock_rtl_chacha_inplace_operations() != 0u) != (CARBOX_CHACHA_MODE == 1)) {
       fprintf(
         stderr,
-        "raw hardware encrypt was not in-place: mode=%d len=%zu aad=%zu\n",
+        "raw hardware encrypt input preservation policy mismatch: mode=%d len=%zu aad=%zu\n",
         CARBOX_CHACHA_MODE, len, aad_len
       );
       return 0;
@@ -276,19 +276,19 @@ static int run_case(size_t len, size_t aad_len) {
       const int combined_backend =
         (len <= 65536u) && ((len & 15u) == 0u) && (aad_len <= 496u);
       if (combined_backend) {
-        if (mock_rtl_combined_inplace_decrypts() != 1u) {
+        if (mock_rtl_combined_inplace_decrypts() != (CARBOX_CHACHA_MODE == 1 ? 1u : 0u)) {
           fprintf(
             stderr,
-            "combined hardware decrypt was not in-place: "
+            "combined hardware decrypt input preservation policy mismatch: "
             "mode=%d len=%zu aad=%zu\n",
             CARBOX_CHACHA_MODE, len, aad_len
           );
           return 0;
         }
-      } else if (mock_rtl_chacha_inplace_operations() == 0u) {
+      } else if ((mock_rtl_chacha_inplace_operations() != 0u) != (CARBOX_CHACHA_MODE == 1)) {
         fprintf(
           stderr,
-          "raw hardware decrypt was not in-place: "
+          "raw hardware decrypt input preservation policy mismatch: "
           "mode=%d len=%zu aad=%zu\n",
           CARBOX_CHACHA_MODE, len, aad_len
         );
@@ -439,9 +439,6 @@ static int run_failure_fallbacks(void) {
   uint8_t *actual = malloc(large_len);
   size_t i;
   int32_t error;
-#if CARBOX_CHACHA_TX_USES_HARDWARE
-  static const uint8_t zero_tag[16] = {0};
-#endif
 
   if (!plain || !expected || !actual) return 0;
   for (i = 0; i < sizeof(key); ++i) key[i] = (uint8_t)(0x53u + i * 5u);
@@ -459,19 +456,11 @@ static int run_failure_fallbacks(void) {
   chacha20_poly1305_encrypt_all_64x64(
     key, nonce, aad, sizeof(aad), plain, large_len, actual, actual_tag
   );
-#if CARBOX_CHACHA_TX_USES_HARDWARE
-  if (memcmp(actual_tag, zero_tag, sizeof(actual_tag)) != 0) {
-    fprintf(stderr, "chunked encrypt HW failure did not clear tag\n");
-    return 0;
-  }
-#else
   if (memcmp(actual, expected, large_len) ||
       memcmp(actual_tag, expected_tag, sizeof(actual_tag))) {
-    fprintf(stderr, "chunked encrypt fallback failed: mode=%d\n",
-            CARBOX_CHACHA_MODE);
+    fprintf(stderr, "chunked encrypt recovery failed: mode=%d\n", CARBOX_CHACHA_MODE);
     return 0;
   }
-#endif
 
   mock_rtl_reset_stats();
   mock_rtl_fail_chacha_on(2u);
@@ -479,20 +468,11 @@ static int run_failure_fallbacks(void) {
     key, nonce, aad, sizeof(aad), expected, large_len,
     actual, expected_tag
   );
-#if CARBOX_CHACHA_RX_USES_HARDWARE
-  if (error != CHACHA_RTL_ERROR_OPERATION) {
-    fprintf(stderr,
-            "chunked decrypt HW failure was not returned: err=%d\n",
-            (int)error);
-    return 0;
-  }
-#else
   if (error || memcmp(actual, plain, large_len)) {
-    fprintf(stderr, "chunked decrypt fallback failed: mode=%d err=%d\n",
+    fprintf(stderr, "chunked decrypt recovery failed: mode=%d err=%d\n",
             CARBOX_CHACHA_MODE, (int)error);
     return 0;
   }
-#endif
 
   if (!reference_encrypt(
         key, nonce, aad, sizeof(aad), plain, standalone_len,
@@ -504,27 +484,11 @@ static int run_failure_fallbacks(void) {
     key, nonce, aad, sizeof(aad), plain, standalone_len,
     actual, actual_tag
   );
-#if CARBOX_CHACHA_TX_USES_HARDWARE
-#if CARBOX_CHACHA_NONALIGNED_SW_POLY
   if (memcmp(actual, expected, standalone_len) ||
       memcmp(actual_tag, expected_tag, sizeof(actual_tag))) {
-    fprintf(stderr, "software Poly1305 policy result mismatch\n");
+    fprintf(stderr, "Poly1305 recovery failed: mode=%d\n", CARBOX_CHACHA_MODE);
     return 0;
   }
-#else
-  if (memcmp(actual_tag, zero_tag, sizeof(actual_tag)) != 0) {
-    fprintf(stderr, "Poly1305 HW failure did not clear tag\n");
-    return 0;
-  }
-#endif
-#else
-  if (memcmp(actual, expected, standalone_len) ||
-      memcmp(actual_tag, expected_tag, sizeof(actual_tag))) {
-    fprintf(stderr, "standalone Poly1305 fallback failed: mode=%d\n",
-            CARBOX_CHACHA_MODE);
-    return 0;
-  }
-#endif
 
   free(actual);
   free(expected);

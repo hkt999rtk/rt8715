@@ -400,3 +400,16 @@ host-rx-recovery-check: | $(OUTPUT_DIR)
 		-Wl,--wrap=chacha20_poly1305_decrypt -Wl,--wrap=chacha20_poly1305_verify \
 		-Wl,--wrap=chacha20_poly1305_final -Wl,--wrap=malloc -o $(OUTPUT_DIR)/host-rx-recovery
 	$(OUTPUT_DIR)/host-rx-recovery
+
+.PHONY: host-tx-rx-recovery-check
+host-tx-rx-recovery-check: | $(OUTPUT_DIR)
+	$(HOST_CC) $(HOST_TEST_FLAGS) -g -fno-pie -no-pie -fno-builtin \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		-DCARBOX_CHACHA_MODE=2 -DCARBOX_CHACHA_HW_MIN_LEN=1024 \
+		-DCARBOX_SCREEN_TX_DIRECT_CRYPTO=1 -DCARBOX_CHACHA_STATS_INTERVAL_MS=0 \
+		-I$(RX_POLY_SOURCE_DIR) ChaCha20Poly1305.c \
+		tests/rtl_backend_openssl_mock.c tests/host_tx_rx_recovery.c -lcrypto \
+		-Wl,--wrap=malloc -o $(OUTPUT_DIR)/host-tx-rx-recovery
+	$(OUTPUT_DIR)/host-tx-rx-recovery > $(OUTPUT_DIR)/host-tx-rx-recovery.log
+	cat $(OUTPUT_DIR)/host-tx-rx-recovery.log
+	python3 tests/check_recovery_log.py $(OUTPUT_DIR)/host-tx-rx-recovery.log
