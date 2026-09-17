@@ -1880,6 +1880,9 @@ LFLAGS =
 # Keep this callable diagnostic API even before an application caller is added.
 LFLAGS += -Wl,--undefined=carbox_nor_read_uuid
 LFLAGS += -Wl,--undefined=carplay_nor_read_otp
+# Preserve cached OTP errors through both customer legacy wrappers (success=1).
+LFLAGS += -Wl,--wrap=spinor_read_otp -Wl,--wrap=CarApi_GetFlashOTP
+LFLAGS += -Wl,--undefined=__wrap_spinor_read_otp -Wl,--undefined=__wrap_CarApi_GetFlashOTP
 LFLAGS += -Wl,--undefined=led_rgb -Wl,--undefined=led_rgb_get_status
 LFLAGS += -march=armv8-m.main+dsp -mthumb -mcmse -mfloat-abi=softfp -mfpu=fpv5-sp-d16 -Os -nostartfiles -specs=nosys.specs -nodefaultlibs -nostdlib
 LFLAGS += -Wl,--gc-sections -Wl,-Map=$(BIN_DIR)/$(TARGET).map -Wl,--cref -Wl,--build-id=none -Wl,--use-blx 

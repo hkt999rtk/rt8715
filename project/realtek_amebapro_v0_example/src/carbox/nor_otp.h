@@ -23,13 +23,12 @@ extern "C" {
  * at offset <= 512 succeeds without touching hardware (NULL buffer allowed).
  * All-zero/all-FF OTP contents are valid; this API never writes/erases/locks OTP.
  *
- * Call from a normal task after system/flash initialization. Do not call from
- * an ISR, with interrupts disabled, or while already holding the flash lock.
- * Shares the SRAM transport in nor_uuid.c; uses about 512 bytes of stack for
- * staging, plus normal call overhead. SPI/dual/quad/QPI STR only, not DTR.
- * A hardware timeout triggers best-effort OTP exit/mode restoration; hardware
- * recovery and continued XIP cannot be guaranteed for a faulty controller.
- * This new API does not redirect the customer's nor_read_otp/spinor_read_otp.
+ * Reads only the immutable full-region RAM cache populated by
+ * carbox_nor_identity_cache_init() in early main(). No flash commands, locks,
+ * allocation or RTOS calls. Before initialization returns NOT_READY; a failed
+ * boot read returns the saved error without modifying the caller buffer.
+ * OTP programming after boot, if performed externally, is visible next boot.
+ * The current customer spinor_read_otp() calls this API; its ABI is unchanged.
  */
 int carplay_nor_read_otp(uint32_t offset, void *buffer, size_t length);
 

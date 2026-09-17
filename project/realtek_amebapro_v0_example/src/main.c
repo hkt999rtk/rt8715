@@ -18,6 +18,9 @@
 #include "carbox/spic_overclock.h"
 #include "carbox/system_overclock.h"
 #include "carbox/fault_dump.h"
+#include "carbox/nor_uuid.h"
+#include "carbox/nor_otp.h"
+#include "hal_spic.h"
 #if defined(CONFIG_MEMCHECK)
 #include "carbox/memcheck.h"
 #include "shell.h"
@@ -460,9 +463,44 @@ static void carbox_fatfs_dump_start(void)
 #endif
 
 
+/* Preload before filesystem/customer init and before the scheduler starts.
+ * UART is configured first so the hardware failure diagnostics remain visible. */
+static void carbox_nor_boot_cache(void)
+{
+#if CARBOX_NOR_BOOT_DIAG
+    uint8_t uid[CARBOX_NOR_UUID_SIZE], otp[CARPLAY_NOR_OTP_SIZE];
+    unsigned i, all_ff = 1, all_zero = 1;
+    int uid_ret, otp_ret;
+    rt_printf("[NORBOOT] early cache begin build=%s scheduler=not-started\r\n",
+              BOX_APP_VERSION);
+#endif
+    carbox_nor_identity_cache_init();
+#if CARBOX_NOR_BOOT_DIAG
+    uid_ret = carbox_nor_read_uuid(uid, sizeof(uid));
+    otp_ret = carplay_nor_read_otp(0, otp, sizeof(otp));
+    rt_printf("[NORCACHE] source=boot uuid_ret=%d uuid_valid=%u otp_ret=%d otp_valid=%u bytes=12/512 api=cache-only\r\n",
+              uid_ret, uid_ret == sizeof(uid), otp_ret, otp_ret == sizeof(otp));
+    if (uid_ret == sizeof(uid)) {
+        rt_printf("[NORCACHE] UID=");
+        for (i = 0; i < sizeof(uid); ++i) rt_printf("%02x", uid[i]);
+        rt_printf("\r\n");
+    }
+    if (otp_ret == sizeof(otp)) {
+        for (i = 0; i < sizeof(otp); ++i) {
+            if (otp[i] != 0xff) all_ff = 0;
+            if (otp[i] != 0) all_zero = 0;
+        }
+        rt_printf("[NORCACHE] OTP all_ff=%u all_zero=%u (contents not printed)\r\n",
+                  all_ff, all_zero);
+    }
+    rt_printf("[NORBOOT] cache complete; customer APIs do not access flash\r\n");
+#endif
+}
+
 static void car_app_start_task(void *param)
 {
 	(void)param;
+
 	do_initcalls();
 	rt_printf("do_initcalls is OK\r\n");
 #if defined(CARBOX_EXPERIMENTAL_SMART_A_LINK)
@@ -493,6 +531,7 @@ void main(void)
     hal_uart_set_baudrate(&log_uart, CARBOX_LOGUART_BAUD);
     rt_printf("[FAULT] dump install status=%d (0=enabled)\r\n",
               carbox_fault_dump_init());
+    carbox_nor_boot_cache();
     rt_printf("main build_version %s\r\n",BOX_APP_VERSION);
 	rt_printf("[CLOCK] overclock status=%d requested=%lu Hz\r\n",
 		  clock_status, (unsigned long)CONFIG_SYS_PLL_TARGET_HZ);

@@ -21,16 +21,20 @@ struct SPIC_Type {
     union { uint32_t baudr; decltype(spic_baudr_t::b) baudr_b; };
     union { uint32_t valid_cmd; decltype(spic_valid_cmd_t::b) valid_cmd_b; };
     uint32_t flush_fifo;
-    uint32_t txflr, rxflr, fbaudr, auto_length;
+    uint32_t ser;
+    uint32_t txflr, rxflr;
+    union { uint32_t fbaudr; decltype(spic_fbaudr_t::b) fbaudr_b; };
+    union { uint32_t auto_length; decltype(spic_auto_length_t::b) auto_length_b; };
     MockFifo dr_byte;
 };
 enum { SingleChnl = 0, QuadChnl = 2, TxMode = 0, RxMode = 3,
        FourBytesLength = 0, ThreeBytesLength = 3, MAX_BAUD_RATE = 10,
        SpicQuadIOMode = 4, SpicQpiMode = 6,
-       FLASH_TYPE_EON = 5 };
+       FLASH_TYPE_EON = 5, MAX_AUTO_LENGTH = 20 };
 struct hal_spic_adaptor_t {
     SPIC_Type *spic_dev;
     uint8_t flash_type, flash_id[3], dtr_en, spic_bit_mode, spic_send_cmd_mode;
+    uint8_t *dummy_cycle;
 };
 void spic_disable_rtl8195bhp(SPIC_Type *);
 void spic_enable_rtl8195bhp(SPIC_Type *);

@@ -15,20 +15,28 @@ extern "C" {
 #define CARBOX_NOR_UUID_INVALID_DATA     (-4)
 #define CARBOX_NOR_UUID_NOT_READY        (-5)
 
-/* Temporary customer bring-up diagnostics: errors only, never UID contents.
- * Set to 0 at compile time to remove capture and logging. */
+/* Hardware error diagnostics during the early boot read, no OTP payload. */
 #ifndef CARBOX_NOR_UUID_DIAG
 #define CARBOX_NOR_UUID_DIAG 1
 #endif
 
+/* Controls boot summary logging only; cache initialization is unconditional. */
+#ifndef CARBOX_NOR_BOOT_DIAG
+#define CARBOX_NOR_BOOT_DIAG 1
+#endif
+
+/* Call once in early main(), after ROM flash/RAM setup and before starting
+ * tasks, WLAN, ISP or other DMA users of flash. No RTOS, heap or flash writes.
+ * Loads the 12-byte factory UID and full 512-byte OTP into independent caches.
+ * Repeated calls are no-ops, including after failure. Internal command code
+ * runs from SRAM and restores the original interrupt/cache/SPIC state.
+ */
+void carbox_nor_identity_cache_init(void);
+
 /* EN25S64A factory UID, in wire/address order (not a 128-bit RFC UUID).
- * Call from a normal task AFTER flash/system initialization, with a writable
- * RAM buffer of at least 12 bytes. Returns 12 on success, a negative code above
- * otherwise; the output buffer is unchanged on failure. No allocation.
- * With CARBOX_NOR_UUID_DIAG, errors are logged after restoring/unlocking flash.
- * Uses the SDK flash resource lock; do not call with that lock already held.
- * Only supported STR SPI/dual/quad/QPI configurations are accepted.
- * Code must be linked into SRAM: flash is temporarily unavailable for XIP.
+ * Copies the boot cache to writable RAM of at least 12 bytes. Returns 12 on
+ * success, NOT_READY before initialization, or the saved boot-read error.
+ * Output is unchanged on failure. No flash access, locks or allocation.
  */
 int carbox_nor_read_uuid(uint8_t *uuid, size_t capacity);
 
