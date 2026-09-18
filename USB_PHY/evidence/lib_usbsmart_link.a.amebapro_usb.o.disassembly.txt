@@ -1,0 +1,292 @@
+Source archive: /home/kevin/work/rt8715/project/realtek_amebapro_v0_example/GCC-RELEASE/usb_lib/build/lib_usbsmart_link.a
+Member: amebapro_usb.o
+Member SHA-256: 9f929c44bf77543ffc521b3cf0c14cd0aa7ba3cbf031230a78c2bc941e86e182
+Tool: /home/kevin/work/toolchains/arm-none-eabi-gcc-6.4.1-realtek/asdk/linux/newlib/bin/arm-none-eabi-objdump -dr
+
+
+/tmp/usb_phy_objects_0_sxfnj9/amebapro_usb.o:     file format elf32-littlearm
+
+
+Disassembly of section .text.DWCWritePhyReg:
+
+00000000 <DWCWritePhyReg>:
+   0:	b410      	push	{r4}
+   2:	4a0e      	ldr	r2, [pc, #56]	; (3c <DWCWritePhyReg+0x3c>)
+   4:	6813      	ldr	r3, [r2, #0]
+   6:	015c      	lsls	r4, r3, #5
+   8:	d4fc      	bmi.n	4 <DWCWritePhyReg+0x4>
+   a:	0203      	lsls	r3, r0, #8
+   c:	f403 6370 	and.w	r3, r3, #3840	; 0xf00
+  10:	4c0b      	ldr	r4, [pc, #44]	; (40 <DWCWritePhyReg+0x40>)
+  12:	4a0a      	ldr	r2, [pc, #40]	; (3c <DWCWritePhyReg+0x3c>)
+  14:	f043 6323 	orr.w	r3, r3, #170917888	; 0xa300000
+  18:	6021      	str	r1, [r4, #0]
+  1a:	6013      	str	r3, [r2, #0]
+  1c:	6813      	ldr	r3, [r2, #0]
+  1e:	0119      	lsls	r1, r3, #4
+  20:	d5fc      	bpl.n	1c <DWCWritePhyReg+0x1c>
+  22:	0100      	lsls	r0, r0, #4
+  24:	f400 6070 	and.w	r0, r0, #3840	; 0xf00
+  28:	4a04      	ldr	r2, [pc, #16]	; (3c <DWCWritePhyReg+0x3c>)
+  2a:	f040 6023 	orr.w	r0, r0, #170917888	; 0xa300000
+  2e:	6010      	str	r0, [r2, #0]
+  30:	6813      	ldr	r3, [r2, #0]
+  32:	011b      	lsls	r3, r3, #4
+  34:	d5fc      	bpl.n	30 <DWCWritePhyReg+0x30>
+  36:	f85d 4b04 	ldr.w	r4, [sp], #4
+  3a:	4770      	bx	lr
+  3c:	400c0034 	.word	0x400c0034
+  40:	400f001c 	.word	0x400f001c
+
+Disassembly of section .text.usb_chip_get_cal_data:
+
+00000000 <usb_chip_get_cal_data>:
+   0:	2000      	movs	r0, #0
+   2:	4770      	bx	lr
+
+Disassembly of section .text.usb_chip_deinit:
+
+00000000 <usb_chip_deinit>:
+   0:	b510      	push	{r4, lr}
+   2:	4b10      	ldr	r3, [pc, #64]	; (44 <usb_chip_deinit+0x44>)
+   4:	2005      	movs	r0, #5
+   6:	881a      	ldrh	r2, [r3, #0]
+   8:	f36f 2208 	bfc	r2, #8, #1
+   c:	801a      	strh	r2, [r3, #0]
+   e:	881a      	ldrh	r2, [r3, #0]
+  10:	f36f 2249 	bfc	r2, #9, #1
+  14:	801a      	strh	r2, [r3, #0]
+  16:	f7ff fffe 	bl	0 <hal_delay_ms>
+			16: R_ARM_THM_CALL	hal_delay_ms
+  1a:	4b0b      	ldr	r3, [pc, #44]	; (48 <usb_chip_deinit+0x48>)
+  1c:	2000      	movs	r0, #0
+  1e:	789a      	ldrb	r2, [r3, #2]
+  20:	7819      	ldrb	r1, [r3, #0]
+  22:	78dc      	ldrb	r4, [r3, #3]
+  24:	f002 02da 	and.w	r2, r2, #218	; 0xda
+  28:	f001 01fe 	and.w	r1, r1, #254	; 0xfe
+  2c:	f042 0210 	orr.w	r2, r2, #16
+  30:	f36f 1104 	bfc	r1, #4, #1
+  34:	f044 0403 	orr.w	r4, r4, #3
+  38:	f36f 02c3 	bfc	r2, #3, #1
+  3c:	7019      	strb	r1, [r3, #0]
+  3e:	70dc      	strb	r4, [r3, #3]
+  40:	709a      	strb	r2, [r3, #2]
+  42:	bd10      	pop	{r4, pc}
+  44:	400f0004 	.word	0x400f0004
+  48:	40000244 	.word	0x40000244
+
+Disassembly of section .text.DWCReadPhyReg.constprop.0:
+
+00000000 <DWCReadPhyReg.constprop.0>:
+   0:	b510      	push	{r4, lr}
+   2:	b0c0      	sub	sp, #256	; 0x100
+   4:	4b2c      	ldr	r3, [pc, #176]	; (b8 <DWCReadPhyReg.constprop.0+0xb8>)
+   6:	4668      	mov	r0, sp
+   8:	4a2c      	ldr	r2, [pc, #176]	; (bc <DWCReadPhyReg.constprop.0+0xbc>)
+   a:	f44f 7180 	mov.w	r1, #256	; 0x100
+   e:	f7ff fffe 	bl	0 <snprintf>
+			e: R_ARM_THM_CALL	snprintf
+  12:	1e43      	subs	r3, r0, #1
+  14:	2bfe      	cmp	r3, #254	; 0xfe
+  16:	d93f      	bls.n	98 <DWCReadPhyReg.constprop.0+0x98>
+  18:	4669      	mov	r1, sp
+  1a:	4829      	ldr	r0, [pc, #164]	; (c0 <DWCReadPhyReg.constprop.0+0xc0>)
+  1c:	f7ff fffe 	bl	0 <printf>
+			1c: R_ARM_THM_CALL	printf
+  20:	4928      	ldr	r1, [pc, #160]	; (c4 <DWCReadPhyReg.constprop.0+0xc4>)
+  22:	680b      	ldr	r3, [r1, #0]
+  24:	0158      	lsls	r0, r3, #5
+  26:	d506      	bpl.n	36 <DWCReadPhyReg.constprop.0+0x36>
+  28:	4b27      	ldr	r3, [pc, #156]	; (c8 <DWCReadPhyReg.constprop.0+0xc8>)
+  2a:	e001      	b.n	30 <DWCReadPhyReg.constprop.0+0x30>
+  2c:	3b01      	subs	r3, #1
+  2e:	d030      	beq.n	92 <DWCReadPhyReg.constprop.0+0x92>
+  30:	680a      	ldr	r2, [r1, #0]
+  32:	0152      	lsls	r2, r2, #5
+  34:	d4fa      	bmi.n	2c <DWCReadPhyReg.constprop.0+0x2c>
+  36:	4923      	ldr	r1, [pc, #140]	; (c4 <DWCReadPhyReg.constprop.0+0xc4>)
+  38:	4b24      	ldr	r3, [pc, #144]	; (cc <DWCReadPhyReg.constprop.0+0xcc>)
+  3a:	600b      	str	r3, [r1, #0]
+  3c:	680b      	ldr	r3, [r1, #0]
+  3e:	011b      	lsls	r3, r3, #4
+  40:	d406      	bmi.n	50 <DWCReadPhyReg.constprop.0+0x50>
+  42:	4b21      	ldr	r3, [pc, #132]	; (c8 <DWCReadPhyReg.constprop.0+0xc8>)
+  44:	e001      	b.n	4a <DWCReadPhyReg.constprop.0+0x4a>
+  46:	3b01      	subs	r3, #1
+  48:	d023      	beq.n	92 <DWCReadPhyReg.constprop.0+0x92>
+  4a:	680a      	ldr	r2, [r1, #0]
+  4c:	0114      	lsls	r4, r2, #4
+  4e:	d5fa      	bpl.n	46 <DWCReadPhyReg.constprop.0+0x46>
+  50:	491c      	ldr	r1, [pc, #112]	; (c4 <DWCReadPhyReg.constprop.0+0xc4>)
+  52:	4b1f      	ldr	r3, [pc, #124]	; (d0 <DWCReadPhyReg.constprop.0+0xd0>)
+  54:	600b      	str	r3, [r1, #0]
+  56:	680b      	ldr	r3, [r1, #0]
+  58:	0118      	lsls	r0, r3, #4
+  5a:	d406      	bmi.n	6a <DWCReadPhyReg.constprop.0+0x6a>
+  5c:	4b1a      	ldr	r3, [pc, #104]	; (c8 <DWCReadPhyReg.constprop.0+0xc8>)
+  5e:	e001      	b.n	64 <DWCReadPhyReg.constprop.0+0x64>
+  60:	3b01      	subs	r3, #1
+  62:	d016      	beq.n	92 <DWCReadPhyReg.constprop.0+0x92>
+  64:	680a      	ldr	r2, [r1, #0]
+  66:	0112      	lsls	r2, r2, #4
+  68:	d5fa      	bpl.n	60 <DWCReadPhyReg.constprop.0+0x60>
+  6a:	4c16      	ldr	r4, [pc, #88]	; (c4 <DWCReadPhyReg.constprop.0+0xc4>)
+  6c:	4b12      	ldr	r3, [pc, #72]	; (b8 <DWCReadPhyReg.constprop.0+0xb8>)
+  6e:	4a13      	ldr	r2, [pc, #76]	; (bc <DWCReadPhyReg.constprop.0+0xbc>)
+  70:	f44f 7180 	mov.w	r1, #256	; 0x100
+  74:	4668      	mov	r0, sp
+  76:	6824      	ldr	r4, [r4, #0]
+  78:	f7ff fffe 	bl	0 <snprintf>
+			78: R_ARM_THM_CALL	snprintf
+  7c:	1e43      	subs	r3, r0, #1
+  7e:	2bfe      	cmp	r3, #254	; 0xfe
+  80:	b2e4      	uxtb	r4, r4
+  82:	d911      	bls.n	a8 <DWCReadPhyReg.constprop.0+0xa8>
+  84:	4669      	mov	r1, sp
+  86:	480e      	ldr	r0, [pc, #56]	; (c0 <DWCReadPhyReg.constprop.0+0xc0>)
+  88:	f7ff fffe 	bl	0 <printf>
+			88: R_ARM_THM_CALL	printf
+  8c:	4620      	mov	r0, r4
+  8e:	b040      	add	sp, #256	; 0x100
+  90:	bd10      	pop	{r4, pc}
+  92:	20ff      	movs	r0, #255	; 0xff
+  94:	b040      	add	sp, #256	; 0x100
+  96:	bd10      	pop	{r4, pc}
+  98:	f5c0 7180 	rsb	r1, r0, #256	; 0x100
+  9c:	23d4      	movs	r3, #212	; 0xd4
+  9e:	4a0d      	ldr	r2, [pc, #52]	; (d4 <DWCReadPhyReg.constprop.0+0xd4>)
+  a0:	4468      	add	r0, sp
+  a2:	f7ff fffe 	bl	0 <snprintf>
+			a2: R_ARM_THM_CALL	snprintf
+  a6:	e7b7      	b.n	18 <DWCReadPhyReg.constprop.0+0x18>
+  a8:	f5c0 7180 	rsb	r1, r0, #256	; 0x100
+  ac:	4623      	mov	r3, r4
+  ae:	4a0a      	ldr	r2, [pc, #40]	; (d8 <DWCReadPhyReg.constprop.0+0xd8>)
+  b0:	4468      	add	r0, sp
+  b2:	f7ff fffe 	bl	0 <snprintf>
+			b2: R_ARM_THM_CALL	snprintf
+  b6:	e7e5      	b.n	ffffffce <DWCWritePhyReg+0xffffffce>
+  b8:	00000000 	.word	0x00000000
+			b8: R_ARM_ABS32	.rodata.DWCReadPhyReg.constprop.0.str1.4
+  bc:	00000004 	.word	0x00000004
+			bc: R_ARM_ABS32	.rodata.DWCReadPhyReg.constprop.0.str1.4
+  c0:	00000030 	.word	0x00000030
+			c0: R_ARM_ABS32	.rodata.DWCReadPhyReg.constprop.0.str1.4
+  c4:	400c0034 	.word	0x400c0034
+  c8:	000fffff 	.word	0x000fffff
+  cc:	0a300400 	.word	0x0a300400
+  d0:	0a300d00 	.word	0x0a300d00
+  d4:	0000000c 	.word	0x0000000c
+			d4: R_ARM_ABS32	.rodata.DWCReadPhyReg.constprop.0.str1.4
+  d8:	00000034 	.word	0x00000034
+			d8: R_ARM_ABS32	.rodata.DWCReadPhyReg.constprop.0.str1.4
+
+Disassembly of section .text.usb_chip_init:
+
+00000000 <usb_chip_init>:
+   0:	b538      	push	{r3, r4, r5, lr}
+   2:	4d34      	ldr	r5, [pc, #208]	; (d4 <usb_chip_init+0xd4>)
+   4:	f44f 70fa 	mov.w	r0, #500	; 0x1f4
+   8:	78ab      	ldrb	r3, [r5, #2]
+   a:	4c33      	ldr	r4, [pc, #204]	; (d8 <usb_chip_init+0xd8>)
+   c:	f043 0308 	orr.w	r3, r3, #8
+  10:	70ab      	strb	r3, [r5, #2]
+  12:	f7ff fffe 	bl	0 <hal_delay_us>
+			12: R_ARM_THM_CALL	hal_delay_us
+  16:	78ab      	ldrb	r3, [r5, #2]
+  18:	f44f 707a 	mov.w	r0, #1000	; 0x3e8
+  1c:	f36f 1304 	bfc	r3, #4, #1
+  20:	70ab      	strb	r3, [r5, #2]
+  22:	f7ff fffe 	bl	0 <hal_delay_us>
+			22: R_ARM_THM_CALL	hal_delay_us
+  26:	78ab      	ldrb	r3, [r5, #2]
+  28:	2064      	movs	r0, #100	; 0x64
+  2a:	f043 0304 	orr.w	r3, r3, #4
+  2e:	70ab      	strb	r3, [r5, #2]
+  30:	f7ff fffe 	bl	0 <hal_delay_us>
+			30: R_ARM_THM_CALL	hal_delay_us
+  34:	78eb      	ldrb	r3, [r5, #3]
+  36:	78aa      	ldrb	r2, [r5, #2]
+  38:	f003 03fe 	and.w	r3, r3, #254	; 0xfe
+  3c:	f042 0221 	orr.w	r2, r2, #33	; 0x21
+  40:	f36f 0341 	bfc	r3, #1, #1
+  44:	70aa      	strb	r2, [r5, #2]
+  46:	70eb      	strb	r3, [r5, #3]
+  48:	2001      	movs	r0, #1
+  4a:	f7ff fffe 	bl	0 <hal_delay_us>
+			4a: R_ARM_THM_CALL	hal_delay_us
+  4e:	782b      	ldrb	r3, [r5, #0]
+  50:	20c8      	movs	r0, #200	; 0xc8
+  52:	f043 0311 	orr.w	r3, r3, #17
+  56:	702b      	strb	r3, [r5, #0]
+  58:	f7ff fffe 	bl	0 <hal_delay_us>
+			58: R_ARM_THM_CALL	hal_delay_us
+  5c:	8823      	ldrh	r3, [r4, #0]
+  5e:	20c8      	movs	r0, #200	; 0xc8
+  60:	f443 7300 	orr.w	r3, r3, #512	; 0x200
+  64:	8023      	strh	r3, [r4, #0]
+  66:	f7ff fffe 	bl	0 <hal_delay_us>
+			66: R_ARM_THM_CALL	hal_delay_us
+  6a:	4622      	mov	r2, r4
+  6c:	6813      	ldr	r3, [r2, #0]
+  6e:	069b      	lsls	r3, r3, #26
+  70:	d5fc      	bpl.n	6c <usb_chip_init+0x6c>
+  72:	8813      	ldrh	r3, [r2, #0]
+  74:	f443 7380 	orr.w	r3, r3, #256	; 0x100
+  78:	8013      	strh	r3, [r2, #0]
+  7a:	f7ff fffe 	bl	0 <usb_chip_init>
+			7a: R_ARM_THM_CALL	DWCReadPhyReg.constprop.0
+  7e:	f000 019f 	and.w	r1, r0, #159	; 0x9f
+  82:	20f4      	movs	r0, #244	; 0xf4
+  84:	f7ff fffe 	bl	0 <usb_chip_init>
+			84: R_ARM_THM_CALL	DWCWritePhyReg
+  88:	216c      	movs	r1, #108	; 0x6c
+  8a:	20e0      	movs	r0, #224	; 0xe0
+  8c:	f7ff fffe 	bl	0 <usb_chip_init>
+			8c: R_ARM_THM_CALL	DWCWritePhyReg
+  90:	2181      	movs	r1, #129	; 0x81
+  92:	20e1      	movs	r0, #225	; 0xe1
+  94:	f7ff fffe 	bl	0 <usb_chip_init>
+			94: R_ARM_THM_CALL	DWCWritePhyReg
+  98:	2162      	movs	r1, #98	; 0x62
+  9a:	20e2      	movs	r0, #226	; 0xe2
+  9c:	f7ff fffe 	bl	0 <usb_chip_init>
+			9c: R_ARM_THM_CALL	DWCWritePhyReg
+  a0:	2141      	movs	r1, #65	; 0x41
+  a2:	20e7      	movs	r0, #231	; 0xe7
+  a4:	f7ff fffe 	bl	0 <usb_chip_init>
+			a4: R_ARM_THM_CALL	DWCWritePhyReg
+  a8:	f7ff fffe 	bl	0 <usb_chip_init>
+			a8: R_ARM_THM_CALL	DWCReadPhyReg.constprop.0
+  ac:	f000 019f 	and.w	r1, r0, #159	; 0x9f
+  b0:	f041 0120 	orr.w	r1, r1, #32
+  b4:	20f4      	movs	r0, #244	; 0xf4
+  b6:	f7ff fffe 	bl	0 <usb_chip_init>
+			b6: R_ARM_THM_CALL	DWCWritePhyReg
+  ba:	2191      	movs	r1, #145	; 0x91
+  bc:	20e0      	movs	r0, #224	; 0xe0
+  be:	f7ff fffe 	bl	0 <usb_chip_init>
+			be: R_ARM_THM_CALL	DWCWritePhyReg
+  c2:	f7ff fffe 	bl	0 <usb_chip_init>
+			c2: R_ARM_THM_CALL	DWCReadPhyReg.constprop.0
+  c6:	f000 019f 	and.w	r1, r0, #159	; 0x9f
+  ca:	20f4      	movs	r0, #244	; 0xf4
+  cc:	f7ff fffe 	bl	0 <usb_chip_init>
+			cc: R_ARM_THM_CALL	DWCWritePhyReg
+  d0:	2000      	movs	r0, #0
+  d2:	bd38      	pop	{r3, r4, r5, pc}
+  d4:	40000244 	.word	0x40000244
+  d8:	400f0004 	.word	0x400f0004
+
+Disassembly of section .text.usb_otg_select_mode:
+
+00000000 <usb_otg_select_mode>:
+   0:	4770      	bx	lr
+   2:	bf00      	nop
+
+Disassembly of section .text.usb_otg_uphy_init:
+
+00000000 <usb_otg_uphy_init>:
+   0:	2000      	movs	r0, #0
+   2:	4770      	bx	lr

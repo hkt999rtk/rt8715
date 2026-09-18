@@ -1,0 +1,115 @@
+Title: NXP-authored Linux patch: Cadence Salvo disconnect threshold
+Source: https://lkml.indiana.edu/hypermail/linux/kernel/2305.2/00920.html
+Retrieved: 2026-09-18T09:44:55.487751+00:00
+Note: Automatically extracted searchable text. Original document is authoritative for tables and diagrams.
+
+[PATCH v4 5/6] phy: cadence: salvo: Add cdns,usb2-disconnect-threshold-microvolt property
+From:
+Frank Li
+Date:
+Tue May 16 2023 - 11:45:10 EST
+Next message:
+Vladimir Oltean: "[PATCH net] net: pcs: xpcs: fix C73 AN not getting enabled"
+Previous message:
+Frank Li: "[PATCH v4 4/6] phy: cadence: salvo: add .set_mode API"
+In reply to:
+Vinod Koul: "Re: [PATCH v4 4/6] phy: cadence: salvo: add .set_mode API"
+Next in thread:
+Frank Li: "[PATCH v4 6/6] dt-bindings: phy: cdns,salvo: add property cdns,usb2-disconnect-threshold-microvolt"
+Messages sorted by:
+[ date ]
+[ thread ]
+[ subject ]
+[ author ]
+Add cdns,usb2-disconnect-threshold-microvolt property to address fake USB
+disconnection issue during enumeration or suspend state for difference
+platform.
+Signed-off-by: Frank Li <Frank.Li@xxxxxxx>
+---
+drivers/phy/cadence/phy-cadence-salvo.c | 29 +++++++++++++++++++++++++
+1 file changed, 29 insertions(+)
+diff --git a/drivers/phy/cadence/phy-cadence-salvo.c b/drivers/phy/cadence/phy-cadence-salvo.c
+index 41616f786321..881e122f93c2 100644
+--- a/drivers/phy/cadence/phy-cadence-salvo.c
++++ b/drivers/phy/cadence/phy-cadence-salvo.c
+@@ -6,6 +6,7 @@
+* Copyright (c) 2019-2020 NXP
+*/
++#include <linux/bitfield.h>
+#include <linux/clk.h>
+#include <linux/io.h>
+#include <linux/module.h>
+@@ -91,9 +92,19 @@
+/* USB2 PHY register definition */
+#define UTMI_REG15				0xaf
++#define UTMI_AFE_RX_REG0			0x0d
+#define UTMI_AFE_RX_REG5			0x12
+#define UTMI_AFE_BC_REG4			0x29
++/* Align UTMI_AFE_RX_REG0 bit[7:6] define */
++enum usb2_disconn_threshold {
++	USB2_DISCONN_THRESHOLD_575 = 0x0,
++	USB2_DISCONN_THRESHOLD_610 = 0x1,
++	USB2_DISCONN_THRESHOLD_645 = 0x3,
++};
++
++#define RX_USB2_DISCONN_MASK			GENMASK(7, 6)
++
+/* TB_ADDR_TX_RCVDETSC_CTRL */
+#define RXDET_IN_P3_32KHZ			BIT(0)
+/*
+@@ -125,6 +136,7 @@ struct cdns_salvo_phy {
+struct clk *clk;
+void __iomem *base;
+struct cdns_salvo_data *data;
++	enum usb2_disconn_threshold usb2_disconn;
+};
+static const struct of_device_id cdns_salvo_phy_of_match[];
+@@ -261,6 +273,12 @@ static int cdns_salvo_phy_init(struct phy *phy)
+cdns_salvo_write(salvo_phy, USB2_PHY_OFFSET, UTMI_AFE_RX_REG5,
+0x5);
++
++	value = cdns_salvo_read(salvo_phy, USB2_PHY_OFFSET, UTMI_AFE_RX_REG0);
++	value &= ~RX_USB2_DISCONN_MASK;
++	value = FIELD_PREP(RX_USB2_DISCONN_MASK, salvo_phy->usb2_disconn);
++	cdns_salvo_write(salvo_phy, USB2_PHY_OFFSET, UTMI_AFE_RX_REG0, value);
++
+udelay(10);
+clk_disable_unprepare(salvo_phy->clk);
+@@ -315,6 +333,7 @@ static int cdns_salvo_phy_probe(struct platform_device *pdev)
+struct device *dev = &pdev->dev;
+struct cdns_salvo_phy *salvo_phy;
+struct cdns_salvo_data *data;
++	u32 val;
+data = (struct cdns_salvo_data *)of_device_get_match_data(dev);
+salvo_phy = devm_kzalloc(dev, sizeof(*salvo_phy), GFP_KERNEL);
+@@ -326,6 +345,16 @@ static int cdns_salvo_phy_probe(struct platform_device *pdev)
+if (IS_ERR(salvo_phy->clk))
+return PTR_ERR(salvo_phy->clk);
++	if (of_property_read_u32(dev->of_node, "cdns,usb2-disconnect-threshold-microvolt", &val))
++		val = 575;
++
++	if (val < 610)
++		salvo_phy->usb2_disconn = USB2_DISCONN_THRESHOLD_575;
++	else if (val < 645)
++		salvo_phy->usb2_disconn = USB2_DISCONN_THRESHOLD_610;
++	else
++		salvo_phy->usb2_disconn = USB2_DISCONN_THRESHOLD_645;
++
+salvo_phy->base = devm_platform_ioremap_resource(pdev, 0);
+if (IS_ERR(salvo_phy->base))
+return PTR_ERR(salvo_phy->base);
+--
+2.34.1
+Next message:
+Vladimir Oltean: "[PATCH net] net: pcs: xpcs: fix C73 AN not getting enabled"
+Previous message:
+Frank Li: "[PATCH v4 4/6] phy: cadence: salvo: add .set_mode API"
+In reply to:
+Vinod Koul: "Re: [PATCH v4 4/6] phy: cadence: salvo: add .set_mode API"
+Next in thread:
+Frank Li: "[PATCH v4 6/6] dt-bindings: phy: cdns,salvo: add property cdns,usb2-disconnect-threshold-microvolt"
+Messages sorted by:
+[ date ]
+[ thread ]
+[ subject ]
+[ author ]

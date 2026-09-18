@@ -83,13 +83,12 @@ static void fault_reason(uint32_t status)
 	fault_text("\r\n");
 }
 
-static void fault_stack_words(uint32_t sp)
+static void fault_memory_words(uint32_t sp, unsigned count)
 {
 	unsigned i, j;
-	fault_text("[FAULT] stack words (raw data, not an unwound backtrace):\r\n");
-	for (i = 0; i < 64U; i += 4U) {
+	for (i = 0; i < count; i += 4U) {
 		if (!carbox_fault_ram(sp, 16U)) {
-			fault_text("[FAULT] stack stopped at RAM boundary\r\n");
+			fault_text("[FAULT] memory dump stopped at RAM boundary\r\n");
 			break;
 		}
 		fault_hex(sp);
@@ -101,6 +100,23 @@ static void fault_stack_words(uint32_t sp)
 		fault_text("\r\n");
 		sp += 16U;
 	}
+}
+
+static void fault_code_words(const char *label, uint32_t pc)
+{
+	uint32_t start = pc & ~3U;
+	fault_text("[FAULT] "); fault_text(label); fault_hex(pc);
+	fault_text(" code words (data-side view; caches unchanged):\r\n");
+	/* No reads of ROM, XIP flash, peripherals or an invalid branch target.
+	 * Do not invalidate/clean caches here: preserve evidence and avoid flushing
+	 * dirty memory after a fault. A data read cannot prove I-cache contents. */
+	if (!carbox_fault_ram(start, 4U)) {
+		fault_text("[FAULT] code unavailable: address outside mapped RAM\r\n");
+		return;
+	}
+	if (start >= 16U && carbox_fault_ram(start - 16U, 16U))
+		start -= 16U;
+	fault_memory_words(start, 16U);
 }
 
 __attribute__((used, noreturn, noinline))
@@ -133,6 +149,9 @@ static void fault_dump_run(void)
 	if (cfsr & (1U << 7)) fault_field("mmfar=", SCB->MMFAR);
 	if (cfsr & (1U << 15)) fault_field("bfar=", SCB->BFAR);
 	fault_reason(cfsr);
+	fault_text("[FAULT] "); fault_field("ccr=", SCB->CCR);
+	fault_field("cpacr=", SCB->CPACR);
+	fault_text("\r\n");
 	fault_text("[FAULT] ");
 	fault_field("exc_return=", exc); fault_field("control=", fault_capture.control);
 	fault_field("primask=", fault_capture.primask);
@@ -171,7 +190,10 @@ static void fault_dump_run(void)
 		fault_field("pre_exception_sp=", sp + ((exc & 16U) ? 32U : 104U) +
 			((words[7] & (1U << 9)) ? 4U : 0U));
 		fault_text("\r\n");
-		fault_stack_words(sp);
+		fault_code_words("pc=", words[6]);
+		fault_code_words("lr=", words[5]);
+		fault_text("[FAULT] stack words (raw data, not an unwound backtrace):\r\n");
+		fault_memory_words(sp, 64U);
 	} else {
 		fault_text("[FAULT] frame unavailable: stacking fault, invalid SP/limit, "
 			   "or unsupported EXC_RETURN/additional-state frame\r\n");

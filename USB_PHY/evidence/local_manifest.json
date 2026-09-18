@@ -1,0 +1,67 @@
+{
+  "collected_at_utc": "2026-09-18T09:45:49.701659+00:00",
+  "repo": "/home/kevin/work/rt8715",
+  "reference_repo": "/home/kevin/work/carbox_smart.orig",
+  "toolchain_prefix": "/home/kevin/work/toolchains/arm-none-eabi-gcc-6.4.1-realtek/asdk/linux/newlib/bin/arm-none-eabi-",
+  "files": [
+    {
+      "path": "smart_ameba_usb.original.c",
+      "source": "/home/kevin/work/carbox_smart.orig/component/soc/amebasmart/fwlib/ram_common/ameba_usb.c",
+      "bytes": 6517,
+      "sha256": "61b5b90328f58f5a55256e5bc3d13edad64ca6aec993cf965594db03f1df140a"
+    },
+    {
+      "path": "smart_ameba_usb.h",
+      "source": "/home/kevin/work/carbox_smart.orig/component/soc/amebasmart/fwlib/include/ameba_usb.h",
+      "bytes": 2572,
+      "sha256": "ed3921de97d459a55ed342c64208daa9366c5326cd0f2594ef6a3b9cc5ae2e24"
+    },
+    {
+      "path": "rtl8195b_dwc_otg_regs.h",
+      "source": "/home/kevin/work/rt8715/component/soc/realtek/8195b/fwlib/hal-rtl8195b-hp/lib/include/usb_otg/dwc_otg_regs.h",
+      "bytes": 77890,
+      "sha256": "700e8d7b08d455defb46375d26009d8f4a3c2b7b6322c84cceb02e522c73a82a"
+    },
+    {
+      "source": "/home/kevin/work/rt8715/project/realtek_amebapro_v0_example/GCC-RELEASE/usb_lib/build/lib_usbsmart.a",
+      "bytes": 509246,
+      "sha256": "4bbd66ba3b919c25756eaffc9db636fb7520496b54122315b988d10ed44e1d83",
+      "members": [
+        {
+          "member": "amebapro_usb.o",
+          "sha256": "9f929c44bf77543ffc521b3cf0c14cd0aa7ba3cbf031230a78c2bc941e86e182",
+          "bytes": 3172,
+          "disassembly": "lib_usbsmart.a.amebapro_usb.o.disassembly.txt"
+        },
+        {
+          "member": "usb_hal.o",
+          "sha256": "78115aac221e0a156211c4b07e1e553d1c08763fc3caa0aa8d7fcc981f2067ab",
+          "bytes": 8812,
+          "disassembly": "lib_usbsmart.a.usb_hal.o.disassembly.txt"
+        }
+      ]
+    },
+    {
+      "source": "/home/kevin/work/rt8715/project/realtek_amebapro_v0_example/GCC-RELEASE/usb_lib/build/lib_usbsmart_link.a",
+      "bytes": 497882,
+      "sha256": "6f29648dfb2ec6c04ece7f22092ea387b67eabc0af35bec504a3b70b29cf8032",
+      "members": [
+        {
+          "member": "amebapro_usb.o",
+          "sha256": "9f929c44bf77543ffc521b3cf0c14cd0aa7ba3cbf031230a78c2bc941e86e182",
+          "bytes": 3172,
+          "disassembly": "lib_usbsmart_link.a.amebapro_usb.o.disassembly.txt"
+        },
+        {
+          "member": "usb_hal.o",
+          "sha256": "78115aac221e0a156211c4b07e1e553d1c08763fc3caa0aa8d7fcc981f2067ab",
+          "bytes": 8812,
+          "disassembly": "lib_usbsmart_link.a.usb_hal.o.disassembly.txt"
+        }
+      ]
+    }
+  ],
+  "repo_head": "16b42a59d3816dd3cc2306bc2dc2fa726937bb5e",
+  "reference_head": "15682fc26fc7cf2f38f4072a8b7a844e5322a063",
+  "reference_file_dirty": false
+}

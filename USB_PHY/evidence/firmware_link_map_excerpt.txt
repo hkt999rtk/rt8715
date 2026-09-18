@@ -1,0 +1,82 @@
+Source: /home/kevin/work/rt8715/project/realtek_amebapro_v0_example/GCC-RELEASE/application_is/Debug/bin/application_is.map
+SHA-256: 33b195a12b22bd77139dd3f1f0dc636f3f476da2be814417db8fac906d1dcd44
+
+8:                               (--whole-archive)
+9: usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+10:                               (--whole-archive)
+11: usb_lib/build/lib_usbsmart_link.a(usbd.o)
+11484:                 0x0000000000000000        0x4 usb_lib/build/lib_usbsmart_link.a(usb_os.o)
+11485:  .text          0x0000000000000000        0x0 usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+11486:  .data          0x0000000000000000        0x0 usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+11487:  .bss           0x0000000000000000        0x0 usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+11488:  .text.usb_otg_select_mode
+11489:                 0x0000000000000000        0x4 usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+11490:  .text.usb_otg_uphy_init
+11491:                 0x0000000000000000        0x4 usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+11492:  .text          0x0000000000000000        0x0 usb_lib/build/lib_usbsmart_link.a(usbd.o)
+11493:  .data          0x0000000000000000        0x0 usb_lib/build/lib_usbsmart_link.a(usbd.o)
+36873:                 0x000000007006e14c                usb_hal_enable_otg
+36874:  .text.usb_hal_calibrate
+36875:                 0x000000007006e21c       0x4c usb_lib/build/lib_usbsmart_link.a(usb_hal.o)
+36876:                 0x000000007006e21c                usb_hal_calibrate
+36877:  *lib_usbsmart*.a:usb_os.o(.text*)
+36878:  .text.usb_os_memset
+36929:  *lib_usbsmart*.a:*(.text*)
+36930:  .text.DWCWritePhyReg
+36931:                 0x000000007006e3d8       0x44 usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+36932:  .text.usb_chip_get_cal_data
+36933:                 0x000000007006e41c        0x4 usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+36934:  .text.usb_chip_deinit
+36935:                 0x000000007006e420       0x4c usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+36936:  .text.DWCReadPhyReg.constprop.0
+36937:                 0x000000007006e46c       0xdc usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+36938:  .text.usb_chip_init
+36939:                 0x000000007006e548       0xdc usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+36940:  .text.usbd_init
+36941:                 0x000000007006e624       0x68 usb_lib/build/lib_usbsmart_link.a(usbd.o)
+57233:  *lib_usbsmart*.a:*(.rodata*)
+57234:  .rodata.DWCReadPhyReg.constprop.0.str1.4
+57235:                 0x0000000070249834       0x44 usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+57236:                                          0x54 (size before relaxing)
+57237:  .rodata.usbd_deinit.str1.4
+66034:  .data.usb_hal_driver
+66035:                 0x000000002010e694        0xc usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+66036:                 0x000000002010e694                usb_hal_driver
+66037:  .data.__compound_literal.0
+72457:  .comment       0x000000000000006a       0x35 usb_lib/build/lib_usbsmart_link.a(usb_os.o)
+72458:  .comment       0x000000000000006a       0x35 usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+72459:  .comment       0x000000000000006a       0x35 usb_lib/build/lib_usbsmart_link.a(usbd.o)
+72460:  .comment       0x000000000000006a       0x35 usb_lib/build/lib_usbsmart_link.a(usbd_core.o)
+73570:  .ARM.attributes
+73571:                 0x00000000000027d0       0x3a usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+73572:  .ARM.attributes
+73573:                 0x000000000000280a       0x3a usb_lib/build/lib_usbsmart_link.a(usbd.o)
+87271:                                                   usb_lib/build/lib_usbsmart_link.a(usbd.o)
+87272:                                                   usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+87273:                                                   usb_lib/build/lib_usbsmart_link.a(usb_os.o)
+87274:                                                   usb_lib/build/lib_usbsmart_link.a(usb_hal.o)
+87545:                                                   usb_lib/build/lib_usbsmart_link.a(usbd.o)
+87546:                                                   usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+87547:                                                   usb_lib/build/lib_usbsmart_link.a(usb_os.o)
+87548:                                                   usb_lib/build/lib_usbsmart_link.a(usb_hal.o)
+92099: hal_delay_ms                                      application_is/Debug/obj/usb_ref_smart_compat.o
+92100:                                                   usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+92101: hal_delay_us                                      application_is/Debug/obj/hal_timer.o
+92102:                                                   ../../../component/common/drivers/wlan/realtek/wlan_rx_gdma/build/lib_wlan_zero_copy.a(axi_intf.o)
+92107:                                                   ../../../component/soc/realtek/8195b/misc/bsp/lib/common/GCC//lib_sdcard.a(rtl8195bhp_sdio_host.o)
+92108:                                                   usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+92109:                                                   ../../../component/soc/realtek/8195b/fwlib/hal-rtl8195b-hp/lib/lib/hal_pmc_hs.a(hal_power_mode.o)
+92110:                                                   application_is/Debug/obj/libusb_ref_compat_os.o
+106752: usb_dev_write                                     usb_lib/build/lib_usbsmart_link.a(usbdev.o)
+106753: usb_hal_calibrate                                 usb_lib/build/lib_usbsmart_link.a(usb_hal.o)
+106754:                                                   usb_lib/build/lib_usbsmart_link.a(usbh_hcd.o)
+106755:                                                   usb_lib/build/lib_usbsmart_link.a(usbd_pcd.o)
+106769:                                                   usb_lib/build/lib_usbsmart_link.a(usb_os.o)
+106770: usb_hal_driver                                    usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+106771:                                                   usb_lib/build/lib_usbsmart_link.a(usbh_hcd.o)
+106772:                                                   usb_lib/build/lib_usbsmart_link.a(usbd_pcd.o)
+106971:                                                   usb_lib/build/lib_usbsmart_link.a(ota_httpd.o)
+106972: usb_otg_select_mode                               usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+106973: usb_otg_uphy_init                                 usb_lib/build/lib_usbsmart_link.a(amebapro_usb.o)
+106974: usb_screen_probe_snapshot                         application_is/Debug/obj/usb_hcd_profiler.o
+106975: usb_tx_lifetime_ncm_begin                         application_is/Debug/obj/usb_hcd_profiler.o

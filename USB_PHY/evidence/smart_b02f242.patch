@@ -1,0 +1,18 @@
+commit b02f2423c38d3a41bdbd7f81eeeafac4d2e120f3
+Author: sukn <sukn@foxmail.com>
+Date:   Sat Mar 21 14:42:10 2026 +0800
+
+    修改usb rx阈值和大海最新的库
+
+diff --git a/component/soc/amebasmart/fwlib/ram_common/ameba_usb.c b/component/soc/amebasmart/fwlib/ram_common/ameba_usb.c
+index 0386bcc..e531eca 100644
+--- a/component/soc/amebasmart/fwlib/ram_common/ameba_usb.c
++++ b/component/soc/amebasmart/fwlib/ram_common/ameba_usb.c
+@@ -37,6 +37,7 @@ static const usb_cal_data_t usb_cal_data[] = {
+ 	{0x00, 0xE1, 0x19},
+ 	{0x00, 0xE2, 0xDB},
+ 	{0x00, 0xE4, 0x68},
++	{0x00, 0xE6, 0x90},// new config
+ 	{0x00, 0xF0, 0xAC},//添加DISCONNET 触发阈值  地线干扰
+ 	{0x01, 0xE5, 0x0A},
+ 	{0x01, 0xE6, 0xD8},

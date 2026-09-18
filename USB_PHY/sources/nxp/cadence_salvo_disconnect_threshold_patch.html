@@ -1,0 +1,171 @@
+<!-- MHonArc v2.6.19 -->
+<!--X-Subject: [PATCH v4 5/6] phy: cadence: salvo: Add cdns,usb2&#45;disconnect&#45;threshold&#45;microvolt property -->
+<!--X-From-R13: Tenax Zv &#60;Tenax.ZvNakc.pbz> -->
+<!--X-Date: Tue, 16 May 2023 11:45:10 &#45;0400 (EDT) -->
+<!--X-Message-Id: 20230516154329.3155031&#45;6&#45;Frank.Li@nxp.com -->
+<!--X-Content-Type: text/plain -->
+<!--X-Reference: 20230516154329.3155031&#45;1&#45;Frank.Li@nxp.com -->
+<!--X-Head-End-->
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN"
+                      "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html lang=en>
+<head>
+<meta HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=iso-8859-2">
+<title>Linux-Kernel Archive: [PATCH v4 5/6] phy: cadence: salvo: Add cdns,usb2-disconnect-threshold-microvolt property</title>
+<meta NAME="Author" CONTENT="Frank Li &lt;Frank.Li@xxxxxxx&gt;">
+<meta NAME="Subject" CONTENT="[PATCH v4 5/6] phy: cadence: salvo: Add cdns,usb2-disconnect-threshold-microvolt property">
+</head> 
+<body BGCOLOR="#FFFFFF" TEXT="#000000">
+
+<!--X-Body-Begin-->
+<!--X-User-Header-->
+<!--X-User-Header-End-->
+<!--X-TopPNI-->
+
+
+<!--X-TopPNI-End-->
+<!--X-MsgBody-->
+<!--X-Subject-Header-Begin-->
+<h1>[PATCH v4 5/6] phy: cadence: salvo: Add cdns,usb2-disconnect-threshold-microvolt property</h1>
+<strong>From: </strong>Frank Li
+<br><strong>Date: </strong> Tue May 16 2023 - 11:45:10 EST
+<p>
+<ul>
+<li><strong>Next message: </strong> <a href="00921.html"> Vladimir Oltean: "[PATCH net] net: pcs: xpcs: fix C73 AN not getting enabled"</a>
+
+<li><strong>Previous message: </strong> <a href="00919.html"> Frank Li: "[PATCH v4 4/6] phy: cadence: salvo: add .set_mode API"</a>
+
+<li><strong>In reply to: </strong> <a href="01039.html"> Vinod Koul: "Re: [PATCH v4 4/6] phy: cadence: salvo: add .set_mode API"</a>
+
+<li><strong>Next in thread: </strong> <a href="00922.html"> Frank Li: "[PATCH v4 6/6] dt-bindings: phy: cdns,salvo: add property cdns,usb2-disconnect-threshold-microvolt"</a>
+
+<li><strong>Messages sorted by: </strong><a href="date.html#00920">[ date ]</a> <a href="index.html#00920">[ thread ]</a> <a href="subject.html#00920">[ subject ]</a> <a href="author.html#00920">[ author ]</a>
+</ul>
+
+<!--X-Subject-Header-End-->
+<!--X-Head-of-Message-->
+<!--X-Head-of-Message-End-->
+<!--X-Head-Body-Sep-Begin-->
+<hr NOSHADE>
+<!--X-Head-Body-Sep-End-->
+<!--X-Body-of-Message-->
+Add cdns,usb2-disconnect-threshold-microvolt property to address fake USB<br>
+disconnection issue during enumeration or suspend state for difference<br>
+platform.<br>
+<br>
+Signed-off-by: Frank Li &lt;Frank.Li@xxxxxxx&gt;<br>
+---<br>
+ drivers/phy/cadence/phy-cadence-salvo.c | 29 +++++++++++++++++++++++++<br>
+ 1 file changed, 29 insertions(+)<br>
+<br>
+diff --git a/drivers/phy/cadence/phy-cadence-salvo.c b/drivers/phy/cadence/phy-cadence-salvo.c<br>
+index 41616f786321..881e122f93c2 100644<br>
+--- a/drivers/phy/cadence/phy-cadence-salvo.c<br>
++++ b/drivers/phy/cadence/phy-cadence-salvo.c<br>
+@@ -6,6 +6,7 @@<br>
+  * Copyright (c) 2019-2020 NXP<br>
+  */<br>
+ <br>
++#include &lt;linux/bitfield.h&gt;<br>
+ #include &lt;linux/clk.h&gt;<br>
+ #include &lt;linux/io.h&gt;<br>
+ #include &lt;linux/module.h&gt;<br>
+@@ -91,9 +92,19 @@<br>
+ <br>
+ /* USB2 PHY register definition */<br>
+ #define UTMI_REG15				0xaf<br>
++#define UTMI_AFE_RX_REG0			0x0d<br>
+ #define UTMI_AFE_RX_REG5			0x12<br>
+ #define UTMI_AFE_BC_REG4			0x29<br>
+ <br>
++/* Align UTMI_AFE_RX_REG0 bit[7:6] define */<br>
++enum usb2_disconn_threshold {<br>
++	USB2_DISCONN_THRESHOLD_575 = 0x0,<br>
++	USB2_DISCONN_THRESHOLD_610 = 0x1,<br>
++	USB2_DISCONN_THRESHOLD_645 = 0x3,<br>
++};<br>
++<br>
++#define RX_USB2_DISCONN_MASK			GENMASK(7, 6)<br>
++<br>
+ /* TB_ADDR_TX_RCVDETSC_CTRL */<br>
+ #define RXDET_IN_P3_32KHZ			BIT(0)<br>
+ /*<br>
+@@ -125,6 +136,7 @@ struct cdns_salvo_phy {<br>
+ 	struct clk *clk;<br>
+ 	void __iomem *base;<br>
+ 	struct cdns_salvo_data *data;<br>
++	enum usb2_disconn_threshold usb2_disconn;<br>
+ };<br>
+ <br>
+ static const struct of_device_id cdns_salvo_phy_of_match[];<br>
+@@ -261,6 +273,12 @@ static int cdns_salvo_phy_init(struct phy *phy)<br>
+ <br>
+ 	cdns_salvo_write(salvo_phy, USB2_PHY_OFFSET, UTMI_AFE_RX_REG5,<br>
+ 			 0x5);<br>
++<br>
++	value = cdns_salvo_read(salvo_phy, USB2_PHY_OFFSET, UTMI_AFE_RX_REG0);<br>
++	value &amp;= ~RX_USB2_DISCONN_MASK;<br>
++	value = FIELD_PREP(RX_USB2_DISCONN_MASK, salvo_phy-&gt;usb2_disconn);<br>
++	cdns_salvo_write(salvo_phy, USB2_PHY_OFFSET, UTMI_AFE_RX_REG0, value);<br>
++<br>
+ 	udelay(10);<br>
+ <br>
+ 	clk_disable_unprepare(salvo_phy-&gt;clk);<br>
+@@ -315,6 +333,7 @@ static int cdns_salvo_phy_probe(struct platform_device *pdev)<br>
+ 	struct device *dev = &amp;pdev-&gt;dev;<br>
+ 	struct cdns_salvo_phy *salvo_phy;<br>
+ 	struct cdns_salvo_data *data;<br>
++	u32 val;<br>
+ <br>
+ 	data = (struct cdns_salvo_data *)of_device_get_match_data(dev);<br>
+ 	salvo_phy = devm_kzalloc(dev, sizeof(*salvo_phy), GFP_KERNEL);<br>
+@@ -326,6 +345,16 @@ static int cdns_salvo_phy_probe(struct platform_device *pdev)<br>
+ 	if (IS_ERR(salvo_phy-&gt;clk))<br>
+ 		return PTR_ERR(salvo_phy-&gt;clk);<br>
+ <br>
++	if (of_property_read_u32(dev-&gt;of_node, &quot;cdns,usb2-disconnect-threshold-microvolt&quot;, &amp;val))<br>
++		val = 575;<br>
++<br>
++	if (val &lt; 610)<br>
++		salvo_phy-&gt;usb2_disconn = USB2_DISCONN_THRESHOLD_575;<br>
++	else if (val &lt; 645)<br>
++		salvo_phy-&gt;usb2_disconn = USB2_DISCONN_THRESHOLD_610;<br>
++	else<br>
++		salvo_phy-&gt;usb2_disconn = USB2_DISCONN_THRESHOLD_645;<br>
++<br>
+ 	salvo_phy-&gt;base = devm_platform_ioremap_resource(pdev, 0);<br>
+ 	if (IS_ERR(salvo_phy-&gt;base))<br>
+ 		return PTR_ERR(salvo_phy-&gt;base);<br>
+-- <br>
+2.34.1<br>
+<br>
+<br>
+
+<!--X-Body-of-Message-End-->
+<!--X-MsgBody-End-->
+<!--X-Follow-Ups-->
+<hr NOSHADE>
+<!--X-Follow-Ups-End-->
+<!--X-References-->
+
+
+
+<!--X-References-End-->
+<!--X-BotPNI-->
+<ul>
+<li><strong>Next message: </strong> <a href="00921.html"> Vladimir Oltean: "[PATCH net] net: pcs: xpcs: fix C73 AN not getting enabled"</a>
+
+<li><strong>Previous message: </strong> <a href="00919.html"> Frank Li: "[PATCH v4 4/6] phy: cadence: salvo: add .set_mode API"</a>
+
+<li><strong>In reply to: </strong> <a href="01039.html"> Vinod Koul: "Re: [PATCH v4 4/6] phy: cadence: salvo: add .set_mode API"</a>
+
+<li><strong>Next in thread: </strong> <a href="00922.html"> Frank Li: "[PATCH v4 6/6] dt-bindings: phy: cdns,salvo: add property cdns,usb2-disconnect-threshold-microvolt"</a>
+
+<li><strong>Messages sorted by: </strong><a href="date.html#00920">[ date ]</a> <a href="index.html#00920">[ thread ]</a> <a href="subject.html#00920">[ subject ]</a> <a href="author.html#00920">[ author ]</a>
+</ul>
+
+<!--X-BotPNI-End-->
+<!--X-User-Footer-->
+<!--X-User-Footer-End-->
+</body>
+</html>

@@ -1,0 +1,215 @@
+Title: Synopsys: Connect USB 2.0 nanoPHY to USB 2.0 OTG Controller
+Source: https://www.synopsys.com/dw/dwtb.php?a=usb2_nanophy_to_otg
+Retrieved: 2026-09-18T09:44:54.893427+00:00
+Note: Automatically extracted searchable text. Original document is authoritative for tables and diagrams.
+
+Search Synopsys.com
+Contact Sales
+Contact Sales
+Search Synopsys
+Cancel
+Popular Content
+Innovate Faster with Synopsys Multi-Die Solution
+Explore our eBook for scalable multi-die solutions to boost innovation, productivity, and success.
+Automotive Executive Guide: Rethinking Automotive Development
+A guide to virtualization in software-defined vehicles for automotive leaders.
+Mastering AI Chip Complexity
+This eBook explores AI chip design trends, challenges,
+and strategies for first-pass silicon success.
+Back
+Our Company
+Careers
+Ecosystem
+Global Offices
+Investors
+Leadership
+Responsible Business
+Synopsys and Ansys are Now United
+Learn more
+Industry
+Aerospace & Government
+AI Chip Development
+Automotive
+Edge AI
+HPC & Data Center
+Mobile
+Technology
+Artificial Intelligence
+Cloud
+Energy-Efficient SoCs
+Memory
+Multi-Die
+RISC-V
+Automotive Executive Guide: Rethinking Automotive Development
+A guide to virtualization in software-defined vehicles for automotive leaders.
+Download
+By Function
+Analog Design
+Digital Design
+Design for Test
+Verification
+Hardware Assisted Verification
+Signoff
+Silicon Lifecycle Management
+Manufacturing
+SoC Integration
+View all Products
+Synopsys.ai
+AI-enabled EDA
+Design, Automation, Insights
+AI-powered Optimization
+Design, Verification, Test, Analog
+AI-powered Analytics
+Design, Process Control, Production
+GenAI
+24/7 Expert Copilot
+Agentic AI
+Multi-Agent Workflows
+EDA
+Fusion Compiler
+Synthesis & Implementation
+Custom Compiler
+Analog & Custom IC Design
+3DIC Compiler
+Multi-die Design
+PrimeTime
+Design Signoff
+VCS
+Logic Simulation
+TestMAX
+IC Test
+IC Validator
+Physical Verification
+HFSS-IC
+IC EM Analysis
+System
+Platform Architect
+SoC Architecture Exploration
+ZeBu
+IC Emulation
+HAPS
+IC Prototyping
+Virtualizer
+Virtual Prototyping
+Synplify
+Complete FPGA Flow
+Multiphysics
+3DIC Package Analysis
+HFSS
+EM Analysis
+Icepak
+Thermal Analysis
+IP
+Interface IP
+PCIe, DDR, MIPI, USB...
+Foundation IP
+Logic, Memory, IO...
+Security IP
+RoT, Cryptography...
+Processor IP & Tools
+CPU, DSP, NPU, ASIP...
+SoC Infrastructure IP
+AMBA, Foundation, VIP...
+IP by Markets
+Automotive, HPC, Edge AI
+SLM IP
+In-Chip Monitor IP
+Verification IP
+AMBA, Ethernet, MIPI...
+SolvNetPlus
+SolvNetPlus gives instant access to docs, downloads, training, and self-help support resources online.
+Training & Education
+Synopsys provides training delivered by subject matter experts, offering both public and private courses.
+Learn
+Blogs
+Events
+Glossary
+Newsroom
+Success Stories
+Technical Articles
+Training
+Webinars
+SNUG
+Silicon Valley
+Call for Content
+Proceedings
+Synopsys IP Technical Bulletin Article
+How to Connect Your DesignWare USB 2.0 nanoPHY to Your DesignWare USB 2.0 OTG Controller
+By Doug Aida, Technical Writer
+This application note describes the connectivity and power-on reset sequence between the Synopsys
+DesignWare USB 2.0 nanoPHY and the DesignWare USB 2.0 Hi-Speed (HS) On-The-Go (OTG) Controller Subsystem.
+1. Supported Speed Modes
+The DesignWare USB 2.0 nanoPHY and USB 2.0 HS OTG Subsystem support all the speed modes required by the USB 2.0 specification.
+Together, they support high speed, full speed, and low speed in Host mode and high speed and full speed in Device mode.
+2. Interfacing the DesignWare USB 2.0 nanoPHY With the DesignWare USB 2.0 HS OTG Subsystem
+This section describes the connectivity that applies when the USB 2.0 HS OTG Subsystem is configured to use the UTMI+ interface.
+If the USB 2.0 HS OTG Subsystem is configured to support the UTMI+ (Level 3, non-OTG) specification, see Section 2.1,
+below titled, USB 2.0 HS OTG Subsystem Configured to Support the UTMI+ (Level 3, Non-OTG) Specification.
+When the USB 2.0 HS OTG Subsystem is configured as a non-HNP-, non-SRP-capable OTG controller,
+the associated application can operate as a non-OTG host or device.  If the USB 2.0 HS OTG Subsystem is configured
+to support the UTMI+ (Level 3, OTG) specification, see Section 2.2, of this application note, titled,
+USB 2.0 HS OTG Subsystem Configured to Support the UTMI+ (Level 3, OTG) Specification.
+Only signals that are relevant to the UTMI/UTMI+ specification or that require special consideration are shown.
+For information about these signals, refer to the signal descriptions in each product's databook.
+2.1. USB 2.0 HS OTG Subsystem Configured to Support the UTMI+ (Level 3, Non-OTG) Specification
+Figure 1 shows a high-level block diagram of the USB 2.0 nanoPHY and USB 2.0
+HS OTG Subsystem when configured to support the UTMI+ (Level, 3, non-OTG) specification.
+Figure 1. USB 2.0 nanoPHY and USB 2.0 HS OTG Subsystem: High Level Block Diagram
+Figure 2 below shows the required signal connections for this configuration.
+When operating as a non-OTG device (that is, not as a dual-role device), the USB 2.0 nanoPHY OTG block's inputs and outputs are ignored.
+Powering down the OTG block is optional; however, not doing so results in additional power consumption, because the OTG block remains powered up.
+To power down the OTG block, set the USB 2.0 nanoPHY top-level strapping pin, OTGDISABLE, to 1'b1.
+Figure 2. Signal Connections Between the USB 2.0 nanoPHY and USB 2.0 HS OTG Subsystem (Configured to Support the UTMI+ (Level 3, Non-OTG) Specification)
+2.2. USB 2.0 HS OTG Subsystem Configured to Support the UTMI+ (Level 3, OTG) Specification
+Figure 3 below shows a high-level block diagram of the USB 2.0 nanoPHY and
+USB 2.0 HS OTG Subsystem when configured to support the UTMI+ (Level, 3, OTG) specification.
+Figure 3. USB 2.0 nanoPHY and USB 2.0 HS OTG Subsystem: High-Level Block Diagram
+Figure 4 below shows the required signal connections for this configuration.
+Figure 4. Signal Connections Between the USB 2.0 nanoPHY and USB 2.0 HS OTG Subsystem (Configured to Support the UTMI+ (Level 3, OTG) Specification)
+3. Power-On Reset Sequence for the USB 2.0 nanoPHY and the USB 2.0 HS OTG Subsystem
+Figure 5 shows the timing for the required power-on reset sequence when the USB 2.0 nanoPHY is attached to the USB 2.0 HS OTG Subsystem.
+As indicated in Figure 1-1, the USB 2.0 nanoPHY's power-on reset must be released first.
+When PHYCLOCK is available, the USB 2.0 HS OTG Subsystem's reset can be released.
+Table 1 describes the timing values for the power-on reset sequence.
+Figure 5. Power-On Reset Sequence for the USB 2.0 nanoPHY and USB 2.0 HS OTG Subsystem
+Timing Parameter
+Description
+Value
+T0
+Power-on reset (POR) has been asserted. The USB
+2.0 HS OTG Subsystem reset is also asserted.
+0 (reference)
+T1
+T1 indicates when POR can be released.
+T0 + 10μs ≤ T1
+T2
+T2 indicates when PHYCLOCK is available at the macro output.
+This time depends on the USB 2.0 nanoPHY reference clock source. For information about USB 2.0 nanoPHY power-on reset operation, refer to the USB 2.0 nanoPHY databook.
+T3
+T3 indicates when the USB 2.0 HS OTG Subsystem reset can be released.
+T3 > T2
+Note:
+For information about system clocks and reset in the USB 2.0 HS OTG Subsystem refer to
+DesignWare Cores USB 2.0 Hi-Speed On-The-Go (OTG) Databook,
+"System Clocks and Reset" section.
+Table 1. Power-On Reset Sequence for the USB 2.0 nanoPHY and USB 2.0 HS OTG Subsystem
+This concludes the application note on How to Connect Your DesignWare USB 2.0 nanoPHY to Your DesignWare USB 2.0 OTG Controller.
+For more information on these products, please visit
+www.synopsys.com/IP/InterfaceIP/USB
+Search Tools
+🔍
+Foundation IP Selector
+Non-Volatile Memory IP Selector
+More IP Resources
+News
+Videos
+Articles
+Customer Successes
+White Papers
+Webinars
+Blogs
+Synopsys IP Technical Bulletin
+IP Reuse Tools
+IP OEM Partner Program
+myDesignWare Subscriptions
+Technical Bulletin Archives

@@ -1,0 +1,3591 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="zh-CN" data-content_root="../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>支持的芯片 &mdash; Ameba IoT Docs  文档</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=19f00094" />
+      <link rel="stylesheet" type="text/css" href="../../_static/togglebutton.css?v=13237357" />
+      <link rel="stylesheet" type="text/css" href="../../_static/custom.css?v=dcc6a489" />
+      <link rel="stylesheet" type="text/css" href="../../_static/tabs.css?v=a5c4661c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/custom.css?v=dcc6a489" />
+
+  
+    <link rel="shortcut icon" href="../../_static/favicon.ico"/>
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script src="../../_static/documentation_options.js?v=7d86a446"></script>
+        <script src="../../_static/doctools.js?v=9a2dae69"></script>
+        <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+        <script src="../../_static/toggleprompt.js?v=d7ede5d2"></script>
+        <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+        <script>let toggleHintShow = 'Click to show';</script>
+        <script>let toggleHintHide = 'Click to hide';</script>
+        <script>let toggleOpenOnPrint = 'true';</script>
+        <script src="../../_static/togglebutton.js?v=4a39c7ea"></script>
+        <script src="../../_static/translations.js?v=beaddf03"></script>
+        <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
+        <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
+        <script src="../../_static/tabs.js?v=3030b3cb"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="索引" href="../../genindex.html" />
+    <link rel="search" title="搜索" href="../../search.html" />
+    <link rel="next" title="DMA控制器（DMAC）" href="../8_dmac/0_dmac_index_cn.html" />
+    <link rel="prev" title="USB OTG" href="0_usb_index_cn.html" />
+     
+
+    
+
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+
+    <!-- 样式模板 -->
+    <style>
+        .wy-nav-content {
+            max-width: 1100px;
+             
+        }
+
+        .wy-nav-content {
+            transition: margin 0.3s ease; /* 添加过渡效果 */
+            margin-left: 0px !important; /* 侧边栏展开时的偏移 */
+            max-width: calc(100% - 0px) !important; /* 调整最大宽度，使其与侧边栏宽度相关 */
+        }
+
+        .wy-nav-content.expanded {
+            margin-left: 0 !important; /* 侧边栏收缩时内容区域回归左边 */
+            max-width: 100% !important; /* 内容区域最大宽度调整 */
+        }
+    </style>
+
+    <!-- 注入 TOC 映射和当前页面信息 -->
+    
+
+<!-- TOC 映射和当前文档信息 -->
+<script>
+// 将 Python 字典转换为 JS 对象
+const TOC_TITLE_MAP = {"rst_rtos/0_ameba_product": "\u4ea7\u54c1\u4e2d\u5fc3", "rst_rtos/0_ameba_product/0_ameba_product_center_index_cn": "\u4ea7\u54c1\u4e2d\u5fc3", "rst_rtos/0_ameba_sdk": "Ameba SDK", "rst_rtos/0_ameba_sdk/0_ameba_sdks_index_cn": "Ameba SDK", "rst_rtos/0_ameba_solutions": "\u89e3\u51b3\u65b9\u6848", "rst_rtos/0_ameba_solutions/0_ameba_solutions_index_cn": "\u89e3\u51b3\u65b9\u6848", "rst_rtos/0_at_command": "0.8 AT \u547d\u4ee4\u96c6", "rst_rtos/0_at_command/0_at_command_index_cn": "0.8 AT \u547d\u4ee4\u96c6", "rst_rtos/0_build_system": "0.3 \u6784\u5efa\u7cfb\u7edf", "rst_rtos/0_build_system/0_build_system_index_cn": "0.3 \u6784\u5efa\u7cfb\u7edf", "rst_rtos/0_file_system": "0.9 \u865a\u62df\u6587\u4ef6\u7cfb\u7edf", "rst_rtos/0_file_system/0_vfs_index_cn": "0.9 \u865a\u62df\u6587\u4ef6\u7cfb\u7edf", "rst_rtos/0_ftl": "0.a Flash \u8f6c\u6362\u5c42", "rst_rtos/0_ftl/0_ftl_index_cn": "0.a Flash \u8f6c\u6362\u5c42", "rst_rtos/0_gcc_build_environment": "0.1 GCC \u7f16\u8bd1\u73af\u5883", "rst_rtos/0_gcc_build_environment/0_gcc_build_index_cn": "0.1 GCC \u7f16\u8bd1\u73af\u5883", "rst_rtos/0_gdb_debug": "0.2 GDB \u8c03\u8bd5", "rst_rtos/0_gdb_debug/0_gdb_debug_index_cn": "0.2 GDB \u8c03\u8bd5", "rst_rtos/0_memory_layout": "0.5 Flash \u548c RAM \u5e03\u5c40", "rst_rtos/0_memory_layout/0_layout_index_cn": "0.5 Flash \u548c RAM \u5e03\u5c40", "rst_rtos/0_sdk_example": "0.4 SDK \u793a\u4f8b", "rst_rtos/0_sdk_example/0_sdk_example_index_cn": "0.4 SDK \u793a\u4f8b", "rst_rtos/0_tools": "0.7 \u5de5\u5177", "rst_rtos/0_tools/0_tools_index_cn": "0.7 \u5de5\u5177", "rst_rtos/0_user_config": "0.6 \u5f00\u53d1\u8005\u914d\u7f6e", "rst_rtos/0_user_config/0_usrcfg_index_cn": "0.6 \u5f00\u53d1\u8005\u914d\u7f6e", "rst_rtos/10_api_docs": "2.6 Wi-Fi API \u53c2\u8003", "rst_rtos/10_api_docs/0_api_index_cn": "2.6 Wi-Fi API \u53c2\u8003", "rst_rtos/1_boot_process": "1.1 \u542f\u52a8\u8fc7\u7a0b", "rst_rtos/1_boot_process/0_boot_index_cn": "1.1 \u542f\u52a8\u8fc7\u7a0b", "rst_rtos/1_chipen": "1.4 \u82af\u7247\u4f7f\u80fd", "rst_rtos/1_chipen/0_chipen_index_cn": "1.4 \u82af\u7247\u4f7f\u80fd", "rst_rtos/1_gpio": "1.7 GPIO \u548c\u5f15\u811a\u63a7\u5236", "rst_rtos/1_gpio/0_gpio_index_cn": "1.7 GPIO \u548c\u5f15\u811a\u63a7\u5236", "rst_rtos/1_ipc": "1.5 \u6838\u95f4\u901a\u4fe1", "rst_rtos/1_ipc/0_ipc_index_cn": "1.5 \u6838\u95f4\u901a\u4fe1", "rst_rtos/1_mpu_cache": "1.0 \u5185\u5b58\u7ba1\u7406\u548c\u7f13\u5b58", "rst_rtos/1_mpu_cache/0_mpu_cache_index_cn": "1.0 \u5185\u5b58\u7ba1\u7406\u548c\u7f13\u5b58", "rst_rtos/1_ota": "1.2 \u56fa\u4ef6\u5347\u7ea7\uff08OTA\uff09", "rst_rtos/1_ota/0_ota_index_cn": "1.2 \u56fa\u4ef6\u5347\u7ea7\uff08OTA\uff09", "rst_rtos/1_otpc": "1.3 OTP\u5b58\u50a8\u5668", "rst_rtos/1_otpc/0_otpc_index_cn": "1.3 OTP\u5b58\u50a8\u5668", "rst_rtos/1_pinmux": "1.6 \u5f15\u811a\u590d\u7528", "rst_rtos/1_pinmux/0_pinmux_index_cn": "1.6 \u5f15\u811a\u590d\u7528", "rst_rtos/1_power_save": "1.9 \u4f4e\u529f\u8017\u5f00\u53d1", "rst_rtos/1_power_save/0_ps_index_cn": "1.9 \u4f4e\u529f\u8017\u5f00\u53d1", "rst_rtos/2_whc_fullmac": "2.2 WHC FullMAC", "rst_rtos/2_whc_fullmac/0_fullmac_index_cn": "2.2 WHC FullMAC", "rst_rtos/2_whc_wifi_bridge": "2.1 WHC Bridge", "rst_rtos/2_whc_wifi_bridge/0_wifi_bridge_index_cn": "2.1 WHC Bridge", "rst_rtos/2_wifi_adaptivity_test": "2.5 Wi-Fi Adaptivity \u6d4b\u8bd5\u6307\u5357", "rst_rtos/2_wifi_adaptivity_test/0_wifi_adaptivity_index_cn": "2.5 Wi-Fi Adaptivity \u6d4b\u8bd5\u6307\u5357", "rst_rtos/2_wifi_basic": "2.0 Wi-Fi \u57fa\u7840\u6a21\u5f0f", "rst_rtos/2_wifi_basic/0_wifi_basic_index_cn": "2.0 Wi-Fi \u57fa\u7840\u6a21\u5f0f", "rst_rtos/2_wifi_csi": "2.4 Wi-Fi CSI", "rst_rtos/2_wifi_csi/0_wifi_csi_index_cn": "2.4 Wi-Fi CSI", "rst_rtos/2_wifi_tunnel": "2.3 Wi-Fi R-Mesh", "rst_rtos/2_wifi_tunnel/0_wifi_tunnel_index_cn": "2.3 Wi-Fi R-Mesh", "rst_rtos/3_ap_trustzone": "3.d AP \u5b89\u5168\u670d\u52a1", "rst_rtos/3_ap_trustzone/0_ap_tz_index_cn": "3.d AP \u5b89\u5168\u670d\u52a1", "rst_rtos/3_crypto_engine": "3.9 \u5bf9\u79f0\u786c\u4ef6\u52a0\u5bc6\u5f15\u64ce", "rst_rtos/3_crypto_engine/0_crypto_engine_index_cn": "3.9 \u5bf9\u79f0\u786c\u4ef6\u52a0\u5bc6\u5f15\u64ce", "rst_rtos/3_ecdsa_engine": "3.a ECDSA \u786c\u4ef6\u52a0\u5bc6\u5f15\u64ce", "rst_rtos/3_ecdsa_engine/0_ecdsa_index_cn": "3.a ECDSA \u786c\u4ef6\u52a0\u5bc6\u5f15\u64ce", "rst_rtos/3_eddsa_engine": "3.b EDDSA \u786c\u4ef6\u52a0\u5bc6\u5f15\u64ce", "rst_rtos/3_eddsa_engine/0_eddsa_index_cn": "3.b EDDSA \u786c\u4ef6\u52a0\u5bc6\u5f15\u64ce", "rst_rtos/3_rsa_engine": "3.c RSA \u786c\u4ef6\u52a0\u5bc6\u5f15\u64ce", "rst_rtos/3_rsa_engine/0_rsa_index_cn": "3.c RSA \u786c\u4ef6\u52a0\u5bc6\u5f15\u64ce", "rst_rtos/3_security": "3.1 \u5b89\u5168\u4e0e\u52a0\u5bc6", "rst_rtos/3_security/0_security_index_cn": "3.1 \u5b89\u5168\u4e0e\u52a0\u5bc6", "rst_rtos/3_trng": "3.2 \u771f\u968f\u673a\u6570\u53d1\u751f\u5668", "rst_rtos/3_trng/0_trng_index_cn": "3.2 \u771f\u968f\u673a\u6570\u53d1\u751f\u5668", "rst_rtos/4_ai": "4.1 \u4eba\u5de5\u667a\u80fd", "rst_rtos/4_ai/0_ai_index_cn": "4.1 \u4eba\u5de5\u667a\u80fd", "rst_rtos/4_ai_voice": "4.2 \u8bed\u97f3\u8bc6\u522b", "rst_rtos/4_ai_voice/0_ai_voice_index_cn": "4.2 \u8bed\u97f3\u8bc6\u522b", "rst_rtos/4_dsp": "4.4 DSP \u4f7f\u7528\u6307\u5357", "rst_rtos/4_dsp/0_dsp_index_cn": "4.4 DSP \u4f7f\u7528\u6307\u5357", "rst_rtos/4_multimedia": "4.3 \u591a\u5a92\u4f53", "rst_rtos/4_multimedia/0_multimedia_index_cn": "4.3 \u591a\u5a92\u4f53", "rst_rtos/6_mass_production": "6.1 \u6279\u91cf\u751f\u4ea7", "rst_rtos/6_mass_production/0_mp_index_cn": "6.1 \u6279\u91cf\u751f\u4ea7", "rst_rtos/6_mptools": "6.2 \u4ea7\u6d4b\u5de5\u5177", "rst_rtos/6_mptools/0_mptools_index_cn": "6.2 \u4ea7\u6d4b\u5de5\u5177", "rst_rtos/7_usb": "7.1 USB \u4e3b\u673a\u4e0e\u8bbe\u5907", "rst_rtos/7_usb/0_usb_index_cn": "7.1 USB \u4e3b\u673a\u4e0e\u8bbe\u5907", "rst_rtos/8_adc": "8.4 \u6a21\u6570\u8f6c\u6362\u5668", "rst_rtos/8_adc/0_adc_index_cn": "8.4 \u6a21\u6570\u8f6c\u6362\u5668", "rst_rtos/8_cap_touch": "8.7 Cap-Touch", "rst_rtos/8_cap_touch/0_cap_touch_index_cn": "8.7 Cap-Touch", "rst_rtos/8_dmac": "8.1 DMA \u63a7\u5236\u5668", "rst_rtos/8_dmac/0_dmac_index_cn": "8.1 DMA \u63a7\u5236\u5668", "rst_rtos/8_ir": "8.5 \u7ea2\u5916\u6536\u53d1\u5668", "rst_rtos/8_ir/0_ir_index_cn": "8.5 \u7ea2\u5916\u6536\u53d1\u5668", "rst_rtos/8_key_scan": "8.8 Key-Scan", "rst_rtos/8_key_scan/0_key_scan_index_cn": "8.8 Key-Scan", "rst_rtos/8_lcdc": "8.a LCD \u63a7\u5236\u5668", "rst_rtos/8_lcdc/0_lcdc_index_cn": "8.a LCD \u63a7\u5236\u5668", "rst_rtos/8_ledc": "8.6 LED \u63a7\u5236\u5668", "rst_rtos/8_ledc/0_ledc_index_cn": "8.6 LED \u63a7\u5236\u5668", "rst_rtos/8_psram": "8.2 PSRAM", "rst_rtos/8_psram/0_psram_index_cn": "8.2 PSRAM", "rst_rtos/8_rtc_io": "8.9 RTC-IO", "rst_rtos/8_rtc_io/0_rtc_io_index_cn": "8.9 RTC-IO", "rst_rtos/8_thermal": "8.3 \u6e29\u5ea6\u6d4b\u91cf", "rst_rtos/8_thermal/0_thermal_index_cn": "8.3 \u6e29\u5ea6\u6d4b\u91cf"};
+console.log("TOC_TITLE_MAP:", TOC_TITLE_MAP);
+
+// 获取当前页面的文档名 (例如 'rst_rtos/3_nda_secure_boot/0_secure_boot_index_nda')
+const CURRENT_DOCNAME = 'rst_rtos/7_usb/1_usb_otg_toprst_cn';
+
+// 动态查找顶级分类函数（定义为全局函数）
+window.findTopLevelChapter = function(docname) {
+    console.log("Attempting to find top-level chapter for:", docname);
+    let bestMatch = "";
+    let bestTitle = "Unknown Chapter";
+
+    // 按路径长度降序排序以确保最长匹配
+    const sortedPaths = Object.keys(TOC_TITLE_MAP).sort((a, b) => b.length - a.length);
+
+    for (const path of sortedPaths) {
+        console.log("Checking path:", path);
+        if (docname === path || docname.startsWith(path + '/')) { // 子页面
+            bestMatch = path;
+            bestTitle = TOC_TITLE_MAP[path];
+            console.log("Matched path:", path, "with title:", bestTitle);
+            break;
+        }
+    }
+
+    // 如果没有找到任何匹配项，则尝试更短的路径
+    if (bestMatch === "") {
+        const pathSegments = docname.split('/');
+        while (pathSegments.length > 1) { // 至少保留根路径
+            const candidate = pathSegments.join('/');
+            console.log("Checking shorter path:", candidate);
+            if (TOC_TITLE_MAP[candidate]) {
+                bestTitle = TOC_TITLE_MAP[candidate];
+                console.log("Matched shorter path:", candidate, "with title:", bestTitle);
+                break;
+            }
+            pathSegments.pop();
+        }
+    }
+
+    console.log("Final top-level chapter:", bestTitle);
+    return bestTitle;
+}
+
+// 初始化时调用
+document.addEventListener('DOMContentLoaded', function() {
+    const topLevelChapter = findTopLevelChapter(CURRENT_DOCNAME);
+    console.log("Top Level Chapter:", topLevelChapter);
+
+    // 将顶级分类插入到DOM中（根据需要）
+    const chapterElement = document.createElement('div');
+    chapterElement.className = 'top-level-chapter';
+    chapterElement.innerHTML = `<strong>Top Level Chapter: </strong>${topLevelChapter}`;
+    document.body.appendChild(chapterElement);
+});
+</script>
+
+    
+
+    <!-- 左上角标题距离控制：Ameba IoT Docs -->
+    <style>
+        /* 新增的标题间距调整样式（添加在此处） */
+        div[role="navigation"] > div[role="search"] {
+            margin-bottom: 4px !important;
+        }
+
+        a.icon.icon-home {
+            display: inline-block;
+            margin-bottom: 2px !important;
+        }
+    </style>
+
+    <!-- 引入功能模块 -->
+    
+    
+<script>
+    /* ====================== 嵌入式配置开始 ====================== */
+    const embeddedConfig = {
+        "freertos": {
+            "name": "FreeRTOS",
+            "languages": {
+                "en": ["latest"],
+                "cn": ["latest"]
+            }
+        },
+        "linux": {
+            "name": "Linux",
+            "languages": {
+                "en": ["latest"],
+                "cn": ["latest"]
+            }
+        }
+    };
+    /* ====================== 嵌入式配置结束 ====================== */
+</script>
+
+<script>
+    // 获取OS显示名称列表
+    function getOSNames(data) {
+        return Object.keys(data).map(key => data[key].name);
+    }
+
+    // 获取指定OS的语言列表
+    function getLanguages(data, osKey) {
+        return Object.keys(data[osKey]?.languages || {});
+    }
+
+    // 获取指定OS和语言的版本列表
+    function getVersions(data, osKey, language) {
+        return data[osKey]?.languages?.[language] || ['latest'];
+    }
+
+    // 根据显示名称查找OS键
+    function findOSKey(data, displayName) {
+        return Object.keys(data).find(key => data[key].name === displayName);
+    }
+
+    // 获取基础URL路径
+    function getBaseURL() {
+        const url = new URL(window.location.href);
+        console.log('[DEBUG] getBaseURL:');
+
+        if (url.protocol === 'file:') {
+            // 本地路径处理
+            const pathParts = url.pathname.split('/').filter(part => part !== '');
+            const index = pathParts.indexOf('build');
+            console.log('[DEBUG] getBaseURL0:', pathParts.slice(0, index + 1).join('/'));
+            return `file://${pathParts.slice(0, index + 1).join('/')}/`;
+        } else {
+            // 网络路径处理
+            const basePath = url.pathname.split('/')[1]; // 直接取第一个有效路径段
+            console.log('[DEBUG] getBaseURL:', url.origin, basePath);
+            return `${url.origin}/${basePath}/`;
+        }
+    }
+
+    // 获取当前URL路径分段
+    function getCurrentSegments() {
+        const url = new URL(window.location.href);
+        let segments = url.pathname.split('/').filter(segment => segment);
+
+
+        console.log('[DEBUG] getCurrentSegments:');
+
+        if (url.protocol === 'file:') {
+            // 本地路径处理
+            const index = segments.indexOf('build');
+            segments = segments.slice(index + 1); // 去掉 build 及之前的路径
+            console.log('[DEBUG] getCurrentSegments0:', segments);
+        } else {
+            // 网络路径处理
+            segments = segments.slice(1); // 去掉 ameba-iot-docs/
+            console.log('[DEBUG] getCurrentSegments:', segments);
+        }
+
+        return {
+            osKey: segments[0] || 'freertos', // 默认为 freertos
+            language: segments[1] || 'en',   // 默认为 en
+            version: segments[2] || 'latest' // 默认为 latest
+        };
+    }
+
+    // 绑定事件监听
+    function bindEvents(baseURL, segments) {
+        document.getElementById('os-selector').addEventListener('change', () => {
+            const newOSKey = document.getElementById('os-selector').value;
+            const availableLangs = getLanguages(embeddedConfig, newOSKey);
+            const defaultLang = availableLangs[0] || 'en';
+            const defaultVersion = getVersions(embeddedConfig, newOSKey, defaultLang)[0] || 'latest';
+            console.log('OS Changed:', {newOSKey, defaultLang, defaultVersion});
+            redirectTo(`${baseURL}${newOSKey}/${defaultLang}/${defaultVersion}/`);
+        });
+
+        document.getElementById('language-selector').addEventListener('change', () => {
+            const newLang = document.getElementById('language-selector').value;
+            const defaultVersion = getVersions(embeddedConfig, segments.osKey, newLang)[0] || 'latest';
+            console.log('Language Changed:', {newLang, defaultVersion});
+            redirectTo(`${baseURL}${segments.osKey}/${newLang}/${defaultVersion}/`);
+        });
+
+        document.getElementById('version-selector').addEventListener('change', () => {
+            const newVer = document.getElementById('version-selector').value;
+            console.log('Version Changed:', {newVer});
+            redirectTo(`${baseURL}${segments.osKey}/${segments.language}/${newVer}/`);
+        });
+    }
+
+    // 跳转函数
+    function redirectTo(path) {
+        const url = new URL(path, window.location.href);
+        if (url.protocol === 'file:') {
+            url.pathname += 'index.html';
+        }
+        console.log('Redirecting to:', url.href);
+        window.location.href = url.href;
+    }
+</script>
+
+<script>
+    // 验证并修正路径参数
+    function validateSegments(segments) {
+        const currentOSName = embeddedConfig[segments.osKey]?.name;
+
+        // 如果 OS 无效，默认设置为 FreeRTOS
+        if (!currentOSName) {
+            console.warn("Invalid OS key, defaulting to FreeRTOS");
+            segments.osKey = 'freertos';
+        }
+
+        // 如果语言无效，默认设置为 en
+        if (!getLanguages(embeddedConfig, segments.osKey).includes(segments.language)) {
+            console.warn("Invalid language, defaulting to en");
+            segments.language = 'en';
+        }
+
+        return segments;
+    }
+
+    // 设置初始选中值
+    function setInitialValues(segments) {
+        document.getElementById('os-selector').value = segments.osKey;
+        document.getElementById('language-selector').value = segments.language;
+
+        const versionSelector = document.getElementById('version-selector');
+        const availableVersions = getVersions(embeddedConfig, segments.osKey, segments.language);
+        versionSelector.value = availableVersions.includes(segments.version) ? segments.version : availableVersions[0] || 'latest';
+    }
+</script>
+
+<style>
+    .selectors-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr); /* 三列等宽 */
+        gap: 4px;
+        padding: 1px 1px;
+
+        margin-top: var(--root-margin-top, 4px);
+        margin-bottom: var(--root-margin-bottom, 0px);
+    }
+
+    .dual-selector-group {
+        display: grid;
+        grid-template-columns: 1fr 1fr; /* 两列等宽 */
+        gap: 4px; /* 列间距 */
+    }
+
+    .selector-group {
+        position: relative;
+        width: 100%; /* 确保填满网格列 */
+    }
+
+    .selector-label {
+        display: block;
+        color: #a0b3c6;
+        font-size: 0.85em;
+        margin-bottom: 4px;
+        padding-left: 4px;
+    }
+
+    .selector-dropdown {
+        width: 100%;
+        margin-top: var(--root-margin-top, 4px);
+        margin-bottom: var(--root-margin-bottom, 0px);
+        padding: 2px 2px;
+        border: 2px white !important;
+        border-radius: 6px !important;
+        background: #627078 !important;
+        color: white;
+        font-size: 0.95em;
+        transition: all 0.3s ease;
+        appearance: none;
+        background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23a0b3c6'%3e%3cpath d='M7 10l5 5 5-5z'/%3e%3c/svg%3e");
+        background-repeat: no-repeat;
+        background-position: right 10px center;
+        background-size: 16px;
+        display: flex;
+        height: 30px;
+
+        box-shadow: none !important; /* 不要边框阴影 */
+        outline: none !important; /* 不要边框阴影 */
+    }
+
+    .selector-dropdown:hover {
+        border-color: #4a6a8b;
+        background-color: rgba(44, 62, 80, 1);
+        box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+
+    .selector-dropdown:focus {
+        outline: none;
+        border-color: #3498db;
+        box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+    }
+
+    /* 移动端优化 */
+    @media (max-width: 768px) {
+        .selectors-grid {
+            grid-template-columns: 1fr; /* 小屏幕下堆叠显示 */
+            gap: 10px;
+        }
+
+        .selector-dropdown {
+            padding: 10px 12px;
+        }
+
+        .dual-selector-group {
+            grid-template-columns: 1fr; /* 小屏幕下堆叠显示 */
+        }
+    }
+</style>
+
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+    
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            Ameba IoT Docs
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="搜索文档" aria-label="搜索文档" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+    <!-- templates/sidebar_toggle.html -->
+
+
+<div id="topleft-panel" style="display: block !important; padding: 0; background: none; border: none;"></div>
+
+
+<div class="bottomleft-panel"></div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        try {
+            const segments = validateSegments(getCurrentSegments());
+            const baseURL = getBaseURL();
+
+            // 渲染HTML
+            document.getElementById('topleft-panel').innerHTML = `
+<!-- templates/sidebar_user_panel_div.html -->
+
+
+<!-- templates/sidebar_user_panel_div_docselect.html -->
+
+<div class="selectors-grid">
+    <!-- 系统选择器 -->
+    <div class="selector-group">
+        <select id="os-selector" class="selector-dropdown">
+            ${Object.keys(embeddedConfig).map(key => `
+                <option value="${key}">${embeddedConfig[key].name}</option>
+            `).join('')}
+        </select>
+    </div>
+
+    <!-- 语言选择器 -->
+    <div class="selector-group">
+        <select id="language-selector" class="selector-dropdown">
+            ${getLanguages(embeddedConfig, segments.osKey).map(lang => `
+                <option value="${lang}">${lang === 'en' ? 'en' : 'cn'}</option>
+            `).join('')}
+        </select>
+    </div>
+
+    <!-- 版本选择器 -->
+    <div class="selector-group">
+        <select id="version-selector" class="selector-dropdown">
+            ${getVersions(embeddedConfig, segments.osKey, segments.language).map(ver => `
+                <option value="${ver}">${ver}</option>
+            `).join('')}
+        </select>
+    </div>
+</div>
+
+<div class="user-panel-container">
+    <div class="user-panel">
+        
+
+    </div>
+</div>`;
+
+            // 设置初始值
+            setInitialValues(segments);
+
+            // 绑定事件
+            bindEvents(baseURL, segments);
+
+            // 将 user-panel 移动到 bottomleft-panel 内
+            const userPanel = document.querySelector('.user-panel');
+            const bottomleftPanel = document.querySelector('.bottomleft-panel');
+            if (userPanel && bottomleftPanel) {
+                bottomleftPanel.appendChild(userPanel); // 直接添加为子元素
+            }
+        } catch (error) {
+            console.error("Error initializing selectors:", error);
+        }
+    });
+</script>
+
+<style>
+    #topleft-panel {
+        background: rgba(40, 58, 73, 0.9);
+        border-radius: 4px;
+        padding: 4px;
+        margin: 4px 0;
+        box-shadow: 0 4px 4px rgba(0,0,0,0.15);
+        backdrop-filter: blur(4px);
+    }
+
+    /* 移动端优化 */
+    @media (max-width: 768px) {
+        #topleft-panel {
+            margin: 8px 0;
+            padding: 10px;
+        }
+    }
+</style>
+
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="导航菜单">
+              <ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../0_ameba_product/0_ameba_product_center_index_cn.html">产品中心</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../0_ameba_sdk/0_ameba_sdks_index_cn.html">Ameba SDK</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../0_ameba_solutions/0_ameba_solutions_index_cn.html">解决方案</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../0_gcc_build_environment/0_gcc_build_index_cn.html">0.1 GCC 编译环境</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../0_gdb_debug/0_gdb_debug_index_cn.html">0.2 GDB 调试</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../0_build_system/0_build_system_index_cn.html">0.3 构建系统</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../0_sdk_example/0_sdk_example_index_cn.html">0.4 SDK 示例</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../0_memory_layout/0_layout_index_cn.html">0.5 Flash 和 RAM 布局</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../0_user_config/0_usrcfg_index_cn.html">0.6 开发者配置</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../0_tools/0_tools_index_cn.html">0.7 工具</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../0_at_command/0_at_command_index_cn.html">0.8 AT 命令集</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../0_file_system/0_vfs_index_cn.html">0.9 虚拟文件系统</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../0_ftl/0_ftl_index_cn.html">0.a Flash 转换层</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../1_mpu_cache/0_mpu_cache_index_cn.html">1.0 内存管理和缓存</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../1_boot_process/0_boot_index_cn.html">1.1 启动过程</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../1_ota/0_ota_index_cn.html">1.2 固件升级（OTA）</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../1_otpc/0_otpc_index_cn.html">1.3 OTP存储器</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../1_chipen/0_chipen_index_cn.html">1.4 芯片使能</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../1_ipc/0_ipc_index_cn.html">1.5 核间通信</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../1_pinmux/0_pinmux_index_cn.html">1.6 引脚复用</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../1_gpio/0_gpio_index_cn.html">1.7 GPIO 和引脚控制</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../1_power_save/0_ps_index_cn.html">1.9 低功耗开发</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../2_wifi_basic/0_wifi_basic_index_cn.html">2.0 Wi-Fi 基础模式</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../2_whc_wifi_bridge/0_wifi_bridge_index_cn.html">2.1 WHC Bridge</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../2_whc_fullmac/0_fullmac_index_cn.html">2.2 WHC FullMAC</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../2_wifi_tunnel/0_wifi_tunnel_index_cn.html">2.3 Wi-Fi R-Mesh</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../2_wifi_csi/0_wifi_csi_index_cn.html">2.4 Wi-Fi CSI</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../2_wifi_adaptivity_test/0_wifi_adaptivity_index_cn.html">2.5 Wi-Fi Adaptivity 测试指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../10_api_docs/0_api_index_cn.html">2.6 Wi-Fi API 参考</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../3_security/0_security_index_cn.html">3.1 安全与加密</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../3_trng/0_trng_index_cn.html">3.2 真随机数发生器</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../3_crypto_engine/0_crypto_engine_index_cn.html">3.9 对称硬件加密引擎</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../3_ecdsa_engine/0_ecdsa_index_cn.html">3.a ECDSA 硬件加密引擎</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../3_eddsa_engine/0_eddsa_index_cn.html">3.b EDDSA 硬件加密引擎</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../3_rsa_engine/0_rsa_index_cn.html">3.c RSA 硬件加密引擎</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../3_ap_trustzone/0_ap_tz_index_cn.html">3.d AP 安全服务</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../4_ai/0_ai_index_cn.html">4.1 人工智能</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../4_ai_voice/0_ai_voice_index_cn.html">4.2 语音识别</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../4_multimedia/0_multimedia_index_cn.html">4.3 多媒体</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../4_dsp/0_dsp_index_cn.html">4.4 DSP 使用指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../6_mass_production/0_mp_index_cn.html">6.1 批量生产</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../6_mptools/0_mptools_index_cn.html">6.2 产测工具</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="0_usb_index_cn.html">7.1 USB 主机与设备</a><ul class="current">
+<li class="toctree-l2 current"><a class="current reference internal" href="#">支持的芯片</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#usb">USB概述</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#usb-hw-features">硬件配置</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#usb-sw-stack-overflow">软件协议栈概述</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#id4">软件特性</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id5">软件架构</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id6">文件目录结构</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#usb-menuconfig-build">配置和编译</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#usb-hal-driver">硬件抽象层驱动</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#usb-host-core">主机核心驱动</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#id10">主机驱动软件架构</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#classapi">面向Class层的API</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#api">面向应用层的API</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#usb-device-core">设备核心驱动</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#id12">设备驱动软件架构</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id13">面向类驱动层的API</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id14">面向应用层的API</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#usb-host-solution">主机解决方案</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#usb-host-cdc-acm">透传主机方案</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id17">概述</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id18">类驱动</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id19">应用示例</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#usb-host-cdc-ecm">网络通信主机方案</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id21">概述</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id22">类驱动</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id23">应用示例</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#usb-host-msc">存储主机方案</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id25">概述</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id26">类驱动</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id27">应用示例</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#usb-host-uvc">视频主机方案</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id29">概述</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id30">类驱动</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id31">应用示例</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#usb-device-solution">设备解决方案</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#usb-device-uac">音频设备方案</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id34">概述</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id35">类驱动</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id36">应用示例</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#usb-device-cdc-acm">透传设备方案</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id38">概述</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id39">类驱动</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id40">应用示例</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#hid">HID设备方案</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id41">概述</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id42">类驱动</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id43">应用示例</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#usb-device-msc">存储设备方案</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id45">概述</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id46">类驱动</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id47">应用示例</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#fullmac">FullMAC设备方案</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id48">概述</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id49">类驱动</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id50">应用示例</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#usb-device-composite">复合功能设备方案</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id52">概述</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id53">类驱动</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id54">应用示例</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#usb-device-hotplug">热插拔检测</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#usb-device-descriptor-customization">设备描述符定制</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id57">描述符概述</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id58">描述符数据结构</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id59">描述符定制项</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#drd">DRD解决方案</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#id60">概述</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id61">类驱动</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id62">应用示例</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#usb-certification">USB认证</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../8_dmac/0_dmac_index_cn.html">8.1 DMA 控制器</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../8_psram/0_psram_index_cn.html">8.2 PSRAM</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../8_thermal/0_thermal_index_cn.html">8.3 温度测量</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../8_adc/0_adc_index_cn.html">8.4 模数转换器</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../8_ir/0_ir_index_cn.html">8.5 红外收发器</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../8_ledc/0_ledc_index_cn.html">8.6 LED 控制器</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../8_cap_touch/0_cap_touch_index_cn.html">8.7 Cap-Touch</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../8_key_scan/0_key_scan_index_cn.html">8.8 Key-Scan</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../8_rtc_io/0_rtc_io_index_cn.html">8.9 RTC-IO</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../8_lcdc/0_lcdc_index_cn.html">8.a LCD 控制器</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="移动版导航菜单" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">Ameba IoT Docs</a>
+      </nav>
+
+      <div class="wy-nav-content">
+    
+        <div class="rst-content">
+          <div role="navigation" aria-label="页面导航">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="0_usb_index_cn.html">USB OTG</a></li>
+      <li class="breadcrumb-item active">支持的芯片</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <span class="target" id="usb-otg"></span><!-- 下拉菜单 -->
+<div style="margin: 20px 0; text-align: left;">
+    <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 14px;">IC: </span>
+        <select class="tab-selector" style="height: 22px; padding: 2px 8px; font-size: 13px;">
+            <option value="RTL8721Dx">RTL8721Dx</option>
+            <option value="RTL8720E">RTL8720E</option>
+            <option value="RTL8726E">RTL8726E</option>
+            <option value="RTL8730E">RTL8730E</option>
+        </select>
+    </div>
+</div>
+
+<!-- 修复后的 JavaScript -->
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const selector = document.querySelector('.tab-selector');
+
+    selector.addEventListener('change', function() {
+        const targetTab = this.value;
+        const tabs = document.querySelectorAll('.sphinx-tabs-tab');
+        let found = false;
+
+        tabs.forEach(tab => {
+            const tabText = tab.textContent.trim();
+            if (tabText === targetTab) {
+                tab.click();
+                window.dispatchEvent(new Event('resize')); // 触发插件更新
+                found = true;
+            }
+        });
+
+        if (!found) {
+            console.error("未找到选项卡:", targetTab);
+        }
+    });
+});
+</script><section id="id1">
+<h1>支持的芯片<a class="headerlink" href="#id1" title="Link to this heading"></a></h1>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>Ameba SoC</p></th>
+<th class="head"><p>RTL8721Dx</p></th>
+<th class="head"><p>RTL8726E</p></th>
+<th class="head"><p>RTL8720E</p></th>
+<th class="head"><p>RTL8730E</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>支持状态</p></td>
+<td><p>Y</p></td>
+<td><p>N</p></td>
+<td><p>N</p></td>
+<td><p>Y</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="usb">
+<span id="usb-overflow"></span><h1>USB概述<a class="headerlink" href="#usb" title="Link to this heading"></a></h1>
+<p>USB（Universal Serial Bus）是一种通用的串行总线接口，用于连接主机和外部设备，其主要特点如下：</p>
+<ul class="simple">
+<li><p>即插即用：无需重启系统即可连接和断开设备。</p></li>
+<li><p>统一标准：定义了统一的电气接口和协议，使设备间能够兼容互通。</p></li>
+<li><p>多功能支持：支持多种类型的设备。</p></li>
+<li><p>供电能力：可为设备供电，无需额外的电源适配器。</p></li>
+</ul>
+<p>USB IF（USB Implementers Forum）负责制定USB技术规范，提供兼容性测试工具，并提供USB设备认证服务。</p>
+<p>USB技术规范可以从网站 <a class="reference external" href="http://www.usb.org/developers">http://www.usb.org/developers</a> 获取。</p>
+</section>
+<section id="usb-hw-features">
+<span id="id2"></span><h1>硬件配置<a class="headerlink" href="#usb-hw-features" title="Link to this heading"></a></h1>
+<div class="sphinx-tabs docutils container">
+<div aria-label="Tabbed content" class="closeable" role="tablist"><button aria-controls="panel-0-0-0" aria-selected="true" class="sphinx-tabs-tab" id="tab-0-0-0" name="0-0" role="tab" tabindex="0">RTL8721Dx</button><button aria-controls="panel-0-0-1" aria-selected="false" class="sphinx-tabs-tab" id="tab-0-0-1" name="0-1" role="tab" tabindex="-1">RTL8730E</button></div><div aria-labelledby="tab-0-0-0" class="sphinx-tabs-panel" id="panel-0-0-0" name="0-0" role="tabpanel" tabindex="0"><ul>
+<li><p>支持设备模式</p></li>
+<li><p>支持全速模式</p></li>
+<li><p>设备模式下的端点配置如下：</p>
+<ul class="simple">
+<li><p>EP0：INOUT</p></li>
+<li><p>EP1：IN</p></li>
+<li><p>EP2：OUT</p></li>
+<li><p>EP3：IN</p></li>
+<li><p>EP4：OUT</p></li>
+<li><p>EP5：INOUT</p></li>
+</ul>
+<p>其中，EP0仅用于控制传输，仅支持一个周期性IN端点。</p>
+</li>
+<li><p>共享缓存模式，缓存深度（单位DWORD）配置如下：</p>
+<ul class="simple">
+<li><p>总缓存：最大1016</p></li>
+<li><p>共享接收缓存：最大512</p></li>
+<li><p>共享非周期性发送缓存：最大256</p></li>
+<li><p>专用周期性发送缓存：最大256</p></li>
+</ul>
+</li>
+<li><p>内置PHY</p></li>
+</ul>
+</div><div aria-labelledby="tab-0-0-1" class="sphinx-tabs-panel" hidden="true" id="panel-0-0-1" name="0-1" role="tabpanel" tabindex="0"><ul>
+<li><p>支持主机、设备和OTG模式</p></li>
+<li><p>支持高速和全速模式</p></li>
+<li><p>设备模式下的端点配置如下：</p>
+<ul class="simple">
+<li><p>EP0：INOUT</p></li>
+<li><p>EP1：IN</p></li>
+<li><p>EP2：OUT</p></li>
+<li><p>EP3：IN</p></li>
+<li><p>EP4：OUT</p></li>
+<li><p>EP5：INOUT</p></li>
+</ul>
+<p>其中，EP0仅用于控制传输，仅支持一个周期性IN端点。</p>
+</li>
+<li><p>主机模式下支持8个物理通道</p></li>
+<li><p>共享缓存模式，缓存深度（单位DWORD）配置如下：</p>
+<ul class="simple">
+<li><p>总缓存：最大1016</p></li>
+<li><p>主机模式下</p>
+<ul>
+<li><p>共享接收缓存：最大512</p></li>
+<li><p>共享非周期性发送缓存：最大256</p></li>
+<li><p>专用周期性发送缓存：最大256</p></li>
+</ul>
+</li>
+<li><p>设备模式下</p>
+<ul>
+<li><p>共享接收缓存：最大512</p></li>
+<li><p>共享非周期性发送缓存：最大256</p></li>
+<li><p>共享周期性发送缓存：最大256</p></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p>内置PHY</p></li>
+</ul>
+</div></div>
+</section>
+<section id="usb-sw-stack-overflow">
+<span id="id3"></span><h1>软件协议栈概述<a class="headerlink" href="#usb-sw-stack-overflow" title="Link to this heading"></a></h1>
+<section id="id4">
+<h2>软件特性<a class="headerlink" href="#id4" title="Link to this heading"></a></h2>
+<div class="sphinx-tabs docutils container">
+<div aria-label="Tabbed content" class="closeable" role="tablist"><button aria-controls="panel-1-1-0" aria-selected="true" class="sphinx-tabs-tab" id="tab-1-1-0" name="1-0" role="tab" tabindex="0">RTL8721Dx</button><button aria-controls="panel-1-1-1" aria-selected="false" class="sphinx-tabs-tab" id="tab-1-1-1" name="1-1" role="tab" tabindex="-1">RTL8730E</button></div><div aria-labelledby="tab-1-1-0" class="sphinx-tabs-panel" id="panel-1-1-0" name="1-0" role="tabpanel" tabindex="0"><ul class="simple">
+<li><p>兼容USB2.0全速设备模式</p></li>
+<li><p>支持DMA和slave模式</p></li>
+<li><p>模块化分层设计，上下层之间通过异步回调式API通信，有效降低MCU负载</p></li>
+<li><p>支持CDC ACM、HID、UAC等USB IF标准设备类驱动</p></li>
+<li><p>提供透传、HID、音频、复合功能设备等设备解决方案示例</p></li>
+<li><p>支持设备描述符全定制</p></li>
+<li><p>设备核心驱动参数可配置</p></li>
+</ul>
+</div><div aria-labelledby="tab-1-1-1" class="sphinx-tabs-panel" hidden="true" id="panel-1-1-1" name="1-1" role="tabpanel" tabindex="0"><ul class="simple">
+<li><p>兼容USB2.0高速和全速主机/设备模式</p></li>
+<li><p>支持DMA和slave模式</p></li>
+<li><p>模块化分层设计，上下层之间通过异步回调式API通信，有效降低MCU负载</p></li>
+<li><p>支持CDC ACM、CDC ECM、MSC、UVC等USB IF标准主机类驱动</p></li>
+<li><p>支持CDC ACM、HID、MSC、UAC等USB IF标准设备类驱动</p></li>
+<li><p>提供透传、HID、存储、音频等设备解决方案示例</p></li>
+<li><p>提供透传、存储、网络通信、多媒体等主机解决方案示例</p></li>
+<li><p>支持设备描述符全定制</p></li>
+<li><p>主机/设备核心驱动参数可配置</p></li>
+</ul>
+</div></div>
+</section>
+<section id="id5">
+<h2>软件架构<a class="headerlink" href="#id5" title="Link to this heading"></a></h2>
+<p>协议栈架构如图所示：</p>
+<div class="sphinx-tabs docutils container">
+<div aria-label="Tabbed content" class="closeable" role="tablist"><button aria-controls="panel-2-2-0" aria-selected="true" class="sphinx-tabs-tab" id="tab-2-2-0" name="2-0" role="tab" tabindex="0">RTL8721Dx</button><button aria-controls="panel-2-2-1" aria-selected="false" class="sphinx-tabs-tab" id="tab-2-2-1" name="2-1" role="tab" tabindex="-1">RTL8730E</button></div><div aria-labelledby="tab-2-2-0" class="sphinx-tabs-panel" id="panel-2-2-0" name="2-0" role="tabpanel" tabindex="0"><figure class="align-center">
+<a class="reference internal image-reference" href="../../_images/usb_stack_architecture_device_cn.svg"><img alt="../../_images/usb_stack_architecture_device_cn.svg" height="352" src="../../_images/usb_stack_architecture_device_cn.svg" width="648" /></a>
+</figure>
+</div><div aria-labelledby="tab-2-2-1" class="sphinx-tabs-panel" hidden="true" id="panel-2-2-1" name="2-1" role="tabpanel" tabindex="0"><figure class="align-center">
+<a class="reference internal image-reference" href="../../_images/usb_stack_architecture_cn.svg"><img alt="../../_images/usb_stack_architecture_cn.svg" height="273" src="../../_images/usb_stack_architecture_cn.svg" width="895" /></a>
+</figure>
+</div></div>
+<p>各软件模块的功能如下:</p>
+<ul class="simple">
+<li><p>USB硬件抽象层: 实现电源管理、PHY参数校准等SoC相关的硬件驱动，为上层USB核心驱动提供统一的硬件抽象层接口</p></li>
+<li><p>USB主机/设备核心驱动：包含USB IP相关的硬件驱动、主机/设备控制器驱动、总线枚举和传输调度等核心控制逻辑，为上层USB主机/设备类驱动提供统一的核心驱动接口</p></li>
+<li><p>USB主机/设备类驱动: 兼容USB2.0规范的主机/设备类驱动，基于类驱动API，开发者可快速实现基于标准类的USB解决方案</p></li>
+<li><p>USB主机/设备解决方案示例: 为开发者提供USB主机/设备解决方案的设计参考</p></li>
+</ul>
+</section>
+<section id="id6">
+<h2>文件目录结构<a class="headerlink" href="#id6" title="Link to this heading"></a></h2>
+<p><strong>USB硬件抽象层</strong></p>
+<table class="docutils align-default" style="width: 100%">
+<tbody>
+<tr class="row-odd"><td><p>路径</p></td>
+<td><p>说明</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/soc/amebaxxx/fwlib/include/ameba_usb.h</span></code></p></td>
+<td><p>USB硬件抽象层API定义头文件</p></td>
+</tr>
+</tbody>
+</table>
+<p><strong>USB核心驱动</strong></p>
+<div class="sphinx-tabs docutils container">
+<div aria-label="Tabbed content" class="closeable" role="tablist"><button aria-controls="panel-3-3-0" aria-selected="true" class="sphinx-tabs-tab" id="tab-3-3-0" name="3-0" role="tab" tabindex="0">RTL8721Dx</button><button aria-controls="panel-3-3-1" aria-selected="false" class="sphinx-tabs-tab" id="tab-3-3-1" name="3-1" role="tab" tabindex="-1">RTL8730E</button></div><div aria-labelledby="tab-3-3-0" class="sphinx-tabs-panel" id="panel-3-3-0" name="3-0" role="tabpanel" tabindex="0"><table class="docutils align-default" style="width: 100%">
+<tbody>
+<tr class="row-odd"><td><p>路径</p></td>
+<td><p>说明</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/usb/common/</span></code></p></td>
+<td><p>USB通用核心驱动API定义头文件</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/usb/device/core/usbd.h</span></code></p></td>
+<td><p>USB设备核心驱动API定义头文件</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/amebadplus_gcc_project/project_km4/asdk/lib/application/lib_usbd.a</span></code></p></td>
+<td><p>USB设备核心驱动库文件，用于设备类驱动和应用开发</p></td>
+</tr>
+</tbody>
+</table>
+</div><div aria-labelledby="tab-3-3-1" class="sphinx-tabs-panel" hidden="true" id="panel-3-3-1" name="3-1" role="tabpanel" tabindex="0"><table class="docutils align-default" style="width: 100%">
+<tbody>
+<tr class="row-odd"><td><p>路径</p></td>
+<td><p>说明</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/usb/common/</span></code></p></td>
+<td><p>USB通用核心驱动API定义头文件</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/usb/device/core/usbd.h</span></code></p></td>
+<td><p>USB设备核心驱动API定义头文件</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/usb/host/core/usbh.h</span></code></p></td>
+<td><p>USB主机核心驱动API定义头文件</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/amebasmart_gcc_project/project_ap/asdk/lib/application/lib_usb.a</span></code></p></td>
+<td><p>USB综合核心驱动库文件，用于DRD类驱动和应用开发</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/amebasmart_gcc_project/project_ap/asdk/lib/application/lib_usbd.a</span></code></p></td>
+<td><p>USB设备核心驱动库文件，用于设备类驱动和应用开发</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/amebasmart_gcc_project/project_ap/asdk/lib/application/lib_usbh.a</span></code></p></td>
+<td><p>USB主机核心驱动库文件，用于主机类驱动和应用开发</p></td>
+</tr>
+</tbody>
+</table>
+</div></div>
+<p><strong>USB类驱动</strong></p>
+<table class="docutils align-default" style="width: 100%">
+<tbody>
+<tr class="row-odd"><td><p>路径</p></td>
+<td><p>说明</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/usb/device/cdc_acm/</span></code></p></td>
+<td><p>CDC ACM设备类驱动</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/usb/device/composite/</span></code></p></td>
+<td><p>复合功能设备类驱动</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/usb/device/hid/</span></code></p></td>
+<td><p>HID设备类驱动</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/usb/device/inic/</span></code></p></td>
+<td><p>INIC设备类驱动（非标）</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/usb/device/msc/</span></code></p></td>
+<td><p>MSC设备类驱动</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/usb/device/uac/</span></code></p></td>
+<td><p>UAC2.0设备类驱动</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/usb/host/cdc_acm/</span></code></p></td>
+<td><p>CDC ACM主机类驱动</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/usb/host/cdc_ecm/</span></code></p></td>
+<td><p>CDC ECM主机类驱动</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/usb/host/msc/</span></code></p></td>
+<td><p>MSC主机类驱动</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/usb/host/uvc/</span></code></p></td>
+<td><p>UVC主机类驱动</p></td>
+</tr>
+</tbody>
+</table>
+<p><strong>USB解决方案示例</strong></p>
+<table class="docutils align-default" style="width: 100%">
+<tbody>
+<tr class="row-odd"><td><p>路径</p></td>
+<td><p>说明</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/example/usb/usbh_cdc_acm/</span></code></p></td>
+<td><p>基于CDC ACM的透传主机解决方案示例</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/example/usb/usbh_cdc_ecm/</span></code></p></td>
+<td><p>基于CDC ECM的网络通信主机解决方案示例</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/example/usb/usbh_msc/</span></code></p></td>
+<td><p>基于MSC的存储主机解决方案示例</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/example/usb/usbh_uvc/</span></code></p></td>
+<td><p>基于UVC的多媒体主机解决方案示例</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/example/usb/usbh_wifi_bridge/</span></code></p></td>
+<td><p>基于CDC ECM的网络通信bridge解决方案示例</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/example/usb/usbd_cdc_acm/</span></code></p></td>
+<td><p>基于CDC ACM的透传设备解决方案示例</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/example/usb/usbd_cdc_acm_hid/</span></code></p></td>
+<td><p>基于CDC ACM和HID的复合功能设备解决方案示例</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/example/usb/usbd_cdc_acm_uac/</span></code></p></td>
+<td><p>基于CDC ACM和UAC2.0的复合功能设备解决方案示例</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/example/usb/usbd_uac_hid/</span></code></p></td>
+<td><p>基于HID和UAC2.0的复合功能设备解决方案示例</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/example/usb/usbd_hid/</span></code></p></td>
+<td><p>HID设备解决方案示例</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/example/usb/usbd_inic/</span></code></p></td>
+<td><p>INIC设备解决方案示例</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/example/usb/usbd_msc/</span></code></p></td>
+<td><p>基于MSC的存储设备解决方案示例</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/example/usb/usbd_uac/</span></code></p></td>
+<td><p>基于UAC2.0的音频设备解决方案示例</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/component/example/usb/usb_drd/</span></code></p></td>
+<td><p>基于MSC主机和MSC设备的DRD解决方案示例</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
+<section id="usb-menuconfig-build">
+<span id="id7"></span><h1>配置和编译<a class="headerlink" href="#usb-menuconfig-build" title="Link to this heading"></a></h1>
+<div class="sphinx-tabs docutils container">
+<div aria-label="Tabbed content" class="closeable" role="tablist"><button aria-controls="panel-4-4-0" aria-selected="true" class="sphinx-tabs-tab" id="tab-4-4-0" name="4-0" role="tab" tabindex="0">RTL8721Dx</button><button aria-controls="panel-4-4-1" aria-selected="false" class="sphinx-tabs-tab" id="tab-4-4-1" name="4-1" role="tab" tabindex="-1">RTL8730E</button></div><div aria-labelledby="tab-4-4-0" class="sphinx-tabs-panel" id="panel-4-4-0" name="4-0" role="tabpanel" tabindex="0"><p><strong>配置USB</strong></p>
+<p>在 <code class="docutils literal notranslate"><span class="pre">{SDK}/amebadplus_gcc_project</span></code> 下执行命令 <code class="docutils literal notranslate"><span class="pre">./menuconfig.py</span></code> , 在 <code class="docutils literal notranslate"><span class="pre">CONFIG</span> <span class="pre">USB</span></code> 下选择 <code class="docutils literal notranslate"><span class="pre">Enable</span> <span class="pre">USB</span></code> 使能USB，然后选择需要使能的USB类驱动:</p>
+<blockquote>
+<div><div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">[</span><span class="o">*</span><span class="p">]</span> <span class="n">Enable</span> <span class="n">USB</span>
+        <span class="n">USB</span> <span class="n">Mode</span> <span class="p">(</span><span class="n">Device</span><span class="p">)</span>  <span class="o">---&gt;</span>
+<span class="p">[</span> <span class="p">]</span> <span class="n">CDC</span> <span class="n">ACM</span>
+<span class="p">[</span> <span class="p">]</span> <span class="n">Composite</span>
+<span class="p">[</span> <span class="p">]</span> <span class="n">HID</span>
+<span class="p">[</span> <span class="p">]</span> <span class="n">INIC</span>
+</pre></div>
+</div>
+</div></blockquote>
+<p>保存并退出。</p>
+<p><strong>编译USB</strong></p>
+<p>在 <code class="docutils literal notranslate"><span class="pre">{SDK}/amebadplus_gcc_project</span></code> 下执行命令 <code class="docutils literal notranslate"><span class="pre">./build.py</span> <span class="pre">-a</span> <span class="pre">&lt;example&gt;</span></code> 编译指定的USB应用示例。</p>
+<blockquote>
+<div><div class="admonition note">
+<p class="admonition-title">备注</p>
+<p>上述命令中 <code class="docutils literal notranslate"><span class="pre">&lt;example&gt;</span></code> 为 <code class="docutils literal notranslate"><span class="pre">component/example/usb</span></code> 下的USB应用示例文件夹名, 且需要在配置USB时使能USB应用示例对应的类驱动。</p>
+</div>
+</div></blockquote>
+</div><div aria-labelledby="tab-4-4-1" class="sphinx-tabs-panel" hidden="true" id="panel-4-4-1" name="4-1" role="tabpanel" tabindex="0"><p><strong>配置USB</strong></p>
+<p>在 <code class="docutils literal notranslate"><span class="pre">{SDK}/amebasmart_gcc_project</span></code> 下执行命令 <code class="docutils literal notranslate"><span class="pre">./menuconfig.py</span></code> , 在 <code class="docutils literal notranslate"><span class="pre">CONFIG</span> <span class="pre">USB</span></code> 下选择 <code class="docutils literal notranslate"><span class="pre">Enable</span> <span class="pre">USB</span></code> 使能USB，然后选择需要使能的USB类驱动:</p>
+<blockquote>
+<div><div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">[</span><span class="o">*</span><span class="p">]</span> <span class="n">Enable</span> <span class="n">USB</span>
+        <span class="n">USB</span> <span class="n">Mode</span> <span class="p">(</span><span class="n">Device</span><span class="p">)</span>  <span class="o">---&gt;</span>
+<span class="p">[</span> <span class="p">]</span> <span class="n">CDC</span> <span class="n">ACM</span>
+<span class="p">[</span> <span class="p">]</span> <span class="n">Composite</span>
+<span class="p">[</span> <span class="p">]</span> <span class="n">HID</span>
+<span class="p">[</span> <span class="p">]</span> <span class="n">MSC</span>
+<span class="p">[</span> <span class="p">]</span> <span class="n">UAC</span>
+</pre></div>
+</div>
+</div></blockquote>
+<p>保存并退出。</p>
+<p><strong>编译USB</strong></p>
+<p>在 <code class="docutils literal notranslate"><span class="pre">{SDK}/amebasmart_gcc_project</span></code> 下执行命令 <code class="docutils literal notranslate"><span class="pre">./build.py</span> <span class="pre">-a</span> <span class="pre">&lt;example&gt;</span></code> 编译指定的USB应用示例。</p>
+<blockquote>
+<div><div class="admonition note">
+<p class="admonition-title">备注</p>
+<p>上述命令中 <code class="docutils literal notranslate"><span class="pre">&lt;example&gt;</span></code> 为 <code class="docutils literal notranslate"><span class="pre">component/example/usb</span></code> 下的USB应用示例文件夹名, 且需要在配置USB时使能USB应用示例对应的类驱动。</p>
+</div>
+</div></blockquote>
+</div></div>
+</section>
+<section id="usb-hal-driver">
+<span id="id8"></span><h1>硬件抽象层驱动<a class="headerlink" href="#usb-hal-driver" title="Link to this heading"></a></h1>
+<p><strong>概述</strong></p>
+<p>硬件抽象层驱动提供了SoC相关的USB电源管理和PHY校准接口，并定义了上层USB核心驱动所需的系统常量。</p>
+<figure class="align-center">
+<a class="reference internal image-reference" href="../../_images/usb_hal_api_cn.svg"><img alt="../../_images/usb_hal_api_cn.svg" height="261" src="../../_images/usb_hal_api_cn.svg" width="619" /></a>
+</figure>
+<p><strong>硬件抽象层API</strong></p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">usb_chip_init</span></code></p></td>
+<td><p>SoC相关的硬件（电源、时钟、使能）初始化</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">usb_chip_deinit</span></code></p></td>
+<td><p>SoC相关的硬件（电源、时钟、使能）去初始化</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">usb_chip_get_cal_data</span></code></p></td>
+<td><p>获取SoC相关的USB PHY校准数据</p></td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">备注</p>
+<ul class="simple">
+<li><p>硬件抽象层默认编入USB主机/设备/DRD核心库文件，不允许开发者修改</p></li>
+<li><p>USB PHY校准数据在SoC出厂前确定，原则上不需要开发者修改，如确实有必要修改，请联系Realtek FAE</p></li>
+</ul>
+</div>
+</section>
+<section id="usb-host-core">
+<span id="id9"></span><h1>主机核心驱动<a class="headerlink" href="#usb-host-core" title="Link to this heading"></a></h1>
+<section id="id10">
+<h2>主机驱动软件架构<a class="headerlink" href="#id10" title="Link to this heading"></a></h2>
+<figure class="align-center">
+<a class="reference internal image-reference" href="../../_images/usb_host_api_cn.svg"><img alt="../../_images/usb_host_api_cn.svg" height="510" src="../../_images/usb_host_api_cn.svg" width="990" /></a>
+</figure>
+<p>主机核心驱动层API定义头文件: <code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/host/core/usbh.h</span></code></p>
+</section>
+<section id="classapi">
+<h2>面向Class层的API<a class="headerlink" href="#classapi" title="Link to this heading"></a></h2>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>usbh_register_class</p></td>
+<td><p>注册主机类驱动，主机类驱动类型为usbh_class_driver_t, 具体参考
+<a class="reference internal" href="#usb-host-core-class-driver-cn"><span class="std std-ref">Class层回调函数</span></a></p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_unregister_class</p></td>
+<td><p>注销主机类驱动</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_alloc_pipe</p></td>
+<td><p>初始化通道</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_free_pipe</p></td>
+<td><p>注销通道</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_open_pipe</p></td>
+<td><p>打开通道</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_close_pipe</p></td>
+<td><p>关闭通道</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_reactivate_pipe</p></td>
+<td><p>重新激活指定通道</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_get_configuration</p></td>
+<td><p>获取指定subclass对应的配置索引</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_set_configuration</p></td>
+<td><p>设定配置索引</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_get_interface</p></td>
+<td><p>获取指定class、subclass和protocol的interface索引</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_set_interface</p></td>
+<td><p>设定当前的interface索引</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_get_interface_descriptor</p></td>
+<td><p>获取指定interface索引和alternate setting对应的解析后的interface描述符</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_get_raw_configuration_descriptor</p></td>
+<td><p>获取未解析的配置描述符</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_get_device_descriptor</p></td>
+<td><p>获取解析后的设备描述符</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_get_interval</p></td>
+<td><p>获取bInterval对应的物理值</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_set_toggle</p></td>
+<td><p>设置指定通道的PID翻转</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_get_toggle</p></td>
+<td><p>获取指定通道的当前PID翻转设置</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_get_ep_type</p></td>
+<td><p>获取指定通道对应的设备端点类型</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_get_urb_state</p></td>
+<td><p>获取指定通道当前URB状态</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_notify_class_state_change</p></td>
+<td><p>向核心驱动层发送事件，指示类驱动层状态有变更</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_notify_urb_state_change</p></td>
+<td><p>向核心驱动层发送事件，指示URB状态有变更</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_ctrl_set_interface</p></td>
+<td><p>向设备发送set_interface标准请求</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_ctrl_set_feature</p></td>
+<td><p>向设备发送set_feature标准请求</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_ctrl_clear_feature</p></td>
+<td><p>向设备发送clear_feature标准请求</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_ctrl_request</p></td>
+<td><p>向设备发送自定义控制请求</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_bulk_receive_data</p></td>
+<td><p>发起批量传输，从设备接收数据</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_bulk_send_data</p></td>
+<td><p>发起批量传输，向设备发送数据</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_intr_receive_data</p></td>
+<td><p>发起中断传输，从设备接收数据</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_intr_send_data</p></td>
+<td><p>发起中断传输，向设备发送数据</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_isoc_receive_data</p></td>
+<td><p>发起等时传输，从设备接收数据</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_isoc_send_data</p></td>
+<td><p>发起等时传输，向设备发送数据</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_get_current_frame</p></td>
+<td><p>获取当前的帧号</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_get_last_transfer_size</p></td>
+<td><p>获取指定通道上一次传输的数据长度</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_enter_suspend</p></td>
+<td><p>进入或退出suspend状态</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_port_test_ctrl</p></td>
+<td><p>发送端口测试指令，用于CTS测试</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usb-host-core-class-driver-cn"><strong>Class层回调函数</strong></p>
+<p>主机核心驱动层提供了类型 <code class="docutils literal notranslate"><span class="pre">usbh_class_driver_t</span></code> 用于定义主机类驱动:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">u8</span><span class="w"> </span><span class="n">class_code</span><span class="p">;</span>
+<span class="w">        </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="n">attach</span><span class="p">)(</span><span class="k">struct</span><span class="w"> </span><span class="nc">_usb_host_t</span><span class="w"> </span><span class="o">*</span><span class="n">host</span><span class="p">);</span>
+<span class="w">        </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="n">detach</span><span class="p">)(</span><span class="k">struct</span><span class="w"> </span><span class="nc">_usb_host_t</span><span class="w"> </span><span class="o">*</span><span class="n">host</span><span class="p">);</span>
+<span class="w">        </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="n">setup</span><span class="p">)(</span><span class="k">struct</span><span class="w"> </span><span class="nc">_usb_host_t</span><span class="w"> </span><span class="o">*</span><span class="n">host</span><span class="p">);</span>
+<span class="w">        </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="n">process</span><span class="p">)(</span><span class="k">struct</span><span class="w"> </span><span class="nc">_usb_host_t</span><span class="w"> </span><span class="o">*</span><span class="n">host</span><span class="p">);</span>
+<span class="w">        </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="n">sof</span><span class="p">)(</span><span class="k">struct</span><span class="w"> </span><span class="nc">_usb_host_t</span><span class="w"> </span><span class="o">*</span><span class="n">host</span><span class="p">);</span>
+<span class="w">        </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="n">nak</span><span class="p">)(</span><span class="k">struct</span><span class="w"> </span><span class="nc">_usb_host_t</span><span class="w"> </span><span class="o">*</span><span class="n">host</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="n">pipe_num</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbh_class_driver_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>attach</p></td>
+<td><p>在SET_CONFIGURATION请求成功执行后被调用</p></td>
+</tr>
+<tr class="row-odd"><td><p>detach</p></td>
+<td><p>在设备连接断开时被调用</p></td>
+</tr>
+<tr class="row-even"><td><p>setup</p></td>
+<td><p>在attach回调执行成功后被调用，用于处理类驱动相关的控制请求</p></td>
+</tr>
+<tr class="row-odd"><td><p>process</p></td>
+<td><p>在setup回调执行成功后被消息驱动循环调用，用于处理类驱动相关的消息</p></td>
+</tr>
+<tr class="row-even"><td><p>sof</p></td>
+<td><p>在SOF中断发生时被调用，一般用于class层处理与时序相关的事务</p></td>
+</tr>
+<tr class="row-odd"><td><p>nak</p></td>
+<td><p>在指定通道发生NAK中断时被调用</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="api">
+<h2>面向应用层的API<a class="headerlink" href="#api" title="Link to this heading"></a></h2>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>usbh_init</p></td>
+<td><p>初始化USB主机，配置信息通过类型为 <code class="docutils literal notranslate"><span class="pre">usbh_config_t</span></code> 的参数指定，具体参考
+<a class="reference internal" href="#usb-host-core-config-cn"><span class="std std-ref">USB主机配置参数</span></a></p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_deinit</p></td>
+<td><p>注销USB主机</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_get_status</p></td>
+<td><p>获取设备连接状态，0 - 断开，1 - 连接</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_reenumerate</p></td>
+<td><p>重新枚举</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usb-host-core-config-cn"><strong>USB主机配置参数</strong></p>
+<p>主机核心驱动层提供了类型 <code class="docutils literal notranslate"><span class="pre">usbh_config_t</span></code> 用于定义USB主机协议栈配置参数:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">u32</span><span class="w"> </span><span class="n">ext_intr_en</span><span class="p">;</span>
+<span class="w">        </span><span class="n">u16</span><span class="w"> </span><span class="n">rx_fifo_depth</span><span class="p">;</span>
+<span class="w">        </span><span class="n">u16</span><span class="w"> </span><span class="n">nptx_fifo_depth</span><span class="p">;</span>
+<span class="w">        </span><span class="n">u16</span><span class="w"> </span><span class="n">ptx_fifo_depth</span><span class="p">;</span>
+<span class="w">        </span><span class="n">u8</span><span class="w"> </span><span class="n">main_task_priority</span><span class="p">;</span>
+<span class="w">        </span><span class="n">u8</span><span class="w"> </span><span class="n">isr_task_priority</span><span class="p">;</span>
+<span class="w">        </span><span class="n">u8</span><span class="w"> </span><span class="n">alt_max</span><span class="p">;</span>
+<span class="w">        </span><span class="n">u8</span><span class="w"> </span><span class="n">speed</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">        </span><span class="n">u8</span><span class="w"> </span><span class="n">dma_enable</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">        </span><span class="n">u8</span><span class="w"> </span><span class="n">sof_tick_en</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbd_config_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>参数</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>ext_intr_en</p></td>
+<td><p>使能可选的USB驱动，设定值为0时不开任何可选中断，可根据应用设计需要，设定为以下宏定义值（支持按位组合）：</p>
+<p>USBH_SOF_INTR：SOF中断（GINTSTS.Sof），当Class层需要使能sof回调函数时开启，用于处理与时序相关的事务</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>rx_fifo_depth</p></td>
+<td><p>USB主机共享接收缓存深度，最小值16，最大值不能超过硬件允许的最大值，仅适用于配置了专用缓存的SoC，具体参考
+<a class="reference internal" href="#usb-hw-features"><span class="std std-ref">硬件配置</span></a></p></td>
+</tr>
+<tr class="row-even"><td><p>nptx_fifo_depth</p></td>
+<td><p>USB主机共享非周期性发送缓存深度，最小值16，最大值不能超过硬件允许的最大值，仅适用于配置了专用缓存的SoC，
+具体参考 <a class="reference internal" href="#usb-hw-features"><span class="std std-ref">硬件配置</span></a></p></td>
+</tr>
+<tr class="row-odd"><td><p>ptx_fifo_depth</p></td>
+<td><p>USB主机共享周期性发送缓存深度，最小值16，最大值不能超过硬件允许的最大值，仅适用于配置了专用缓存的SoC，具
+体参考 <a class="reference internal" href="#usb-hw-features"><span class="std std-ref">硬件配置</span></a></p></td>
+</tr>
+<tr class="row-even"><td><p>main_task_priority</p></td>
+<td><p>USB主机核心驱动主消息处理任务的优先级</p></td>
+</tr>
+<tr class="row-odd"><td><p>isr_task_priority</p></td>
+<td><p>USB主机核心驱动中断处理任务的优先级</p></td>
+</tr>
+<tr class="row-even"><td><p>alt_max</p></td>
+<td><p>Interface描述符中支持的最大的alternate setting数量</p></td>
+</tr>
+<tr class="row-odd"><td><p>speed</p></td>
+<td><p>USB主机速度，有效值：</p>
+<ul class="simple">
+<li><p>USB_SPEED_HIGH：高速模式，适用于支持高速USB的Ameba SoC</p></li>
+<li><p>USB_SPEED_HIGH_IN_FULL：全速模式，适用于支持高速USB的Ameba SoC，用于连接全速UAC等对带宽要求不高的设备</p></li>
+<li><p>USB_SPEED_FULL：全速模式，适用于仅支持全速USB的Ameba SoC</p></li>
+</ul>
+</td>
+</tr>
+<tr class="row-even"><td><p>dma_enable</p></td>
+<td><p>使能DMA模式</p></td>
+</tr>
+<tr class="row-odd"><td><p>sof_tick_en</p></td>
+<td><p>设置USB主机核心驱动的计时方式，该计时用于根据设备端点描述符bInterval来触发周期性传输，以及传输超时检测：</p>
+<ul class="simple">
+<li><p>0：利用系统时钟（如SysTick、DebugTimer，因SoC而异）计时，不需要响应额外的中断，CPU占用率较低，但与SOF
+计数可能会有偏差，适用于要求低CPU占用率、或者对传输周期要求不苛刻的应用场景</p></li>
+<li><p>1：利用SOF中断计时，需要配合USBH_SOF_INTR可选中断使用，因为需要周期性响应SOF中断，CPU占用率较高，计时
+精度与SOF计数精度匹配</p></li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">备注</p>
+<p>配置的缓存总深度rx_fifo_depth + nptx_fifo_depth + ptx_fifo_depth不得超过硬件支持的最大总缓存深度，具体参考 <a class="reference internal" href="#usb-hw-features"><span class="std std-ref">硬件配置</span></a> 。</p>
+</div>
+</section>
+</section>
+<section id="usb-device-core">
+<span id="id11"></span><h1>设备核心驱动<a class="headerlink" href="#usb-device-core" title="Link to this heading"></a></h1>
+<section id="id12">
+<h2>设备驱动软件架构<a class="headerlink" href="#id12" title="Link to this heading"></a></h2>
+<figure class="align-center">
+<a class="reference internal image-reference" href="../../_images/usb_device_api_cn.svg"><img alt="../../_images/usb_device_api_cn.svg" height="417" src="../../_images/usb_device_api_cn.svg" width="907" /></a>
+</figure>
+<p>设备核心驱动层API定义头文件: <code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/device/core/usbd.h</span></code></p>
+</section>
+<section id="id13">
+<h2>面向类驱动层的API<a class="headerlink" href="#id13" title="Link to this heading"></a></h2>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>usbd_register_class</p></td>
+<td><p>注册设备类驱动，在设备类驱动初始化函数中调用, 类驱动定义参考
+<a class="reference internal" href="#usb-device-core-class-driver-cn"><span class="std std-ref">类驱动层回调函数</span></a></p></td>
+</tr>
+<tr class="row-odd"><td><p>usbd_unregister_class</p></td>
+<td><p>注销设备类驱动，在设备类驱动注销函数中调用</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_ep_init</p></td>
+<td><p>初始化端点，一般会在以下场景中被调用：</p>
+<ul class="simple">
+<li><p>设备类驱动set_config回调函数中</p></li>
+<li><p>设备类驱动setup回调函数中，收到SET_INTERFACE之类的需要重新初始化端点的特定请求时</p></li>
+</ul>
+</td>
+</tr>
+<tr class="row-odd"><td><p>usbd_ep_deinit</p></td>
+<td><p>注销端点，一般会在以下场景中被调用：</p>
+<ul class="simple">
+<li><p>设备类驱动clear_config回调函数中</p></li>
+<li><p>设备类驱动setup回调函数中，收到SET_INTERFACE之类的需要注销端点的特定请求时</p></li>
+</ul>
+</td>
+</tr>
+<tr class="row-even"><td><p>usbd_ep_transmit</p></td>
+<td><p>通过指定非EP0端点向USB主机发送数据，即发起IN传输。传输的执行是异步的，函数返回并不表示传输已完成，
+可在设备类驱动ep_data_in回调函数中获取传输执行状态</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbd_ep_receive</p></td>
+<td><p>准备从指定非EP0端点从USB主机接受数据，即发起OUT传输。传输的执行是异步的，函数返回并不表示传输已完
+成，可在设备类驱动ep_data_out回调函数中获取传输完成的数据</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_ep_set_stall</p></td>
+<td><p>将指定端点状态设置为STALL，根据USB协议或者应用设计需求调用</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbd_ep_clear_stall</p></td>
+<td><p>清除指定端点的STALL状态，根据USB协议或者应用设计需求调用</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_ep_is_stall</p></td>
+<td><p>检查指定端点是否处于STALL状态</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbd_ep0_set_stall</p></td>
+<td><p>将端点0的状态设置为STALL，根据USB协议或者应用设计需求调用</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_ep0_transmit</p></td>
+<td><p>通过端点0发送数据，用于在控制IN传输的Data阶段向USB主机发送数据。传输的执行是异步的，函数返回并不表
+示传输已完成，可在设备类驱动ep0_data_in回调函数中获取传输执行状态</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbd_ep0_receive</p></td>
+<td><p>准备从端点0接受数据，用于在控制OUT传输的Data阶段从USB主机接收数据。传输的执行是异步的，函数返回并
+不表示传输已完成，可在设备类驱动ep0_data_out回调函数中获取传输完成的数据</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_ep0_transmit_status</p></td>
+<td><p>通过端点0发送ZLP，用于在控制OUT传输的Status阶段发送ZLP。传输的执行是异步的，函数返回并不表示传输已
+完成，可在设备类驱动ep0_data_in回调函数中获取传输执行状态</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbd_ep0_receive_status</p></td>
+<td><p>准备通过端点0接收ZLP，用于在控制IN传输的Status阶段接收ZLP。传输的执行是异步的，函数返回并不表示传
+输已完成，可在设备类驱动ep0_data_out回调函数中获取传输完成的数据</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_get_str_desc</p></td>
+<td><p>用于将ASCII编码的字符串转换为UNICODE 16编码的USB字符串描述符，注意目标字符串缓存的大小为源字符串大
+小的两倍再加两个字节，多出的两个字节为USB字符串描述符长度和描述符类型标识</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usb-device-core-class-driver-cn"><strong>类驱动层回调函数</strong></p>
+<p>设备核心驱动层提供了类型 <code class="docutils literal notranslate"><span class="pre">usbd_class_driver_t</span></code> 用于定义设备类驱动:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">_usbd_class_driver_t</span><span class="w"> </span><span class="p">{</span>
+<span class="w">   </span><span class="n">u8</span><span class="w"> </span><span class="o">*</span><span class="p">(</span><span class="o">*</span><span class="n">get_descriptor</span><span class="p">)(</span><span class="w"> </span><span class="n">usb_dev_t</span><span class="w"> </span><span class="o">*</span><span class="n">dev</span><span class="p">,</span><span class="w"> </span><span class="n">usb_setup_req_t</span><span class="w"> </span><span class="o">*</span><span class="n">req</span><span class="p">,</span>
+<span class="w">   </span><span class="n">usb_speed_type_t</span><span class="w"> </span><span class="n">speed</span><span class="p">,</span><span class="w"> </span><span class="n">u16</span><span class="w"> </span><span class="o">*</span><span class="n">len</span><span class="p">);</span>
+<span class="w">   </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="n">set_config</span><span class="p">)(</span><span class="n">usb_dev_t</span><span class="w"> </span><span class="o">*</span><span class="n">dev</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="n">config</span><span class="p">);</span>
+<span class="w">   </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="n">clear_config</span><span class="p">)(</span><span class="n">usb_dev_t</span><span class="w"> </span><span class="o">*</span><span class="n">dev</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="n">config</span><span class="p">);</span>
+<span class="w">   </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="n">setup</span><span class="p">)(</span><span class="n">usb_dev_t</span><span class="w"> </span><span class="o">*</span><span class="n">dev</span><span class="p">,</span><span class="w"> </span><span class="n">usb_setup_req_t</span><span class="w">  </span><span class="o">*</span><span class="n">req</span><span class="p">);</span>
+<span class="w">   </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="n">sof</span><span class="p">)(</span><span class="n">usb_dev_t</span><span class="w"> </span><span class="o">*</span><span class="n">dev</span><span class="p">);</span>
+<span class="w">   </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="n">suspend</span><span class="p">)(</span><span class="n">usb_dev_t</span><span class="w"> </span><span class="o">*</span><span class="n">dev</span><span class="p">);</span>
+<span class="w">   </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="n">resume</span><span class="p">)(</span><span class="n">usb_dev_t</span><span class="w"> </span><span class="o">*</span><span class="n">dev</span><span class="p">);</span>
+<span class="w">   </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="n">ep0_data_in</span><span class="p">)(</span><span class="n">usb_dev_t</span><span class="w"> </span><span class="o">*</span><span class="n">dev</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="n">status</span><span class="p">);</span>
+<span class="w">   </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="n">ep0_data_out</span><span class="p">)(</span><span class="n">usb_dev_t</span><span class="w"> </span><span class="o">*</span><span class="n">dev</span><span class="p">);</span>
+<span class="w">   </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="n">ep_data_in</span><span class="p">)(</span><span class="n">usb_dev_t</span><span class="w"> </span><span class="o">*</span><span class="n">dev</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="n">ep_addr</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="n">status</span><span class="p">);</span>
+<span class="w">   </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="n">ep_data_out</span><span class="p">)(</span><span class="n">usb_dev_t</span><span class="w"> </span><span class="o">*</span><span class="n">dev</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="n">ep_addr</span><span class="p">,</span><span class="w"> </span><span class="n">u16</span><span class="w"> </span><span class="n">len</span><span class="p">);</span>
+<span class="w">   </span><span class="kt">void</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">status_changed</span><span class="p">)(</span><span class="n">usb_dev_t</span><span class="w"> </span><span class="o">*</span><span class="n">dev</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="n">status</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbd_class_driver_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>是否必须</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>get_descriptor</p></td>
+<td><p>是</p></td>
+<td><p>在设备核心驱动枚举阶段收到USB主机获取USB描述符请求时被调用，所有类型的描述符统一通过该回调函数获
+取。设备类驱动需要在该回调函数中，根据Setup请求wValue字段定义的描述符类型，返回对应的描述符数组指
+针和数组长度信息：         i</p>
+<ul class="simple">
+<li><p>USB_DESC_TYPE_DEVICE：设备描述符，必须支持</p></li>
+<li><p>USB_DESC_TYPE_CONFIGURATION：配置描述符，必须支持</p></li>
+<li><p>USB_DESC_TYPE_DEVICE_QUALIFIER：设备限定描述符，对于需要同时支持全速与高速的设备，必须支持</p></li>
+<li><p>USB_DESC_TYPE_OTHER_SPEED_CONFIGURATION：其它速率配置描述符，对于需要同时支持全速与高速的设备，
+必须支持</p></li>
+<li><p>USB_DESC_TYPE_STRING：字符串描述符，具体又包含语言ID、厂商、产品、串号等字符串描述符，可选</p></li>
+</ul>
+<p>关于USB描述符的介绍，参考 <a class="reference internal" href="#usb-device-descriptor-customization"><span class="std std-ref">设备描述符定制</span></a></p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>set_config</p></td>
+<td><p>是</p></td>
+<td><p>当设备核心驱动在ADDRESSED状态下收到SET_CONFIGURATION控制请求时被调用，类驱动一般需要在该回调函数
+中初始化端点资源并为OUT传输做好准备：</p>
+<ul class="simple">
+<li><p>调用usbd_ep_init初始化当前配置对应的所有端点</p></li>
+<li><p>调用usbd_ep_receive准备好进行第一笔OUT传输</p></li>
+</ul>
+</td>
+</tr>
+<tr class="row-even"><td><p>clear_config</p></td>
+<td><p>是</p></td>
+<td><p>在以下场景中会被调用：</p>
+<ul class="simple">
+<li><p>设备核心驱动在CONFIGURED状态下收到SET_CONFIGURATION控制请求切到新的配置或切到未配置状态时</p></li>
+<li><p>设备核心驱动在非ADDRESSED/CONFIGURED状态下收到SET_CONFIGURATION控制请求时</p></li>
+<li><p>设备核心驱动处理枚举完成（GINTSTS.EnumDone）中断时</p></li>
+<li><p>设备核心驱动处理会话完成（GOTGINT.SesEndDet）中断时</p></li>
+<li><p>在usbd_deinit被调用时</p></li>
+</ul>
+<p>类驱动一般需要在该回调函数中调用usbd_ep_deinit注销端点资源</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>setup</p></td>
+<td><p>是</p></td>
+<td><p>在控制IN/OUT传输的Setup阶段完成时被调用，用于类驱动层处理与类驱动相关的控制请求：</p>
+<ul class="simple">
+<li><p>标准接口请求：USB_REQ_SET_INTERFACE、USB_REQ_GET_INTERFACE、USB_REQ_GET_STATUS</p></li>
+<li><p>类相关请求：具体参考类规范中的相关定义</p></li>
+<li><p>自定义请求：对于用户自定义的非标准类设备，用户可以根据需要自定义控制请求</p></li>
+</ul>
+</td>
+</tr>
+<tr class="row-even"><td><p>ep_data_in</p></td>
+<td><p>否</p></td>
+<td><p>在批量/中断/等时IN传输的Data阶段完成时被调用，用于指示IN传输的完成状态，类驱动可在该回调函数中做
+如下处理：</p>
+<ul class="simple">
+<li><p>对于批量和中断IN传输，如果上一笔传输的数据长度为端点描述符中wMaxPacketSize的倍数，发送ZLP包</p></li>
+<li><p>将IN端点的状态设为就绪，调用应用层回调函数，允许发起新的IN传输或在IN传输失败时进行重传</p></li>
+</ul>
+</td>
+</tr>
+<tr class="row-odd"><td><p>ep_data_out</p></td>
+<td><p>否</p></td>
+<td><p>在批量/中断/等时OUT传输的Data阶段完成时被调用，用于处理接收到的OUT数据，类驱动可在该回调函数中做
+如下处理：</p>
+<ul class="simple">
+<li><p>调用应用层回调函数，由应用层处理接收到的数据</p></li>
+<li><p>调用usbd_ep_receive准备好进行下一笔OUT传输</p></li>
+</ul>
+</td>
+</tr>
+<tr class="row-even"><td><p>ep0_data_in</p></td>
+<td><p>否</p></td>
+<td><p>在控制IN传输的Data阶段完成时被调用，用于指示控制IN传输的完成状态，允许发起新的控制IN传输或在控制
+IN传输失败时进行重传</p></td>
+</tr>
+<tr class="row-odd"><td><p>ep0_data_out</p></td>
+<td><p>否</p></td>
+<td><p>在控制OUT传输的Data阶段完成时被调用，用于处理接收到的控制OUT数据；注意EP0的OUT传输使能在设备核心
+驱动层自动完成，类驱动层不需要处理</p></td>
+</tr>
+<tr class="row-even"><td><p>sof</p></td>
+<td><p>否</p></td>
+<td><p>在SOF中断发生时被调用，一般用于处理与时序相关的事务，比如UAC应用可以通过该回调函数做与USB主机的时
+钟同步</p></td>
+</tr>
+<tr class="row-odd"><td><p>suspend</p></td>
+<td><p>否</p></td>
+<td><p>在suspend中断发生时被调用, 用于类驱动层在suspend发生时做资源挂起处理</p></td>
+</tr>
+<tr class="row-even"><td><p>resume</p></td>
+<td><p>否</p></td>
+<td><p>在resume中断发生时被调用, 用于类驱动层在resume发生时做资源恢复处理</p></td>
+</tr>
+<tr class="row-odd"><td><p>status_changed</p></td>
+<td><p>是</p></td>
+<td><p>在USB连接状态改变时被调用，类驱动层可通过该回调函数支持USB热插拔，例如可以调用应用层回调函数，让
+应用层在检测到与USB主机连接/通信断开时注销并重新初始化USB设备</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id14">
+<h2>面向应用层的API<a class="headerlink" href="#id14" title="Link to this heading"></a></h2>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>usbd_init</p></td>
+<td><p>初始化USB设备，配置信息通过类型为 <code class="docutils literal notranslate"><span class="pre">usbd_config_t</span></code> 的参数指定，具体参考
+<a class="reference internal" href="#usb-device-core-config-cn"><span class="std std-ref">USB设备配置参数</span></a></p></td>
+</tr>
+<tr class="row-odd"><td><p>usbd_deinit</p></td>
+<td><p>注销USB设备</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_get_status</p></td>
+<td><p>获取USB连接状态，返回值为 <code class="docutils literal notranslate"><span class="pre">usbd_attach_status_t</span></code> 定义的枚举值：</p>
+<ul class="simple">
+<li><p>USBD_ATTACH_STATUS_INIT     = 0U,   // 初始化</p></li>
+<li><p>USBD_ATTACH_STATUS_ATTACHED = 1U,   // 连接到USB主机</p></li>
+<li><p>USBD_ATTACH_STATUS_DETACHED = 2U    // 与USB主机断开连接或停止通信</p></li>
+</ul>
+</td>
+</tr>
+<tr class="row-odd"><td><p>usbd_get_bus_status</p></td>
+<td><p>获取USB总线状态，当返回值为HAL_OK时，参数status返回有效的USB总线状态信息，</p>
+<p>取值范围为 <code class="docutils literal notranslate"><span class="pre">usbd_bus_state_t</span></code> 定义的枚举值的按位组合值：</p>
+<ul class="simple">
+<li><p>USBD_BUS_STATUS_DN       = BIT0,  // D-线上的逻辑电平</p></li>
+<li><p>USBD_BUS_STATUS_DP       = BIT1,  // D+线上的逻辑电平</p></li>
+<li><p>USBD_BUS_STATUS_SUSPEND  = BIT2,  // Suspend状态指示</p></li>
+</ul>
+</td>
+</tr>
+<tr class="row-even"><td><p>usbd_wake_host</p></td>
+<td><p>向USB主机发送remote wakeup信号，唤醒USB主机</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usb-device-core-config-cn"><strong>USB设备配置参数</strong></p>
+<p>设备核心驱动层提供了类型 <code class="docutils literal notranslate"><span class="pre">usbd_config_t</span></code> 用于定义USB设备配置参数:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">   </span><span class="n">u32</span><span class="w"> </span><span class="n">nptx_max_err_cnt</span><span class="p">[</span><span class="n">USB_MAX_ENDPOINTS</span><span class="p">];</span>
+<span class="w">   </span><span class="n">u32</span><span class="w"> </span><span class="n">nptx_max_epmis_cnt</span><span class="p">;</span>
+<span class="w">   </span><span class="n">u32</span><span class="w"> </span><span class="n">ext_intr_en</span><span class="p">;</span>
+<span class="w">   </span><span class="n">u16</span><span class="w"> </span><span class="n">rx_fifo_depth</span><span class="p">;</span>
+<span class="w">   </span><span class="n">u16</span><span class="w"> </span><span class="n">ptx_fifo_depth</span><span class="p">[</span><span class="n">USB_MAX_ENDPOINTS</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">];</span>
+<span class="w">   </span><span class="n">u8</span><span class="w"> </span><span class="n">speed</span><span class="p">;</span>
+<span class="w">   </span><span class="n">u8</span><span class="w"> </span><span class="n">isr_priority</span><span class="p">;</span>
+<span class="w">   </span><span class="n">u8</span><span class="w"> </span><span class="n">isr_in_critical</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">   </span><span class="n">u8</span><span class="w"> </span><span class="n">dma_enable</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">   </span><span class="n">u8</span><span class="w"> </span><span class="n">intr_use_ptx_fifo</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbd_config_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>参数</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>nptx_max_err_cnt</p></td>
+<td><p>非周期性IN传输允许出现的最大错误次数</p></td>
+</tr>
+<tr class="row-odd"><td><p>nptx_max_epmis_cnt</p></td>
+<td><p>非周期性IN传输产生EPMis中断的EPMis次数阈值</p></td>
+</tr>
+<tr class="row-even"><td><p>ext_intr_en</p></td>
+<td><p>使能可选的USB中断</p>
+<ul class="simple">
+<li><p>USBD_SOF_INTR：SOF中断，一般用于需要通过SOF与USB主机端进行时钟同步的应用场景</p></li>
+<li><p>USBD_EOPF_INTR：用于等时传输时设定下一帧的奇偶性，仅用于slave模式</p></li>
+<li><p>USBD_EPMIS_INTR：用于在使能了多个非周期IN端点的应用场景下，发生EPMis中断后重启IN传输，</p></li>
+</ul>
+<p>仅适用于配置了共享缓存的Ameba SoC</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>rx_fifo_depth</p></td>
+<td><p>接收缓存深度，单位是DWORD，设定值不能超过硬件允许的最大值，仅适用于配置了专用缓存的Ameba SoC，具体参考
+<a class="reference internal" href="#usb-hw-features"><span class="std std-ref">硬件配置</span></a></p></td>
+</tr>
+<tr class="row-even"><td><p>ptx_fifo_depth</p></td>
+<td><p>发送缓存深度，单位是DWORD，ptx_fifo_depth[n]对应索引为n+1的发送缓存，设定值不能超过硬件允许的最大值，索
+引为0的发送缓存深度不允许配置，使用硬件默认值，仅适用于配置了专用缓存的Ameba SoC，具体参考
+<a class="reference internal" href="#usb-hw-features"><span class="std std-ref">硬件配置</span></a> 。</p></td>
+</tr>
+<tr class="row-odd"><td><p>speed</p></td>
+<td><p>USB设备速度，有效值：</p>
+<ul class="simple">
+<li><p>USB_SPEED_HIGH：高速模式，适用于支持高速USB的Ameba SoC</p></li>
+<li><p>USB_SPEED_HIGH_IN_FULL：全速模式，适用于支持高速USB的Ameba SoC，一般用于UAC等对带宽要求不高的应用场景</p></li>
+<li><p>USB_SPEED_FULL：全速模式，适用于仅支持全速USB的Ameba SoC</p></li>
+</ul>
+</td>
+</tr>
+<tr class="row-even"><td><p>isr_priority</p></td>
+<td><p>USB设备核心驱动中的中断处理事件优先级</p></td>
+</tr>
+<tr class="row-odd"><td><p>isr_in_critical</p></td>
+<td><p>是否使能将USB设备核心驱动中的中断处理事件在保护区中运行，0-失能, 1-使能</p></td>
+</tr>
+<tr class="row-even"><td><p>dma_enable</p></td>
+<td><p>是否使能DMA模式，0-失能, 1-使能</p></td>
+</tr>
+<tr class="row-odd"><td><p>intr_use_ptx_fifo</p></td>
+<td><p>是否需要使用专用的周期性传输缓存来处理中断IN传输，0-失能, 1-使能，仅适用于配置了共享缓存的Ameba SoC</p></td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">备注</p>
+<p>支持共享缓存的Ameba SoC不需要配置缓存深度；支持专用缓存的Ameba SoC在配置缓存深度时，注意rx_fifo_depth和所有ptx_fifo_depth的设定值之和不能超过SoC支持的最大缓存深度，具体参考 <a class="reference internal" href="#usb-hw-features"><span class="std std-ref">硬件配置</span></a> 。</p>
+</div>
+</section>
+</section>
+<section id="usb-host-solution">
+<span id="id15"></span><h1>主机解决方案<a class="headerlink" href="#usb-host-solution" title="Link to this heading"></a></h1>
+<section id="usb-host-cdc-acm">
+<span id="id16"></span><h2>透传主机方案<a class="headerlink" href="#usb-host-cdc-acm" title="Link to this heading"></a></h2>
+<section id="id17">
+<h3>概述<a class="headerlink" href="#id17" title="Link to this heading"></a></h3>
+<p>CDC ACM类为通信设备类（Communication Device Class​，CDC）的抽象控制模型（Abstract Control Model，ACM）子类，可用于数据透传。</p>
+<p>协议栈提供了标准的CDC ACM主机类驱动和基于该主机类驱动的数据透传应用示例，特征如下：</p>
+<ul class="simple">
+<li><p>支持 <a class="reference internal" href="#usb-device-cdc-acm"><span class="std std-ref">透传设备方案</span></a> 定义的CDC ACM设备示例</p></li>
+<li><p>通道配置如下：</p>
+<ul>
+<li><p>两个通道用于控制IN/OUT传输</p></li>
+<li><p>一个通道用于中断IN传输</p></li>
+<li><p>一个通道用于批量IN传输</p></li>
+<li><p>一个通道用于批量OUT传输</p></li>
+</ul>
+</li>
+<li><p>支持数据完整性校验测试、寿命测试、性能测试</p></li>
+<li><p>支持热插拔</p></li>
+</ul>
+</section>
+<section id="id18">
+<h3>类驱动<a class="headerlink" href="#id18" title="Link to this heading"></a></h3>
+<p><strong>类驱动路径</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/host/cdc_acm</span></code></p>
+<p><strong>类驱动API</strong></p>
+<p>类驱动API定义头文件：<code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/host/usbh_cdc_acm/usbh_cdc_acm.h</span></code></p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>usbh_cdc_acm_init</p></td>
+<td><p>初始化类驱动，初始化时会传入应用层回调指针，</p>
+<p>具体参考 <a class="reference internal" href="#usb-host-cdc-acm-app-callback"><span class="std std-ref">应用层回调API</span></a>。</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>usbh_cdc_acm_deinit</p></td>
+<td><p>注销类驱动</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_cdc_acm_set_line_coding</p></td>
+<td><p>发送CTRL请求，设置USB设备的line coding</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_cdc_acm_get_line_coding</p></td>
+<td><p>发送CTRL请求，获取USB设备的line coding</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_cdc_acm_set_control_line_state</p></td>
+<td><p>发送CTRL请求，设置USB设备的control line state</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_cdc_acm_transmit</p></td>
+<td><p>发送批量OUT数据到USB设备</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_cdc_acm_receive</p></td>
+<td><p>从USB设备读取批量IN数据</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_cdc_acm_notify_receive</p></td>
+<td><p>从USB设备读取中断IN数据</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_cdc_acm_get_bulk_ep_mps</p></td>
+<td><p>获取暂存的USB设备批量IN端点的MPS值</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usb-host-cdc-acm-app-callback"><strong>应用层回调API</strong></p>
+<p>类驱动提供了类型为 <code class="docutils literal notranslate"><span class="pre">usbh_cdc_acm_cb_t</span></code> 的应用层回调函数集:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">   </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">init</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">   </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">deinit</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">   </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">attach</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">   </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">detach</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">   </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">setup</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">   </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">notify</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="o">*</span><span class="n">buf</span><span class="p">,</span><span class="w"> </span><span class="n">u32</span><span class="w"> </span><span class="n">len</span><span class="p">);</span>
+<span class="w">   </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">receive</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="o">*</span><span class="n">buf</span><span class="p">,</span><span class="w"> </span><span class="n">u32</span><span class="w"> </span><span class="n">len</span><span class="p">);</span>
+<span class="w">   </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">transmit</span><span class="p">)(</span><span class="n">usbh_urb_state_t</span><span class="w"> </span><span class="n">state</span><span class="p">);</span>
+<span class="w">   </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">line_coding_changed</span><span class="p">)(</span><span class="n">usbh_cdc_acm_line_coding_t</span><span class="w"> </span><span class="o">*</span><span class="n">line_coding</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbh_cdc_acm_cb_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>init</p></td>
+<td><p>在类驱动初始化时被调用，用于初始化应用相关的资源</p></td>
+</tr>
+<tr class="row-odd"><td><p>deinit</p></td>
+<td><p>在类驱动注销时被调用，用于注销应用相关的资源</p></td>
+</tr>
+<tr class="row-even"><td><p>attach</p></td>
+<td><p>在类驱动执行attach回调时被调用，用于应用层处理设备连接事件</p></td>
+</tr>
+<tr class="row-odd"><td><p>detach</p></td>
+<td><p>在类驱动执行detach回调时被调用，用于应用层处理设备断开事件</p></td>
+</tr>
+<tr class="row-even"><td><p>setup</p></td>
+<td><p>在类驱动执行setup回调时被调用，用于指示应用层类驱动已准备好进行批量传输</p></td>
+</tr>
+<tr class="row-odd"><td><p>notify</p></td>
+<td><p>在类驱动收到中断IN数据时被调用，用于应用层处理设备上报的状态信息</p></td>
+</tr>
+<tr class="row-even"><td><p>receive</p></td>
+<td><p>在类驱动收到批量IN数据时被调用，用于应用层处理设备上报的数据</p></td>
+</tr>
+<tr class="row-odd"><td><p>transmit</p></td>
+<td><p>在类驱动批量OUT数据传输完成时被调用，用于应用层获取批量OUT传输状态</p></td>
+</tr>
+<tr class="row-even"><td><p>line_coding_changed</p></td>
+<td><p>在类驱动收到设备上报的line coding数据，并与历史数据进行比对，发现有变更时被调用，用于应用层对line codi
+ng的改变作对应处理</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id19">
+<h3>应用示例<a class="headerlink" href="#id19" title="Link to this heading"></a></h3>
+<p>示例路径: <code class="docutils literal notranslate"><span class="pre">{SDK}/component/example/usb/usbh_cdc_acm</span></code></p>
+<p>该示例定义了一个CDC ACM主机，可与:ref:<cite>usb_device_cdc_acm</cite> 定义的CDC ACM设备进行通信。</p>
+<p>更多信息，请参考示例路径下的README.md文件。</p>
+<p>该示例可作为基于USB批量传输的透传方案主机端的设计参考。</p>
+</section>
+</section>
+<section id="usb-host-cdc-ecm">
+<span id="id20"></span><h2>网络通信主机方案<a class="headerlink" href="#usb-host-cdc-ecm" title="Link to this heading"></a></h2>
+<section id="id21">
+<h3>概述<a class="headerlink" href="#id21" title="Link to this heading"></a></h3>
+<p>CDC ECM类为通信设备类（Communication Device Class，CDC）的以太网控制模型（Ethernet Control Model，ACM）子类，用于通过USB实现与网络设备的互联。</p>
+<p>SDK提供了标准的CDC ECM主机类驱动和基于该主机类驱动的数据透传应用示例，特征如下：</p>
+<ul class="simple">
+<li><p>支持标准CDC ECM设备</p></li>
+<li><p>通道配置如下：</p>
+<ul>
+<li><p>两个通道用于控制IN/OUT传输</p></li>
+<li><p>一个通道用于中断IN传输</p></li>
+<li><p>一个通道用于批量IN传输</p></li>
+<li><p>一个通道用于批量OUT传输</p></li>
+</ul>
+</li>
+<li><p>支持热插拔</p></li>
+</ul>
+</section>
+<section id="id22">
+<h3>类驱动<a class="headerlink" href="#id22" title="Link to this heading"></a></h3>
+<p><strong>类驱动路径</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/host/cdc_ecm</span></code></p>
+<p><strong>类驱动API</strong></p>
+<p>类驱动API定义头文件：<code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/host/usbh_cdc_ecm/usbh_cdc_ecm_hal.h</span></code></p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>usbh_cdc_ecm_do_init</p></td>
+<td><p>初始化类驱动，初始化时会传入应用层回调指针，具体参考
+<a class="reference internal" href="#usb-host-cdc-ecm-app-callback"><span class="std std-ref">应用层回调API</span></a>。</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_cdc_ecm_do_deinit</p></td>
+<td><p>注销类驱动</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_cdc_ecm_process_mac_str</p></td>
+<td><p>获取CDC ECM设备的MAC信息</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_cdc_ecm_send_data</p></td>
+<td><p>发送批量OUT数据</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_cdc_ecm_get_connect_status</p></td>
+<td><p>获取CDC ECM设备的连接状态</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_cdc_ecm_get_receive_mps</p></td>
+<td><p>获取CDC ECM设备批量IN端点的MPS值</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usb-host-cdc-ecm-app-callback"><strong>应用层回调API</strong></p>
+<p>类驱动提供了类型为 <code class="docutils literal notranslate"><span class="pre">usb_report_data</span></code> 的应用层回调函数:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">usb_report_data</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="o">*</span><span class="n">buf</span><span class="p">,</span><span class="w"> </span><span class="n">u32</span><span class="w"> </span><span class="n">len</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>usb_report_data</p></td>
+<td><p>处理接收到的批量IN网络数据</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id23">
+<h3>应用示例<a class="headerlink" href="#id23" title="Link to this heading"></a></h3>
+<p>SDK提供了两个CDC ECM主机类应用实例：</p>
+<p><strong>CDC ECM主机示例</strong></p>
+<p>示例路径: <code class="docutils literal notranslate"><span class="pre">{SDK}/component/example/usb/usbh_cdc_ecm</span></code></p>
+<p>该示例定义了一个CDC ECM主机，可识别CDC ECM设备并进行DHCP测试。</p>
+<p>更多信息，请参考示例路径下的README.md文件。</p>
+<p>该示例可作为CDC ECM主机方案的设计参考。</p>
+<p><strong>CDC ECM桥接器示例</strong></p>
+<p>示例路径: <code class="docutils literal notranslate"><span class="pre">{SDK}/component/example/usb/usbh_wifi_bridge</span></code></p>
+<p>该示例定义了一个CDC ECM桥接器，可支持CDC ECM设备与路由器之间进行网络通信。</p>
+<p>更多信息，请参考示例路径下的README.md文件。</p>
+<p>该示例可作为CDC ECM桥接器方案的设计参考。</p>
+</section>
+</section>
+<section id="usb-host-msc">
+<span id="id24"></span><h2>存储主机方案<a class="headerlink" href="#usb-host-msc" title="Link to this heading"></a></h2>
+<section id="id25">
+<h3>概述<a class="headerlink" href="#id25" title="Link to this heading"></a></h3>
+<p>MSC主机类提供了对大容量存储设备（Mass Storage Class）的支持，使用SCSI（Small Computer System Interface）命令集与MSC设备通信，实现数据读写。</p>
+<p>SDK提供了标准的MSC主机类驱动和基于该主机类驱动的数据读写测试应用示例，特征如下：</p>
+<ul class="simple">
+<li><p>支持FAT32格式的、基于BOT（Bulk-Only Transport）传输协议的MSC设备</p></li>
+<li><p>通道配置如下：</p>
+<ul>
+<li><p>两个通道用于控制IN/OUT传输</p></li>
+<li><p>一个通道用于批量IN传输</p></li>
+<li><p>一个通道用于批量OUT传输</p></li>
+</ul>
+</li>
+</ul>
+</section>
+<section id="id26">
+<h3>类驱动<a class="headerlink" href="#id26" title="Link to this heading"></a></h3>
+<p><strong>类驱动路径</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/host/msc</span></code></p>
+<p><strong>类驱动API</strong></p>
+<p>类驱动API定义头文件：<code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/host/usbh_msc/usbh_msc.h</span></code></p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>usbh_msc_init</p></td>
+<td><p>初始化类驱动，初始化时会传入应用层回调指针，具体参考 <a class="reference internal" href="#usb-host-msc-app-callback"><span class="std std-ref">应用层回调API</span></a>。</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_msc_deinit</p></td>
+<td><p>注销类驱动</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usb-host-msc-app-callback"><strong>应用层回调API</strong></p>
+<p>类驱动提供了类型为 <code class="docutils literal notranslate"><span class="pre">usbh_msc_cb_t</span></code> 的应用层回调函数集:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">   </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">attach</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">   </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">detach</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">   </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">setup</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbh_msc_cb_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>attach</p></td>
+<td><p>在类驱动执行attach回调时被调用，用于应用层处理MSC设备连接事件</p></td>
+</tr>
+<tr class="row-odd"><td><p>detach</p></td>
+<td><p>在类驱动执行detach回调时被调用，用于应用层处理MSC设备断开事件</p></td>
+</tr>
+<tr class="row-even"><td><p>setup</p></td>
+<td><p>当类驱动完成对MSC设备的初始化时被调用，用于指示应用层类驱动已准备好与MSC设备进行数据传输</p></td>
+</tr>
+</tbody>
+</table>
+<p><strong>FATFS磁盘驱动API</strong></p>
+<p>类驱动提供了类型为 <code class="docutils literal notranslate"><span class="pre">ll_diskio_drv</span></code> 的FATFS磁盘驱动USB_disk_Driver，实现了以下API:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>disk_initialize</p></td>
+<td><p>初始化USB磁盘</p></td>
+</tr>
+<tr class="row-odd"><td><p>disk_deinitialize</p></td>
+<td><p>注销USB磁盘</p></td>
+</tr>
+<tr class="row-even"><td><p>disk_status</p></td>
+<td><p>获取USB磁盘状态：RES_OK - 就绪，RES_ERROR - 未就绪</p></td>
+</tr>
+<tr class="row-odd"><td><p>disk_read</p></td>
+<td><p>从USB磁盘中读取数据</p></td>
+</tr>
+<tr class="row-even"><td><p>disk_write</p></td>
+<td><p>将数据写入USB磁盘，仅当FATFS使能_USE_WRITE时有效</p></td>
+</tr>
+<tr class="row-odd"><td><p>disk_ioctl</p></td>
+<td><p>支持以下FATFS IO控制指令：</p>
+<ul class="simple">
+<li><p>CTRL_SYNC：强制将缓冲区的数据写入物理存储介质，对于USB磁盘，可认为是写穿透的，不需要SYNC</p></li>
+<li><p>GET_SECTOR_COUNT：获取sector数量</p></li>
+<li><p>GET_SECTOR_SIZE：获取sector大小</p></li>
+<li><p>GET_BLOCK_SIZE：获取block大小</p></li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id27">
+<h3>应用示例<a class="headerlink" href="#id27" title="Link to this heading"></a></h3>
+<p>示例路径: <code class="docutils literal notranslate"><span class="pre">{SDK}/component/example/usb/usbh_msc</span></code></p>
+<p>该示例定义了一个MSC主机，可识别MSC设备并基于FATFS进行简单的文件读写测试。</p>
+<p>更多信息，请参考示例路径下的README.md文件。</p>
+<p>该示例可作为MSC主机方案的设计参考。</p>
+</section>
+</section>
+<section id="usb-host-uvc">
+<span id="id28"></span><h2>视频主机方案<a class="headerlink" href="#usb-host-uvc" title="Link to this heading"></a></h2>
+<section id="id29">
+<h3>概述<a class="headerlink" href="#id29" title="Link to this heading"></a></h3>
+<p>USB视频类（USB Video Class, UVC）主机可识别、配置并管理连接的UVC设备（如摄像头、网络摄像头、视频采集卡），获取图像或视频流信息，应用于图像采集、视频监控、工业巡检、医疗诊断、视频推流等场景。</p>
+<p>协议栈提供了标准的UVC主机类驱动，特征如下：</p>
+<ul class="simple">
+<li><p>支持高速或全速的UVC 1.5设备</p></li>
+<li><p>支持MJPEG/YUV/H264视频流格式</p></li>
+<li><p>支持分辨率、帧率设置</p></li>
+<li><p>最大支持6MB/s码率</p></li>
+<li><p>通道配置如下：</p>
+<ul>
+<li><p>两个通道用于控制IN/OUT传输</p></li>
+<li><p>一个通道用于等时IN传输</p></li>
+</ul>
+</li>
+</ul>
+</section>
+<section id="id30">
+<h3>类驱动<a class="headerlink" href="#id30" title="Link to this heading"></a></h3>
+<p><strong>类驱动路径</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/host/uvc</span></code></p>
+<p><strong>类驱动API</strong></p>
+<p>类驱动API定义头文件：<code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/host/usbh_uvc/usbh_uvc_intf.h</span></code></p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>usbh_uvc_init</p></td>
+<td><p>初始化类驱动，初始化时会传入应用层回调指针，</p>
+<p>具体参考 <a class="reference internal" href="#usb-host-uvc-app-callback"><span class="std std-ref">应用层回调API</span></a>。</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>usbh_uvc_deinit</p></td>
+<td><p>注销类驱动</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_uvc_stream_on</p></td>
+<td><p>开启视频流</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_uvc_stream_off</p></td>
+<td><p>关闭视频流</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_uvc_stream_state</p></td>
+<td><p>获取视频流状态：STREAMING_OFF - 关闭，STREAMING_ON - 开启</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_uvc_set_param</p></td>
+<td><p>设置视频参数</p></td>
+</tr>
+<tr class="row-even"><td><p>usbh_uvc_get_frame</p></td>
+<td><p>从帧缓存的视频流中截取一个数据帧</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbh_uvc_put_frame</p></td>
+<td><p>将截取的数据帧释放回帧缓存</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usb-host-uvc-app-callback"><strong>应用层回调API</strong></p>
+<p>类驱动提供了类型为 <code class="docutils literal notranslate"><span class="pre">usbh_uvc_cb_t</span></code> 的应用层回调函数集:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">   </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">init</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">   </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">deinit</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">   </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">attach</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">   </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">detach</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbh_uvc_cb_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>init</p></td>
+<td><p>在类驱动初始化时被调用，用于初始化应用相关的资源</p></td>
+</tr>
+<tr class="row-odd"><td><p>deinit</p></td>
+<td><p>在类驱动注销时被调用，用于注销应用相关的资源</p></td>
+</tr>
+<tr class="row-even"><td><p>attach</p></td>
+<td><p>在类驱动执行attach回调时被调用，用于应用层处理设备连接事件</p></td>
+</tr>
+<tr class="row-odd"><td><p>detach</p></td>
+<td><p>在类驱动执行detach回调时被调用，用于应用层处理设备断开事件</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id31">
+<h3>应用示例<a class="headerlink" href="#id31" title="Link to this heading"></a></h3>
+<p>示例路径: <code class="docutils literal notranslate"><span class="pre">{SDK}/component/example/usb/usbh_uvc</span></code></p>
+<p>该示例定义了一个UVC主机，可与标准UVC设备进行通信，示例支持三种应用场景，可通过CONFIG_USBH_UVC_APP来切换：</p>
+<ul class="simple">
+<li><p>USBH_UVC_APP_SIMPLE：截取数据帧后只做简单拷贝，用于性能测试</p></li>
+<li><p>USBH_UVC_APP_VFS：截取MJPEG/H264数据帧后，通过VFS以图像文件的形式写入SD卡</p></li>
+<li><p>USBH_UVC_APP_HTTPC：截取MJPEG/H264数据帧后，通过HTTP以图像文件的形式上传至HTTP服务器</p></li>
+</ul>
+<p>更多信息，请参考示例路径下的README.md文件。</p>
+<p>该示例可作为基于UVC的视频方案主机的设计参考。</p>
+</section>
+</section>
+</section>
+<section id="usb-device-solution">
+<span id="id32"></span><h1>设备解决方案<a class="headerlink" href="#usb-device-solution" title="Link to this heading"></a></h1>
+<section id="usb-device-uac">
+<span id="id33"></span><h2>音频设备方案<a class="headerlink" href="#usb-device-uac" title="Link to this heading"></a></h2>
+<section id="id34">
+<h3>概述<a class="headerlink" href="#id34" title="Link to this heading"></a></h3>
+<p>UAC（USB Audio Class）设备类定义了USB耳机、USB麦克风、USB声卡和其它音频设备的功能控制和接口标准。</p>
+<p>UAC各版本支持的音频参数如下：</p>
+<figure class="align-center">
+<a class="reference internal image-reference" href="../../_images/usb_uac_overview.png"><img alt="../../_images/usb_uac_overview.png" src="../../_images/usb_uac_overview.png" style="width: 788.0px; height: 362.0px;" /></a>
+</figure>
+<p>协议栈提供了UAC设备类驱动和对应的应用示例，特征如下：</p>
+<ul class="simple">
+<li><p>支持UAC 2.0扬声器功能</p></li>
+<li><p>支持高速和全速模式</p></li>
+<li><p>支持多种音频格式，可在应用层灵活配置，例如：</p>
+<ul>
+<li><p>44.1kHz，16/24/32位，2/4/6/8声道</p></li>
+<li><p>48kHz，16/24/32位，2/4/6/8声道</p></li>
+<li><p>96kHz，16/24/32位，2/4声道</p></li>
+<li><p>192kHz，16/24/32位，2声道</p></li>
+</ul>
+</li>
+<li><p>端点配置如下：</p>
+<ul>
+<li><p>一个控制端点用于处理USB主机发送的控制请求</p></li>
+<li><p>一个等时OUT端点用于从USB主机接收音频数据</p></li>
+</ul>
+</li>
+<li><p>支持音量、静音控制</p></li>
+<li><p>支持描述符全定制</p></li>
+<li><p>支持USB热插拔</p></li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">备注</p>
+<ul class="simple">
+<li><p>USB设备核心驱动目前不支持UAC2.0高带宽端点，即每个帧/微帧最多只支持一笔等时传输，传输大小不超过等时OUT端点的最大包长</p></li>
+<li><p>整条音频通路支持的音频格式由UAC主机、UAC设备硬件及软件框架、音频硬件及软件框架、基于UAC的音频应用共同决定</p></li>
+</ul>
+</div>
+</section>
+<section id="id35">
+<h3>类驱动<a class="headerlink" href="#id35" title="Link to this heading"></a></h3>
+<p><strong>类驱动路径</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/device/uac</span></code></p>
+<p><strong>类驱动API</strong></p>
+<p>类驱动API定义头文件：<code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/device/uac/usbd_uac.h</span></code></p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>usbd_uac_init</p></td>
+<td><p>初始化类驱动，初始化时会传入应用层回调指针，</p>
+<p>具体参考 <a class="reference internal" href="#usb-device-uac-app-callback"><span class="std std-ref">应用层回调API</span></a></p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>usbd_uac_deinit</p></td>
+<td><p>注销类驱动</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_uac_config</p></td>
+<td><p>配置音频参数</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbd_uac_start_play</p></td>
+<td><p>开始接收需要播放的音频数据到ring buffer</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_uac_stop_play</p></td>
+<td><p>停止接收音频数据</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbd_uac_read</p></td>
+<td><p>从ring buffer中读取接收到的音频数据用于播放</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_uac_get_read_frame_cnt</p></td>
+<td><p>获取待播放的帧数量</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usb-device-uac-app-callback"><strong>应用层回调API</strong></p>
+<p>类驱动提供了类型为 <code class="docutils literal notranslate"><span class="pre">usbd_uac_cb_t</span></code> 的应用层回调函数集:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">usbd_audio_cfg_t</span><span class="w"> </span><span class="n">in</span><span class="p">;</span>
+<span class="w">        </span><span class="n">usbd_audio_cfg_t</span><span class="w"> </span><span class="n">out</span><span class="p">;</span>
+<span class="w">        </span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">audio_ctx</span><span class="p">;</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">init</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">deinit</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">setup</span><span class="p">)(</span><span class="n">usb_setup_req_t</span><span class="w"> </span><span class="o">*</span><span class="n">req</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="o">*</span><span class="n">buf</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">set_config</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">void</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">status_changed</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">status</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">void</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">mute_changed</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">mute</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">void</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">volume_changed</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">volume</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">void</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">format_changed</span><span class="p">)(</span><span class="n">u32</span><span class="w"> </span><span class="n">freq</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="n">ch_cnt</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">void</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">sof</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbd_uac_cb_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>init</p></td>
+<td><p>在类驱动初始化时被调用，用于初始化应用相关的资源</p></td>
+</tr>
+<tr class="row-odd"><td><p>deinit</p></td>
+<td><p>在类驱动注销时被调用，用于注销应用相关的资源</p></td>
+</tr>
+<tr class="row-even"><td><p>setup</p></td>
+<td><p>在控制传输setup或data阶段被调用，用于处理应用相关的控制请求</p></td>
+</tr>
+<tr class="row-odd"><td><p>set_config</p></td>
+<td><p>在类驱动set_config回调中被调用，用于通知应用层UAC类驱动已就绪</p></td>
+</tr>
+<tr class="row-even"><td><p>status_changed</p></td>
+<td><p>在USB连接状态改变时被调用，用于应用层处理USB热插拔事件</p></td>
+</tr>
+<tr class="row-odd"><td><p>mute_changed</p></td>
+<td><p>USB主机静音设置发生变化时被调用，用于应用层处理静音设置</p></td>
+</tr>
+<tr class="row-even"><td><p>volume_changed</p></td>
+<td><p>USB主机音量设置发生变化时被调用，用于应用层调节播放音量</p></td>
+</tr>
+<tr class="row-odd"><td><p>format_changed</p></td>
+<td><p>USB主机的音频参数设置发生变化时被调用，用于应用层调整音频参数</p></td>
+</tr>
+<tr class="row-even"><td><p>sof</p></td>
+<td><p>收到SOF中断时被调用，用于应用层处理时钟同步</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id36">
+<h3>应用示例<a class="headerlink" href="#id36" title="Link to this heading"></a></h3>
+<p>示例路径: <code class="docutils literal notranslate"><span class="pre">{SDK}/component/example/usb/usbd_uac</span></code></p>
+<p>该示例定义了一个UAC2.0扬声器设备，连接到USB主机后可被识别为扬声器。</p>
+<p>更多信息，请参考示例路径下的README.md文件。</p>
+<p>该示例可作为USB音频设备方案的设计参考。</p>
+</section>
+</section>
+<section id="usb-device-cdc-acm">
+<span id="id37"></span><h2>透传设备方案<a class="headerlink" href="#usb-device-cdc-acm" title="Link to this heading"></a></h2>
+<section id="id38">
+<h3>概述<a class="headerlink" href="#id38" title="Link to this heading"></a></h3>
+<p>CDC ACM类为通信设备类（Communication Device Class​，CDC）的抽象控制模型（Abstract Control Model，ACM）子类，可用于模拟COM端口，实现数据透传。</p>
+<p>协议栈提供了标准的CDC ACM设备类驱动和基于该设备类驱动的虚拟串口应用示例，特征如下：</p>
+<ul class="simple">
+<li><p>可配置批量IN/OUT的传输长度</p></li>
+<li><p>可配置中断IN端点是否使能，方便在不需要中断IN的应用中节省带宽</p></li>
+<li><p>端点配置如下：</p>
+<ul>
+<li><p>一个控制端点用于处理USB主机发送的控制请求</p></li>
+<li><p>一个中断IN端点用于向USB主机发送设备端的状态信息</p></li>
+<li><p>一个批量IN端点用于向USB主机发送数据</p></li>
+<li><p>一个批量OUT端点用于从USB主机接收数据</p></li>
+</ul>
+</li>
+<li><p>支持热插拔</p></li>
+</ul>
+</section>
+<section id="id39">
+<h3>类驱动<a class="headerlink" href="#id39" title="Link to this heading"></a></h3>
+<p><strong>类驱动路径</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/device/cdc_acm</span></code></p>
+<p><strong>类驱动API</strong></p>
+<p>类驱动API定义头文件：<code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/device/usbd_cdc_acm/usbd_cdc_acm.h</span></code></p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>usbd_cdc_acm_init</p></td>
+<td><p>初始化类驱动，初始化时会传入应用层回调指针，</p>
+<p>具体参考 <a class="reference internal" href="#usb-device-cdc-acm-app-callback"><span class="std std-ref">应用层回调API</span></a>。</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>usbd_cdc_acm_deinit</p></td>
+<td><p>注销类驱动</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_cdc_acm_transmit</p></td>
+<td><p>发送批量IN数据到USB主机，数据长度不能超过批量IN最大传输长度</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbd_cdc_acm_notify_serial_state</p></td>
+<td><p>通过中断IN发送状态数据到USB主机</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usb-device-cdc-acm-app-callback"><strong>应用层回调API</strong></p>
+<p>类驱动提供了类型为 <code class="docutils literal notranslate"><span class="pre">usbd_cdc_acm_cb_t</span></code> 的应用层回调函数集:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">   </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">init</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">   </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">deinit</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">   </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">setup</span><span class="p">)(</span><span class="n">usb_setup_req_t</span><span class="w"> </span><span class="o">*</span><span class="n">req</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="o">*</span><span class="n">buf</span><span class="p">);</span>
+<span class="w">   </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">received</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="o">*</span><span class="n">buf</span><span class="p">,</span><span class="w"> </span><span class="n">u32</span><span class="w"> </span><span class="n">len</span><span class="p">);</span>
+<span class="w">   </span><span class="kt">void</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">transmitted</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">status</span><span class="p">);</span>
+<span class="w">   </span><span class="kt">void</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">status_changed</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">status</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbd_cdc_acm_cb_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>init</p></td>
+<td><p>在类驱动初始化时被调用，用于初始化应用相关的资源</p></td>
+</tr>
+<tr class="row-odd"><td><p>deinit</p></td>
+<td><p>在类驱动注销时被调用，用于注销应用相关的资源</p></td>
+</tr>
+<tr class="row-even"><td><p>setup</p></td>
+<td><p>在控制传输setup或data阶段被调用，用于处理应用相关的控制请求</p></td>
+</tr>
+<tr class="row-odd"><td><p>received</p></td>
+<td><p>在批量OUT传输完成时被调用，用于应用层处理接收到的数据</p></td>
+</tr>
+<tr class="row-even"><td><p>transmitted</p></td>
+<td><p>在批量IN传输完成时被调用，用于应用层以异步的方式获取批量IN传输状态</p></td>
+</tr>
+<tr class="row-odd"><td><p>status_changed</p></td>
+<td><p>在USB连接状态改变时被调用，用于应用层处理USB热插拔事件</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id40">
+<h3>应用示例<a class="headerlink" href="#id40" title="Link to this heading"></a></h3>
+<p>示例路径: <code class="docutils literal notranslate"><span class="pre">{SDK}/component/example/usb/usbd_cdc_acm</span></code></p>
+<p>该示例定义了一个虚拟串口设备，USB主机端可以用通用的串口工具与之通信，设备端会返回任何主机端下发的数据。</p>
+<p>更多信息，请参考示例路径下的README.md文件。</p>
+<p>该示例可作为基于USB批量传输的透传方案的设计参考。</p>
+</section>
+</section>
+<section id="hid">
+<span id="usb-device-hid"></span><h2>HID设备方案<a class="headerlink" href="#hid" title="Link to this heading"></a></h2>
+<section id="id41">
+<h3>概述<a class="headerlink" href="#id41" title="Link to this heading"></a></h3>
+<p>HID设备类定义了标准化的人机接口设备（Human Interface Device），通过报表描述符定义的数据格式，使用控制或中断传输方式与HID主机进行通信。</p>
+<p>协议栈提供了HID键盘和鼠标设备类驱动和对应的应用示例，特征如下：</p>
+<ul class="simple">
+<li><p>支持基于双向中断传输的键盘应用，端点配置如下：</p>
+<ul>
+<li><p>一个控制端点用于处理USB主机发送的控制请求</p></li>
+<li><p>一个中断IN端点用于向USB主机发送按键信息</p></li>
+<li><p>一个中断OUT端点用于从USB主机接收控制指令</p></li>
+</ul>
+</li>
+<li><p>支持基于中断IN的鼠标应用，端点配置如下：</p>
+<ul>
+<li><p>一个控制端点用于处理USB主机发送的控制请求</p></li>
+<li><p>一个批量IN端点用于向USB主机发送按键信息</p></li>
+</ul>
+</li>
+<li><p>支持描述符全定制</p></li>
+<li><p>支持USB热插拔</p></li>
+</ul>
+</section>
+<section id="id42">
+<h3>类驱动<a class="headerlink" href="#id42" title="Link to this heading"></a></h3>
+<p><strong>类驱动路径</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/device/hid</span></code></p>
+<p><strong>类驱动API</strong></p>
+<p>类驱动API定义头文件：<code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/device/hid/usbd_hid.h</span></code></p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>usbd_hid_init</p></td>
+<td><p>初始化类驱动，初始化时会传入应用层回调指针，</p>
+<p>具体请参考 <a class="reference internal" href="#usb-device-hid-app-callback"><span class="std std-ref">应用层回调API</span></a></p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>usbd_hid_deinit</p></td>
+<td><p>注销类驱动</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_hid_send_data</p></td>
+<td><p>注销存储媒介</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usb-device-hid-app-callback"><strong>应用层回调API</strong></p>
+<p>类驱动提供了类型为 <code class="docutils literal notranslate"><span class="pre">usbd_hid_usr_cb_t</span></code> 的应用层回调函数集:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">void</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">init</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">void</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">deinit</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">void</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">setup</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">void</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">transmitted</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">status</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">void</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">received</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="o">*</span><span class="n">buf</span><span class="p">,</span><span class="w"> </span><span class="n">u32</span><span class="w"> </span><span class="n">len</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">void</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">status_changed</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">status</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbd_hid_usr_cb_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>init</p></td>
+<td><p>在类驱动初始化时被调用，用于初始化应用相关的资源</p></td>
+</tr>
+<tr class="row-odd"><td><p>deinit</p></td>
+<td><p>在类驱动注销时被调用，用于注销应用相关的资源</p></td>
+</tr>
+<tr class="row-even"><td><p>setup</p></td>
+<td><p>在控制传输setup或data阶段被调用，用于处理应用相关的控制请求</p></td>
+</tr>
+<tr class="row-odd"><td><p>received</p></td>
+<td><p>在中断OUT传输完成时被调用，用于应用层处理接收到的数据，仅对键盘应用有效</p></td>
+</tr>
+<tr class="row-even"><td><p>transmitted</p></td>
+<td><p>在中断IN传输完成时被调用，用于应用层以异步的方式获取中断IN传输状态</p></td>
+</tr>
+<tr class="row-odd"><td><p>status_changed</p></td>
+<td><p>在USB连接状态改变时被调用，用于应用层处理USB热插拔事件</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id43">
+<h3>应用示例<a class="headerlink" href="#id43" title="Link to this heading"></a></h3>
+<p>示例路径: <code class="docutils literal notranslate"><span class="pre">{SDK}/component/example/usb/usbd_hid</span></code></p>
+<p>该示例定义了一个HID键盘和鼠标设备，提供了与主机通信的简单测试示例。</p>
+<p>更多信息，请参考示例路径下的README.md文件。</p>
+<p>该示例可作为USB HID设备方案的设计参考。</p>
+</section>
+</section>
+<section id="usb-device-msc">
+<span id="id44"></span><h2>存储设备方案<a class="headerlink" href="#usb-device-msc" title="Link to this heading"></a></h2>
+<section id="id45">
+<h3>概述<a class="headerlink" href="#id45" title="Link to this heading"></a></h3>
+<p>MSC设备类定义了标准化的大容量存储设备（Mass Storage Class），使用SCSI（Small Computer System Interface）命令集与主机交互，支持对存储媒介的读写、擦除、查询等操作。</p>
+<p>协议栈提供了标准的MSC设备类驱动和基于该设备类驱动的大容量存储设备应用示例，特征如下：</p>
+<ul class="simple">
+<li><p>基于BOT（Bulk-Only Transport）传输协议</p></li>
+<li><p>支持SD卡和RAM两种存储媒介</p></li>
+<li><p>端点配置如下：</p>
+<ul>
+<li><p>一个控制端点用于处理USB主机发送的控制请求</p></li>
+<li><p>一个批量IN端点用于向USB主机发送数据</p></li>
+<li><p>一个批量OUT端点用于从USB主机接收数据</p></li>
+</ul>
+</li>
+<li><p>支持描述符全定制</p></li>
+<li><p>支持USB热插拔</p></li>
+<li><p>支持SD卡热插拔</p></li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">备注</p>
+<p>慎用SD卡热插拔功能，在传输过程中热插拔，有造成文件系统损坏、数据丢失的风险。</p>
+</div>
+</section>
+<section id="id46">
+<h3>类驱动<a class="headerlink" href="#id46" title="Link to this heading"></a></h3>
+<p><strong>类驱动路径</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/device/msc</span></code></p>
+<p><strong>类驱动API</strong></p>
+<p>类驱动API定义头文件：<code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/device/msc/usbd_msc.h</span></code></p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>usbd_msc_init</p></td>
+<td><p>初始化类驱动，初始化时会传入应用层回调指针，</p>
+<p>具体参考 <a class="reference internal" href="#usb-device-msc-app-callback"><span class="std std-ref">应用层回调API</span></a>。</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>usbd_msc_deinit</p></td>
+<td><p>注销类驱动</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_msc_disk_init</p></td>
+<td><p>初始化存储媒介</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbd_msc_disk_deinit</p></td>
+<td><p>注销存储媒介</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usb-device-msc-app-callback"><strong>应用层回调API</strong></p>
+<p>类驱动提供了类型为 <code class="docutils literal notranslate"><span class="pre">usbd_msc_cb_t</span></code> 的应用层回调函数集:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">   </span><span class="kt">void</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">status_changed</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">status</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbd_msc_cb_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>status_changed</p></td>
+<td><p>在USB连接状态改变时被调用，用于应用层处理USB热插拔事件</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id47">
+<h3>应用示例<a class="headerlink" href="#id47" title="Link to this heading"></a></h3>
+<p>示例路径: <code class="docutils literal notranslate"><span class="pre">{SDK}/component/example/usb/usbd_msc</span></code></p>
+<p>该示例定义了一个大容量存储设备，USB主机端可通过USB访问设备存储媒介（例如SD卡）。</p>
+<p>更多信息，请参考示例路径下的README.md文件。</p>
+<p>该示例可作为USB存储设备方案的设计参考。</p>
+</section>
+</section>
+<section id="fullmac">
+<span id="usb-device-fullmac"></span><h2>FullMAC设备方案<a class="headerlink" href="#fullmac" title="Link to this heading"></a></h2>
+<section id="id48">
+<h3>概述<a class="headerlink" href="#id48" title="Link to this heading"></a></h3>
+<p>基于INIC（Internet Network Interface Controller），可实现基于USB的FullMAC解决方案，作为网卡通过USB与主机连接，为主机提供网络接入能力。</p>
+<p>关于FullMAC，参考 <a class="reference internal" href="../2_whc_fullmac/1_fullmac_toprst_cn.html#wifi-fullmac"><span class="std std-ref">支持的芯片</span></a> 。</p>
+<p>协议栈提供了INIC设备类驱动，特征如下：</p>
+<ul class="simple">
+<li><p>支持WiFi单功能模式</p></li>
+<li><p>端点配置如下：</p>
+<ul>
+<li><p>一个控制端点用于处理USB主机发送的控制请求</p></li>
+<li><p>一个批量IN端点用于向USB主机发送数据</p></li>
+<li><p>两个批量OUT端点用于从USB主机接收数据</p></li>
+</ul>
+</li>
+<li><p>支持描述符全定制</p></li>
+<li><p>支持USB热插拔</p></li>
+</ul>
+</section>
+<section id="id49">
+<h3>类驱动<a class="headerlink" href="#id49" title="Link to this heading"></a></h3>
+<p><strong>类驱动路径</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/device/inic_dplus</span></code></p>
+<p><strong>类驱动API</strong></p>
+<p>类驱动API定义头文件：<code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/device/inic_dplus/usbd_inic.h</span></code></p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>usbd_inic_init</p></td>
+<td><p>初始化类驱动，初始化时会传入应用层回调指针，</p>
+<p>具体参考 <a class="reference internal" href="#usb-device-inic-app-callback"><span class="std std-ref">应用层回调API</span></a></p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>usbd_inic_deinit</p></td>
+<td><p>注销类驱动</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_inic_transmit_ctrl_data</p></td>
+<td><p>配置音频参数</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbd_inic_transmit_data</p></td>
+<td><p>获取待播放的帧数量</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_inic_receive_data</p></td>
+<td><p>获取待播放的帧数量</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usb-device-inic-app-callback"><strong>应用层回调API</strong></p>
+<p>类驱动提供了类型为 <code class="docutils literal notranslate"><span class="pre">usbd_inic_cb_t</span></code> 的应用层回调函数集:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">init</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">deinit</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">setup</span><span class="p">)(</span><span class="n">usb_setup_req_t</span><span class="w"> </span><span class="o">*</span><span class="n">req</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="o">*</span><span class="n">buf</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">set_config</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">clear_config</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">void</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">transmitted</span><span class="p">)(</span><span class="n">usbd_inic_ep_t</span><span class="w"> </span><span class="o">*</span><span class="n">ep</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="n">status</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">received</span><span class="p">)(</span><span class="n">usbd_inic_ep_t</span><span class="w"> </span><span class="o">*</span><span class="n">ep</span><span class="p">,</span><span class="w"> </span><span class="n">u16</span><span class="w"> </span><span class="n">len</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">void</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">status_changed</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">status</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">void</span><span class="p">(</span><span class="o">*</span><span class="n">suspend</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">void</span><span class="p">(</span><span class="o">*</span><span class="n">resume</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbd_uac_cb_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>init</p></td>
+<td><p>在类驱动初始化时被调用，用于初始化应用相关的资源</p></td>
+</tr>
+<tr class="row-odd"><td><p>deinit</p></td>
+<td><p>在类驱动注销时被调用，用于注销应用相关的资源</p></td>
+</tr>
+<tr class="row-even"><td><p>setup</p></td>
+<td><p>在控制传输setup或data阶段被调用，用于处理应用相关的控制请求</p></td>
+</tr>
+<tr class="row-odd"><td><p>set_config</p></td>
+<td><p>在类驱动set_config回调中被调用，用于通知应用层INIC类驱动已就绪</p></td>
+</tr>
+<tr class="row-even"><td><p>clear_config</p></td>
+<td><p>在类驱动clear_config回调中被调用，用于通知应用层INIC类驱动未就绪</p></td>
+</tr>
+<tr class="row-odd"><td><p>transmitted</p></td>
+<td><p>在非控制端点数据发送完成时被调用，用于应用层异步获取数据发送状态</p></td>
+</tr>
+<tr class="row-even"><td><p>received</p></td>
+<td><p>在非控制端点数据接收完成时被调用，用于应用层处理接收到的数据</p></td>
+</tr>
+<tr class="row-odd"><td><p>status_changed</p></td>
+<td><p>在USB连接状态改变时被调用，用于应用层处理USB热插拔事件</p></td>
+</tr>
+<tr class="row-even"><td><p>suspend</p></td>
+<td><p>在USB发生suspend中断后，类驱动suspend回调执行时被调用，用于应用层处理suspend事件</p></td>
+</tr>
+<tr class="row-odd"><td><p>resume</p></td>
+<td><p>在USB发生resume中断后，类驱动resume回调执行时被调用，用于应用层处理resume事件</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id50">
+<h3>应用示例<a class="headerlink" href="#id50" title="Link to this heading"></a></h3>
+<p>示例路径: <code class="docutils literal notranslate"><span class="pre">{SDK}/component/example/usb/usbd_inic</span></code></p>
+<p>该示例定义了一个INIC设备，主机端加载对应的专用设备驱动后可与之通信。</p>
+<p>更多信息，请参考示例路径下的README.md文件。</p>
+<p>该示例可作为USB FullMAC解决方案的设计参考。</p>
+</section>
+</section>
+<section id="usb-device-composite">
+<span id="id51"></span><h2>复合功能设备方案<a class="headerlink" href="#usb-device-composite" title="Link to this heading"></a></h2>
+<section id="id52">
+<h3>概述<a class="headerlink" href="#id52" title="Link to this heading"></a></h3>
+<p>USB复合功能（Composite）设备是一种通过单一物理USB接口实现​多种独立功能的USB设备，它通过将多个独立的USB功能单元以接口的形式组合在一起，使USB主机将其识别为多个虚拟设备的集合，从而解决了单一物理接口的扩展性问题。</p>
+<p>协议栈提供了复合功能设备类驱动及对应的应用示例，特征如下：</p>
+<ul class="simple">
+<li><p>支持以下功能组合</p>
+<ul>
+<li><p>CDC ACM + HID</p></li>
+<li><p>CDC ACM + UAC</p></li>
+<li><p>HID + UAC</p></li>
+</ul>
+</li>
+<li><p>支持描述符全定制</p></li>
+<li><p>支持USB热插拔</p></li>
+</ul>
+</section>
+<section id="id53">
+<h3>类驱动<a class="headerlink" href="#id53" title="Link to this heading"></a></h3>
+<p><strong>类驱动路径</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/device/composite</span></code></p>
+<p><strong>类驱动API</strong></p>
+<div class="sphinx-tabs docutils container">
+<div aria-label="Tabbed content" class="closeable" role="tablist"><button aria-controls="panel-5-5-0" aria-selected="true" class="sphinx-tabs-tab" id="tab-5-5-0" name="5-0" role="tab" tabindex="0">CDC ACM + HID</button><button aria-controls="panel-5-5-1" aria-selected="false" class="sphinx-tabs-tab" id="tab-5-5-1" name="5-1" role="tab" tabindex="-1">CDC ACM + UAC</button><button aria-controls="panel-5-5-2" aria-selected="false" class="sphinx-tabs-tab" id="tab-5-5-2" name="5-2" role="tab" tabindex="-1">HID + UAC</button></div><div aria-labelledby="tab-5-5-0" class="sphinx-tabs-panel" id="panel-5-5-0" name="5-0" role="tabpanel" tabindex="0"><p>类驱动API定义头文件：<code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/device/composite/usbd_composite_cdc_acm_hid.h</span></code></p>
+<p><strong>面向应用层的API</strong></p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>usbd_composite_init</p></td>
+<td><p>初始化类驱动，初始化时会传入以下应用层回调指针：</p>
+<ul class="simple">
+<li><p>CDC ACM应用层回调，参考 <a class="reference internal" href="#usbd-comp-cdc-acm-hid-cdc-acm-app-cb"><span class="std std-ref">CDC ACM应用层回调API</span></a></p></li>
+<li><p>HID应用层回调，参考 <a class="reference internal" href="#usbd-comp-cdc-acm-hid-hid-app-cb"><span class="std std-ref">HID应用层回调API</span></a></p></li>
+<li><p>Composite应用层回调，参考 <a class="reference internal" href="#usbd-comp-cdc-acm-hid-app-cb"><span class="std std-ref">Composite应用层回调API</span></a></p></li>
+</ul>
+</td>
+</tr>
+<tr class="row-odd"><td><p>usbd_composite_deinit</p></td>
+<td><p>注销类驱动</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_composite_cdc_acm_transmit</p></td>
+<td><p>发送批量IN数据到USB主机，数据长度不能超过批量IN最大传输长度</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbd_composite_cdc_acm_notify_serial_state</p></td>
+<td><p>通过中断IN发送状态数据到USB主机</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_composite_hid_send_data</p></td>
+<td><p>注销存储媒介</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usbd-comp-cdc-acm-hid-cdc-acm-app-cb"><strong>CDC ACM应用层回调API</strong></p>
+<p>类驱动提供了类型为 <code class="docutils literal notranslate"><span class="pre">usbd_composite_cdc_acm_usr_cb_t</span></code> 的CDC ACM应用层回调函数集:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">init</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">deinit</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">setup</span><span class="p">)(</span><span class="n">usb_setup_req_t</span><span class="w"> </span><span class="o">*</span><span class="n">req</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="o">*</span><span class="n">buf</span><span class="p">);</span>
+<span class="w">        </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">received</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="o">*</span><span class="n">buf</span><span class="p">,</span><span class="w"> </span><span class="n">u32</span><span class="w"> </span><span class="n">len</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbd_composite_cdc_acm_usr_cb_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>init</p></td>
+<td><p>在类驱动初始化时被调用，用于初始化应用相关的资源</p></td>
+</tr>
+<tr class="row-odd"><td><p>deinit</p></td>
+<td><p>在类驱动注销时被调用，用于注销应用相关的资源</p></td>
+</tr>
+<tr class="row-even"><td><p>setup</p></td>
+<td><p>在控制传输setup或data阶段被调用，用于处理应用相关的控制请求</p></td>
+</tr>
+<tr class="row-odd"><td><p>received</p></td>
+<td><p>在批量OUT传输完成时被调用，用于应用层处理接收到的数据</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usbd-comp-cdc-acm-hid-hid-app-cb"><strong>HID应用层回调API</strong></p>
+<p>类驱动提供了类型为 <code class="docutils literal notranslate"><span class="pre">usbd_composite_hid_usr_cb_t</span></code> 的HID应用层回调函数集:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">init</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">void</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">deinit</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">setup</span><span class="p">)(</span><span class="n">usb_setup_req_t</span><span class="w"> </span><span class="o">*</span><span class="n">req</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="o">*</span><span class="n">buf</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">void</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">transmitted</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">status</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbd_composite_hid_usr_cb_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>init</p></td>
+<td><p>在类驱动初始化时被调用，用于初始化应用相关的资源</p></td>
+</tr>
+<tr class="row-odd"><td><p>deinit</p></td>
+<td><p>在类驱动注销时被调用，用于注销应用相关的资源</p></td>
+</tr>
+<tr class="row-even"><td><p>setup</p></td>
+<td><p>在控制传输setup或data阶段被调用，用于处理应用相关的控制请求</p></td>
+</tr>
+<tr class="row-odd"><td><p>transmitted</p></td>
+<td><p>在中断IN传输完成时被调用，用于应用层以异步的方式获取中断IN传输状态</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usbd-comp-cdc-acm-hid-app-cb"><strong>Composite应用层回调API</strong></p>
+<p>类驱动提供了类型为 <code class="docutils literal notranslate"><span class="pre">usbd_composite_cb_t</span></code> 的HID应用层回调函数集:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">void</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">status_changed</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">status</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">set_config</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbd_composite_cb_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>set_config</p></td>
+<td><p>在类驱动set_config回调中被调用，用于通知应用层类驱动已就绪</p></td>
+</tr>
+<tr class="row-odd"><td><p>status_changed</p></td>
+<td><p>在USB连接状态改变时被调用，用于应用层处理USB热插拔事件</p></td>
+</tr>
+</tbody>
+</table>
+</div><div aria-labelledby="tab-5-5-1" class="sphinx-tabs-panel" hidden="true" id="panel-5-5-1" name="5-1" role="tabpanel" tabindex="0"><p>类驱动API定义头文件：<code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/device/composite/usbd_composite_cdc_acm_uac.h</span></code></p>
+<p><strong>面向应用层的API</strong></p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>usbd_composite_init</p></td>
+<td><p>初始化类驱动，初始化时会传入以下应用层回调指针：</p>
+<ul class="simple">
+<li><p>CDC ACM应用层回调，参考 <a class="reference internal" href="#usbd-comp-cdc-acm-uac-cdc-acm-app-cb"><span class="std std-ref">CDC ACM应用层回调API</span></a></p></li>
+<li><p>UAC应用层回调，参考 <a class="reference internal" href="#usbd-comp-cdc-acm-uac-uac-app-cb"><span class="std std-ref">UAC应用层回调API</span></a></p></li>
+<li><p>Composite应用层回调，参考 <a class="reference internal" href="#usbd-comp-cdc-acm-uac-app-cb"><span class="std std-ref">Composite应用层回调API</span></a></p></li>
+</ul>
+</td>
+</tr>
+<tr class="row-odd"><td><p>usbd_composite_deinit</p></td>
+<td><p>注销类驱动</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_composite_cdc_acm_transmit</p></td>
+<td><p>发送批量IN数据到USB主机，数据长度不能超过批量IN最大传输长度</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbd_composite_cdc_acm_notify_serial_state</p></td>
+<td><p>通过中断IN发送状态数据到USB主机</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_composite_hid_send_data</p></td>
+<td><p>注销存储媒介</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usbd-comp-cdc-acm-uac-cdc-acm-app-cb"><strong>CDC ACM应用层回调API</strong></p>
+<p>类驱动提供了类型为 <code class="docutils literal notranslate"><span class="pre">usbd_composite_cdc_acm_usr_cb_t</span></code> 的CDC ACM应用层回调函数集:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">init</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">deinit</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">setup</span><span class="p">)(</span><span class="n">usb_setup_req_t</span><span class="w"> </span><span class="o">*</span><span class="n">req</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="o">*</span><span class="n">buf</span><span class="p">);</span>
+<span class="w">        </span><span class="n">u8</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">received</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="o">*</span><span class="n">buf</span><span class="p">,</span><span class="w"> </span><span class="n">u32</span><span class="w"> </span><span class="n">len</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbd_composite_cdc_acm_usr_cb_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>init</p></td>
+<td><p>在类驱动初始化时被调用，用于初始化应用相关的资源</p></td>
+</tr>
+<tr class="row-odd"><td><p>deinit</p></td>
+<td><p>在类驱动注销时被调用，用于注销应用相关的资源</p></td>
+</tr>
+<tr class="row-even"><td><p>setup</p></td>
+<td><p>在控制传输setup或data阶段被调用，用于处理应用相关的控制请求</p></td>
+</tr>
+<tr class="row-odd"><td><p>received</p></td>
+<td><p>在批量OUT传输完成时被调用，用于应用层处理接收到的数据</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usbd-comp-cdc-acm-uac-uac-app-cb"><strong>UAC应用层回调API</strong></p>
+<p>类驱动提供了类型为 <code class="docutils literal notranslate"><span class="pre">usbd_composite_uac_usr_cb_t</span></code> 的UAC应用层回调函数集:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">usbd_audio_cfg_t</span><span class="w"> </span><span class="n">in</span><span class="p">;</span>
+<span class="w">        </span><span class="n">usbd_audio_cfg_t</span><span class="w"> </span><span class="n">out</span><span class="p">;</span>
+<span class="w">        </span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">audio_ctx</span><span class="p">;</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">init</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">deinit</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">setup</span><span class="p">)(</span><span class="n">usb_setup_req_t</span><span class="w"> </span><span class="o">*</span><span class="n">req</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="o">*</span><span class="n">buf</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">set_config</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">status_changed</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">status</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">mute_changed</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">mute</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">volume_changed</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">volume</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">format_changed</span><span class="p">)(</span><span class="n">u32</span><span class="w"> </span><span class="n">freq</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="n">ch_cnt</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="n">byte_width</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">sof</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbd_composite_uac_usr_cb_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>init</p></td>
+<td><p>在类驱动初始化时被调用，用于初始化应用相关的资源</p></td>
+</tr>
+<tr class="row-odd"><td><p>deinit</p></td>
+<td><p>在类驱动注销时被调用，用于注销应用相关的资源</p></td>
+</tr>
+<tr class="row-even"><td><p>setup</p></td>
+<td><p>在控制传输setup或data阶段被调用，用于处理应用相关的控制请求</p></td>
+</tr>
+<tr class="row-odd"><td><p>set_config</p></td>
+<td><p>在类驱动set_config回调中被调用，用于通知应用层UAC类驱动已就绪</p></td>
+</tr>
+<tr class="row-even"><td><p>status_changed</p></td>
+<td><p>在USB连接状态改变时被调用，用于应用层处理USB热插拔事件</p></td>
+</tr>
+<tr class="row-odd"><td><p>mute_changed</p></td>
+<td><p>USB主机静音设置发生变化时被调用，用于应用层处理静音设置</p></td>
+</tr>
+<tr class="row-even"><td><p>volume_changed</p></td>
+<td><p>USB主机音量设置发生变化时被调用，用于应用层调节播放音量</p></td>
+</tr>
+<tr class="row-odd"><td><p>format_changed</p></td>
+<td><p>USB主机的音频参数设置发生变化时被调用，用于应用层调整音频参数</p></td>
+</tr>
+<tr class="row-even"><td><p>sof</p></td>
+<td><p>收到SOF中断时被调用，用于应用层处理时钟同步</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usbd-comp-cdc-acm-uac-app-cb"><strong>Composite应用层回调API</strong></p>
+<p>类驱动提供了类型为 <code class="docutils literal notranslate"><span class="pre">usbd_composite_cb_t</span></code> 的HID应用层回调函数集:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">void</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">status_changed</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">status</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">set_config</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbd_composite_cb_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>set_config</p></td>
+<td><p>在类驱动set_config回调中被调用，用于通知应用层类驱动已就绪</p></td>
+</tr>
+<tr class="row-odd"><td><p>status_changed</p></td>
+<td><p>在USB连接状态改变时被调用，用于应用层处理USB热插拔事件</p></td>
+</tr>
+</tbody>
+</table>
+</div><div aria-labelledby="tab-5-5-2" class="sphinx-tabs-panel" hidden="true" id="panel-5-5-2" name="5-2" role="tabpanel" tabindex="0"><p>类驱动API定义头文件：<code class="docutils literal notranslate"><span class="pre">{SDK}/component/usb/device/composite/usbd_composite_uac_hid.h</span></code></p>
+<p><strong>面向应用层的API</strong></p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>usbd_composite_init</p></td>
+<td><p>初始化类驱动，初始化时会传入以下应用层回调指针：</p>
+<ul class="simple">
+<li><p>HID应用层回调，参考 <a class="reference internal" href="#usbd-comp-hid-uac-hid-app-cb"><span class="std std-ref">HID应用层回调API</span></a></p></li>
+<li><p>UAC应用层回调，参考 <a class="reference internal" href="#usbd-comp-hid-uac-uac-app-cb"><span class="std std-ref">UAC应用层回调API</span></a></p></li>
+<li><p>Composite应用层回调，参考 <a class="reference internal" href="#usbd-comp-hid-uac-app-cb"><span class="std std-ref">Composite应用层回调API</span></a></p></li>
+</ul>
+</td>
+</tr>
+<tr class="row-odd"><td><p>usbd_composite_deinit</p></td>
+<td><p>注销类驱动</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_composite_cdc_acm_transmit</p></td>
+<td><p>发送批量IN数据到USB主机，数据长度不能超过批量IN最大传输长度</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbd_composite_cdc_acm_notify_serial_state</p></td>
+<td><p>通过中断IN端点发送状态数据到USB主机</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_composite_hid_send_data</p></td>
+<td><p>通过中断IN端点发送HID数据到USB主机</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbd_composite_hid_volume_ctrl</p></td>
+<td><p>通过中断IN端点发送音量控制指令到USB主机</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_composite_hid_power_ctrl</p></td>
+<td><p>通过中断IN端点发送电源控制指令到USB主机</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbd_composite_hid_read</p></td>
+<td><p>从中断OUT接收缓存中读取指定大小的数据</p></td>
+</tr>
+<tr class="row-even"><td><p>usbd_composite_hid_get_read_buf_cnt</p></td>
+<td><p>获取中断OUT接收缓存中的未读数据帧数量</p></td>
+</tr>
+<tr class="row-odd"><td><p>usbd_composite_hid_ring_buf_is_full</p></td>
+<td><p>检查中断OUT接收缓存是否写满</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usbd-comp-hid-uac-hid-app-cb"><strong>HID应用层回调API</strong></p>
+<p>类驱动提供了类型为 <code class="docutils literal notranslate"><span class="pre">usbd_composite_hid_usr_cb_t</span></code> 的HID应用层回调函数集:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">init</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">void</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">deinit</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">setup</span><span class="p">)(</span><span class="n">usb_setup_req_t</span><span class="w"> </span><span class="o">*</span><span class="n">req</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="o">*</span><span class="n">buf</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">set_config</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">sof</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">void</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">transmitted</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">status</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbd_composite_hid_usr_cb_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>init</p></td>
+<td><p>在类驱动初始化时被调用，用于初始化应用相关的资源</p></td>
+</tr>
+<tr class="row-odd"><td><p>deinit</p></td>
+<td><p>在类驱动注销时被调用，用于注销应用相关的资源</p></td>
+</tr>
+<tr class="row-even"><td><p>setup</p></td>
+<td><p>在控制传输setup或data阶段被调用，用于处理应用相关的控制请求</p></td>
+</tr>
+<tr class="row-odd"><td><p>set_config</p></td>
+<td><p>在类驱动set_config回调执行阶段被调用，用于指示应用层类驱动已就绪</p></td>
+</tr>
+<tr class="row-even"><td><p>sof</p></td>
+<td><p>在类驱动sof回调执行阶段被调用，用于处理应用层处理与时序相关的事务</p></td>
+</tr>
+<tr class="row-odd"><td><p>transmitted</p></td>
+<td><p>在中断IN传输完成时被调用，用于应用层以异步的方式获取中断IN传输状态</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usbd-comp-hid-uac-uac-app-cb"><strong>UAC应用层回调API</strong></p>
+<p>类驱动提供了类型为 <code class="docutils literal notranslate"><span class="pre">usbd_composite_uac_usr_cb_t</span></code> 的UAC应用层回调函数集:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">usbd_audio_cfg_t</span><span class="w"> </span><span class="n">in</span><span class="p">;</span>
+<span class="w">        </span><span class="n">usbd_audio_cfg_t</span><span class="w"> </span><span class="n">out</span><span class="p">;</span>
+<span class="w">        </span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">audio_ctx</span><span class="p">;</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">init</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">deinit</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">setup</span><span class="p">)(</span><span class="n">usb_setup_req_t</span><span class="w"> </span><span class="o">*</span><span class="n">req</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="o">*</span><span class="n">buf</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">set_config</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">status_changed</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">status</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">mute_changed</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">mute</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">volume_changed</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">volume</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">format_changed</span><span class="p">)(</span><span class="n">u32</span><span class="w"> </span><span class="n">freq</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="n">ch_cnt</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="w"> </span><span class="n">byte_width</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">sof</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbd_composite_uac_usr_cb_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>init</p></td>
+<td><p>在类驱动初始化时被调用，用于初始化应用相关的资源</p></td>
+</tr>
+<tr class="row-odd"><td><p>deinit</p></td>
+<td><p>在类驱动注销时被调用，用于注销应用相关的资源</p></td>
+</tr>
+<tr class="row-even"><td><p>setup</p></td>
+<td><p>在控制传输setup或data阶段被调用，用于处理应用相关的控制请求</p></td>
+</tr>
+<tr class="row-odd"><td><p>set_config</p></td>
+<td><p>在类驱动set_config回调中被调用，用于通知应用层UAC类驱动已就绪</p></td>
+</tr>
+<tr class="row-even"><td><p>status_changed</p></td>
+<td><p>在USB连接状态改变时被调用，用于应用层处理USB热插拔事件</p></td>
+</tr>
+<tr class="row-odd"><td><p>mute_changed</p></td>
+<td><p>USB主机静音设置发生变化时被调用，用于应用层处理静音设置</p></td>
+</tr>
+<tr class="row-even"><td><p>volume_changed</p></td>
+<td><p>USB主机音量设置发生变化时被调用，用于应用层调节播放音量</p></td>
+</tr>
+<tr class="row-odd"><td><p>format_changed</p></td>
+<td><p>USB主机的音频参数设置发生变化时被调用，用于应用层调整音频参数</p></td>
+</tr>
+<tr class="row-even"><td><p>sof</p></td>
+<td><p>收到SOF中断时被调用，用于应用层处理时钟同步</p></td>
+</tr>
+</tbody>
+</table>
+<p id="usbd-comp-hid-uac-app-cb"><strong>Composite应用层回调API</strong></p>
+<p>类驱动提供了类型为 <code class="docutils literal notranslate"><span class="pre">usbd_composite_cb_t</span></code> 的HID应用层回调函数集:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">void</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">status_changed</span><span class="p">)(</span><span class="n">u8</span><span class="w"> </span><span class="n">status</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="w"> </span><span class="n">set_config</span><span class="p">)(</span><span class="kt">void</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">usbd_composite_cb_t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>具体定义如下:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>API</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>set_config</p></td>
+<td><p>在类驱动set_config回调中被调用，用于通知应用层类驱动已就绪</p></td>
+</tr>
+<tr class="row-odd"><td><p>status_changed</p></td>
+<td><p>在USB连接状态改变时被调用，用于应用层处理USB热插拔事件</p></td>
+</tr>
+</tbody>
+</table>
+</div></div>
+</section>
+<section id="id54">
+<h3>应用示例<a class="headerlink" href="#id54" title="Link to this heading"></a></h3>
+<p>SDK提供以下USB Composite示例:</p>
+<table class="docutils align-default" style="width: 100%">
+<thead>
+<tr class="row-odd"><th class="head"><p>路径</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>{SDK}/component/example/usb/usbd_composite_cdc_acm_hid/</p></td>
+<td><p>CDC ACM虚拟串口和HID鼠标应用示例</p></td>
+</tr>
+<tr class="row-odd"><td><p>{SDK}/component/example/usb/usbd_composite_cdc_acm_uac/</p></td>
+<td><p>CDC ACM虚拟串口和UAC 2.0扬声器应用示例</p></td>
+</tr>
+<tr class="row-even"><td><p>{SDK}/component/example/usb/usbd_composite_uac_hid/</p></td>
+<td><p>UAC 2.0扬声器和自定义HID应用示例</p></td>
+</tr>
+</tbody>
+</table>
+<p>更多信息，请参考对应示例路径下的README.md文件。</p>
+<p>上述示例可作为USB Composite设备方案的设计参考。</p>
+</section>
+</section>
+<section id="usb-device-hotplug">
+<span id="id55"></span><h2>热插拔检测<a class="headerlink" href="#usb-device-hotplug" title="Link to this heading"></a></h2>
+<p>TODO</p>
+</section>
+<section id="usb-device-descriptor-customization">
+<span id="id56"></span><h2>设备描述符定制<a class="headerlink" href="#usb-device-descriptor-customization" title="Link to this heading"></a></h2>
+<section id="id57">
+<h3>描述符概述<a class="headerlink" href="#id57" title="Link to this heading"></a></h3>
+<p>USB设备通过描述符定义设备功能，USB描述符的拓扑结构示例如下图所示：</p>
+<figure class="align-center">
+<a class="reference internal image-reference" href="../../_images/usb_device_descriptors_cn.svg"><img alt="../../_images/usb_device_descriptors_cn.svg" height="440" src="../../_images/usb_device_descriptors_cn.svg" width="856" /></a>
+</figure>
+<p>其中：</p>
+<ul class="simple">
+<li><p>一个USB设备只有一个设备描述符（Device Descriptor）</p></li>
+<li><p>一个USB设备可以有多个（由设备描述符的bNumConfigurations指定）配置描述符（Configuration Descriptor），但同时只允许一个配置描述符生效</p></li>
+<li><p>一个配置描述符下可以有多个（由配置描述符的bNumInterfaces指定）接口描述符（Interface Descriptor），且多个接口描述符可以同时生效</p></li>
+<li><p>一个接口描述符下可以有多个（由接口描述符的bNumEndPoints指定）端点描述符（Endpoint Descriptor），且多个端点描述符可以同时生效</p></li>
+</ul>
+<p>另外，还有其它一些常用的描述符：</p>
+<ul class="simple">
+<li><p>设备描述符、配置描述符和接口描述符都有一些相关的功能描述，这些描述定义为字符描述符（String Descriptor）</p></li>
+<li><p>对于需要同时支持高速和全速模式的设备，还需要同时定义设备限定描述符（Device Qualifier Descriptor）和其它速率配置描述符（Other Speed Configuration Descriptor）</p></li>
+<li><p>对于复合设备，还需要在多个类接口描述符之前，增加一个接口关联描述符（Interface Association Descriptor，IAD）</p></li>
+<li><p>某些USB设备类需要定义与设备类相关的特定描述符，比如HID设备需要定义报表描述符（Report Descriptor）</p></li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">备注</p>
+<p>具体的描述符定义，请参考USB规范。</p>
+</div>
+</section>
+<section id="id58">
+<h3>描述符数据结构<a class="headerlink" href="#id58" title="Link to this heading"></a></h3>
+<p>一般情况下，USB主机会按如下顺序获取USB设备的描述符信息：</p>
+<ul class="simple">
+<li><p>获取设备描述符，USB设备需要返回设备描述符信息</p></li>
+<li><p>获取配置描述符，USB设备需要返回描述符拓扑结构中当前有效的配置描述符及其以下节点（包含接口描述符和端点描述符）的全部描述符信息</p></li>
+<li><p>获取配置描述符对应的字符串描述符，USB设备需要根据主机控制请求中的字符串类型信息，返回当前有效配置描述符下对应的字符串描述符信息，包含语言ID、串号、厂商、产品等字符串信息</p></li>
+</ul>
+<p>另外，USB主机可能还会尝试获取USB设备的以下描述符信息：</p>
+<ul class="simple">
+<li><p>获取设备限定描述符，如果USB设备有支持，需要返回设备限定描述符信息</p></li>
+<li><p>获取其它速率配置描述符，如果USB设备有支持，需要返回描述符拓扑结构中当前有效的配置描述符对应的其它速率配置描述符及其节点（包含接口描述符和端点描述符）的全部描述符信息</p></li>
+<li><p>获取其它速率配置描述符对应的字符串描述符，USB设备需要根据主机控制请求中的字符串类型信息，返回当前有效配置描述符对应的其它速率配置描述符下对应的字符串描述符信息，包含语言ID、串号、厂商、产品等字符串信息</p></li>
+<li><p>获取设备类相关的描述符，USB设备需要根据设备类规范返回相关的描述符信息</p></li>
+<li><p>获取USB主机相关的描述符，比如Windows主机会尝试获取索引值为238（对应16进制数字0xEE）的Microsoft OS字符串描述符（Microsoft OS String Descriptor）</p></li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">备注</p>
+<p>如果USB设备不支持某些描述符，在收到USB主机端相关请求时，需要返回STALL状态，复合规范的STALL并不会影响USB主机与设备间的通信，也不会影响USB设备的功能。</p>
+</div>
+<p>鉴于上述USB主机获取USB设备描述符的行为，建议USB设备定义以下几个独立数组用于存储USB主机需要获取的描述符信息：</p>
+<ul class="simple">
+<li><p>设备描述符，仅包含设备描述符信息</p></li>
+<li><p>配置描述符，每个配置描述符分别定义，包含其自身及其以下节点（包含接口描述符和端点描述符）的全部描述符信息</p></li>
+<li><p>字符串描述符，包含语言ID在内的每个字符串描述符分别定义</p></li>
+<li><p>设备限定描述符，仅包含设备限定描述符信息</p></li>
+<li><p>其它速率配置描述符，每个其它速率配置描述符分别定义，包含其自身及其以下节点（包含接口描述符和端点描述符）的全部描述符信息；为节省存储资源，也可与配置描述符共用一个数组，运行时动态替换描述符类型数据</p></li>
+<li><p>设备类相关的描述符，按设备类规范定义</p></li>
+<li><p>USB主机相关的描述符，按USB主机相关规范和应用需求定义</p></li>
+</ul>
+</section>
+<section id="id59">
+<h3>描述符定制项<a class="headerlink" href="#id59" title="Link to this heading"></a></h3>
+<p>USB设备协议栈中定义的所有设备类，其全部描述符信息均开源并允许开发者根据设计需求定制。
+但为兼容性，对于基于USB规范的标准类设备，一般仅建议对以下描述符信息进行定制：</p>
+<p><strong>VID与PID</strong></p>
+<p>开发者可以直接使用USB协议栈默认使用的Realtek VID和PID，如需自定义，需要注册成为USB-IF成员（参考https://www.usb.org/members），然后按照USB-IF的流程申请VID和PID。
+开发者如果需要使用Realtek VID，并自定义PID，请与Realtek FAE联系。</p>
+<div class="admonition note">
+<p class="admonition-title">备注</p>
+<p>使用Realtek VID和PID, 并不意味着产品符合USB规范，仍需要进行USB认证。</p>
+</div>
+<p><strong>字符串描述符</strong></p>
+<p>设备描述符、配置描述符和接口描述符都有字符串描述符索引字段，可定义非0的索引值并定义对应的字符串描述符：</p>
+<ul class="simple">
+<li><p>设备描述符</p>
+<ul>
+<li><p>iManufacturer：厂商字符串</p></li>
+<li><p>iProduct：产品字符串</p></li>
+<li><p>iSerialNumber：串号字符串</p></li>
+</ul>
+</li>
+<li><p>配置描述符</p>
+<ul>
+<li><p>iConfiguration：配置字符串</p></li>
+</ul>
+</li>
+<li><p>接口描述符</p>
+<ul>
+<li><p>iInterface：配置字符串</p></li>
+</ul>
+</li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">备注</p>
+<ul class="simple">
+<li><p>USB规范要求字符串描述符使用UNICODE编码，设备核心驱动提供了usbd_get_str_desc函数用于将ASCII编码的字符串转为UNICODE编码的字符串描述符，方便开发者用ASCII字符串来维护字符串信息。</p></li>
+<li><p>协议栈目前仅提供了英文字符串描述符示例，如需支持其它语言类型，请参考USB规范定义所需的语言ID描述符及对应的字符串描述符</p></li>
+</ul>
+</div>
+<p><strong>端点描述符</strong></p>
+<p>对于一般应用，端点描述符中的以下字段支持自定义：</p>
+<ul class="simple">
+<li><p>bEndpointAddress：端点地址</p></li>
+<li><p>wMaxPacketSize：最大包长，一般建议按USB规范定义的最大值（不高于SoC硬件支持的最大值）来设定，除非有特别需求，不建议随意修改</p></li>
+<li><p>bInterval：传输间隔</p></li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">备注</p>
+<p>协议栈保证默认提供的端点配置对所有SoC可用，如需调整，请参考 <a class="reference internal" href="#usb-hw-features"><span class="std std-ref">硬件配置</span></a>，务必熟知相关USB规范和SoC硬件限制后再做谨慎调整，否则可能导致兼容性问题甚至枚举失败。</p>
+</div>
+</section>
+</section>
+</section>
+<section id="drd">
+<span id="usb-drd"></span><h1>DRD解决方案<a class="headerlink" href="#drd" title="Link to this heading"></a></h1>
+<section id="id60">
+<h2>概述<a class="headerlink" href="#id60" title="Link to this heading"></a></h2>
+<p>DRD指双角色设备（Dual-Role Device），即支持在主机和设备两个角色之间进行动态切换的USB设备。</p>
+<p>DRD提升了设备灵活性，适应多样化的应用场景，例如：</p>
+<ul class="simple">
+<li><p>存储设备：作为主机连接U盘、打印机，作为设备连接电脑、手机</p></li>
+<li><p>车载设备：作为Carplay设备，与车机系统互联</p></li>
+<li><p>工业物联网：灵活适配传感器（设备）与控制器（主机）角色</p></li>
+</ul>
+<p>协议栈提供了基于标准MSC主机和MSC设备类驱动的DRD设备应用示例，特征如下：</p>
+<ul class="simple">
+<li><p>支持MSC设备：</p>
+<ul>
+<li><p>基于BOT（Bulk-Only Transport）传输协议</p></li>
+<li><p>支持SD卡作为存储媒介</p></li>
+<li><p>端点配置如下：</p>
+<ul>
+<li><p>一个控制端点用于处理USB主机发送的控制请求</p></li>
+<li><p>一个批量IN端点用于向USB主机发送数据</p></li>
+<li><p>一个批量OUT端点用于从USB主机接收数据</p></li>
+</ul>
+</li>
+<li><p>支持描述符全定制</p></li>
+</ul>
+</li>
+<li><p>支持MSC主机：</p>
+<ul>
+<li><p>支持FAT32格式的MSC设备</p></li>
+<li><p>通道配置如下：</p>
+<ul>
+<li><p>两个通道用于控制IN/OUT传输</p></li>
+<li><p>一个通道用于批量IN传输</p></li>
+<li><p>一个通道用于批量OUT传输</p></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p>不支持SD卡热插拔</p></li>
+<li><p>不支持USB热插拔</p></li>
+</ul>
+</section>
+<section id="id61">
+<h2>类驱动<a class="headerlink" href="#id61" title="Link to this heading"></a></h2>
+<p>关于MSC主机类驱动，参考 <a class="reference internal" href="#usb-host-msc"><span class="std std-ref">存储主机方案</span></a>。</p>
+<p>关于MSC设备类驱动，参考 <a class="reference internal" href="#usb-device-msc"><span class="std std-ref">存储设备方案</span></a>。</p>
+</section>
+<section id="id62">
+<h2>应用示例<a class="headerlink" href="#id62" title="Link to this heading"></a></h2>
+<p>示例路径: <code class="docutils literal notranslate"><span class="pre">{SDK}/component/example/usb/usb_drd</span></code></p>
+<p>该示例定义了一个具备大容量存储主机和大容量存储设备的双角色设备，在运行时进行角色切换。</p>
+<p>更多信息，请参考示例路径下的README.md文件。</p>
+<p>该示例可作为DRD方案的设计参考。</p>
+</section>
+</section>
+<section id="usb-certification">
+<span id="id63"></span><h1>USB认证<a class="headerlink" href="#usb-certification" title="Link to this heading"></a></h1>
+<p>USB认证一般指USB-IF认证，即通过USB-IF官方的电气、协议和功能测试，确保设备符合USB规范，
+以保障设备间的互操作性、安全性和可靠性，认证通过后即可合法使用​USB标志​（如USB Logo）。</p>
+<p>USB-IF认证非强制性过程，但以下情况必须对USB产品进行认证：</p>
+<ul class="simple">
+<li><p>产品需要使用​USB标志</p></li>
+<li><p>产品宣传资料中宣称符合USB规范或提及USB认证</p></li>
+</ul>
+<p>关于USB-IF认证的具体流程和要求，请查阅 <a class="reference external" href="https://www.usb.org">https://www.usb.org</a> 相关文档或联系USB-IF授权测试实验室。</p>
+<p>与USB设备相关的其它认证还有：</p>
+<ul class="simple">
+<li><p>在欧美市场销售USB设备需要通过FCC、CE等认证，否则可能面临法律风险</p></li>
+</ul>
+<p>​- 车载USB设备需要通过​ISO 26262车载电子系统的功能安全认证</p>
+<ul class="simple">
+<li><p>为确保USB设备与Windows系统兼容，或需要在产品包装和宣传材料中使用“Certified for Windows”徽标，需要通过Windows徽标认证</p></li>
+</ul>
+<p>​- 苹果专用USB设备需要通过MFi认证</p>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="页脚">
+        <a href="0_usb_index_cn.html" class="btn btn-neutral float-left" title="USB OTG" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> 上一页</a>
+        <a href="../8_dmac/0_dmac_index_cn.html" class="btn btn-neutral float-right" title="DMA控制器（DMAC）" accesskey="n" rel="next">下一页 <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; 版权所有 2025, Realsil。</p>
+  </div>
+
+  利用 <a href="https://www.sphinx-doc.org/">Sphinx</a> 构建，使用的 
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">主题</a>
+    由 <a href="https://readthedocs.org">Read the Docs</a> 开发.
+   
+
+</footer>
+        </div>
+
+    <!-- 问题反馈按钮和对话框 -->
+    
+
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script>
+     
+
+    <!-- templates/sidebar_toggle.html -->
+
+<button id="sidebar-toggle-button" aria-label="Toggle sidebar"></button>
+
+<script>
+    function sidebarToggleButton() {
+        const sidebar = document.querySelector('.wy-nav-side');
+        const contentArea = document.querySelector('.wy-nav-content');
+        const contentAreaWrap = document.querySelector('.wy-nav-content-wrap');
+        const sidebarToggleButton = document.getElementById('sidebar-toggle-button');
+
+        console.log('Sidebar:', sidebar);
+        console.log('Content Area:', contentArea);
+        console.log('Toggle Button:', sidebarToggleButton);
+
+        if (!sidebar || !contentArea || !sidebarToggleButton) {
+            console.error('One or more elements not found');
+            return;
+        }
+
+        let isSidebarCollapsed = false;
+
+        sidebarToggleButton.addEventListener('click', function() {
+            document.documentElement.classList.add('sidebar-transitioning');// 添加过渡类
+
+            if (isSidebarCollapsed) {
+                document.documentElement.classList.remove('sidebar-collapsed'); // 改为使用CSS类控制
+
+                sidebar.style.marginLeft = '0px';
+                contentAreaWrap.style.marginLeft = '300px';
+                contentArea.classList.remove('expanded');
+
+                sidebarToggleButton.style.left = '300px';
+            } else {
+                document.documentElement.classList.add('sidebar-collapsed');
+
+                sidebar.style.marginLeft = '-300px';
+                contentAreaWrap.style.marginLeft = '0px';
+                contentArea.classList.add('expanded');
+
+                sidebarToggleButton.style.left = '0px';
+            }
+
+            // 同步状态
+            isSidebarCollapsed = !isSidebarCollapsed;
+
+            // 过渡结束后移除标记
+            setTimeout(() => {
+                document.documentElement.classList.remove('sidebar-transitioning');
+            }, 300); // 必须与过渡时间匹配
+        });
+    }
+</script>
+
+<style>
+    #sidebar-toggle-button {
+        position: fixed;
+        left: 300px;
+        top: 0;
+        z-index: 1002;
+
+        width: 4px;  /* 竖线宽度 */
+        /* 增加热区 */
+        padding: 0 15px; /* 左右各扩展12px点击区域 */
+        margin: 0 -15px; /* 抵消padding带来的位置偏移 */
+        clip-path: inset(0 -15px); /* 保持视觉宽度4px */
+
+        height: 100vh; /* 竖线高度 */
+        background: #2d2d2d;
+        border: none;
+        border-radius: 2px;
+        cursor: pointer;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        transform: none;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+
+        /* 隐藏原始文字 */
+        color: transparent;
+        font-size: 0;
+
+        /* 修正交互区域 */
+        padding: 0;
+        margin: 0;
+
+        /* 新增：防止内容溢出 */
+        overflow: visible;
+
+        /* 调整箭头定位 */
+        &::before {
+            top: 50vh; /* 改为视口中点定位 */
+            transform: translateY(-50%);
+        }
+
+        &::after {
+            top: 50vh;
+            transform: translateY(-50%) rotate(45deg);
+        }
+    }
+
+    /* 动态箭头指示器 */
+    #sidebar-toggle-button::before {
+        content: '‹';
+        position: absolute;
+        left: 6px;
+        top: 50%;
+        width: 24px;
+        height: 24px;
+        background: #3498db;
+        color: white;
+        font-size: 18px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transform: translateY(-50%);
+        opacity: 0;
+        transition: all 0.3s ease;
+        pointer-events: none;
+    }
+
+    #sidebar-toggle-button::after {
+        content: '';
+        position: absolute;
+
+        left: -15px;  /* 向左扩展12px */
+        right: -15px; /* 向右扩展12px */
+
+        top: 50%;
+        width: 8px;
+        height: 8px;
+        border: 2px solid white;
+        border-width: 2px 2px 0 0;
+        transform: translateY(-50%) rotate(45deg);
+        opacity: 0;
+        transition: all 0.3s ease;
+    }
+
+    /* 悬停效果 */
+    #sidebar-toggle-button:hover {
+        width: 10px;
+        background: #2980b9;
+    }
+
+    /* 点击动画 */
+    #sidebar-toggle-button:active {
+        transform: translateY(-50%) scale(0.9);
+    }
+</style>
+
+<!-- 统一移动速度 -->
+<style>
+    /* 统一过渡参数 */
+    :root {
+        --sidebar-transition: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .wy-nav-side,
+    .wy-nav-content-wrap,
+    #sidebar-toggle-button {
+        transition: all var(--sidebar-transition) !important;
+    }
+
+    /* 按钮样式调整 */
+    #sidebar-toggle-button {
+        left: 300px;
+        transition: left var(--sidebar-transition),
+                    width 150ms ease, /* 悬停效果保持独立 */
+                    background 150ms ease;
+    }
+
+    /* 折叠状态 */
+    .sidebar-collapsed {
+        .wy-nav-side {
+            margin-left: -300px !important;
+        }
+
+        .wy-nav-content-wrap {
+            margin-left: 0 !important;
+        }
+
+        #sidebar-toggle-button {
+            left: 0 !important;
+        }
+    }
+
+    /* 禁用点击时的过渡 */
+    .sidebar-transitioning {
+        .wy-nav-side,
+        .wy-nav-content-wrap,
+        #sidebar-toggle-button {
+            transition: none !important;
+        }
+    }
+</style>
+
+    
+
+    <script>
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            
+
+            sidebarToggleButton();
+        });
+
+
+    </script>
+
+
+
+</body>
+</html>

@@ -33,6 +33,10 @@ extern "C" {
  */
 void carbox_nor_identity_cache_init(void);
 
+/* Emit a cache-only status line from the 10-second PC-profiler reporter.
+ * It never submits a NOR command or exposes UID/OTP contents. */
+void carbox_nor_identity_cache_profile_report(uint32_t sequence);
+
 /* EN25S64A factory UID, in wire/address order (not a 128-bit RFC UUID).
  * Copies the boot cache to writable RAM of at least 12 bytes. Returns 12 on
  * success, NOT_READY before initialization, or the saved boot-read error.

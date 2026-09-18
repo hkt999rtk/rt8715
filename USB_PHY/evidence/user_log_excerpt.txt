@@ -1,0 +1,19 @@
+Source: user-provided serial log in this conversation.
+Capture label: Serial-COM10_2026_09_17_10_43_29_789 / 790.
+This is a selected excerpt, not the complete original capture.
+It predates the library snapshot investigated on 2026-09-18.
+
+[USB] DWCReadPhyReg enter addr=0xc6
+[USB] DWCReadPhyReg exit val=0x90
+[USB] CAL p0 A0xE6 W0x90 R0x90 OK
+[USB] DWCReadPhyReg enter addr=0xd0
+[USB] DWCReadPhyReg exit val=0xac
+[USB] CAL p0 A0xF0 W0xAC R0xAC OK
+[USB] DWCReadPhyReg enter addr=0xc5
+[USB] DWCReadPhyReg exit val=0x0a
+[USB] CAL p1 A0xE5 W0x0A R0x0A OK
+[USB] [USB] GSNPSID = 0x4f54310a
+
+Limit: These lines identify that earlier runtime and its readback results.
+They do not prove that the current archive/image includes those writes,
+identify the analog PHY vendor, or establish electrical improvement.

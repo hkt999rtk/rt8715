@@ -1,0 +1,807 @@
+Source archive: /home/kevin/work/rt8715/project/realtek_amebapro_v0_example/GCC-RELEASE/usb_lib/build/lib_usbsmart_link.a
+Member: usb_hal.o
+Member SHA-256: 78115aac221e0a156211c4b07e1e553d1c08763fc3caa0aa8d7fcc981f2067ab
+Tool: /home/kevin/work/toolchains/arm-none-eabi-gcc-6.4.1-realtek/asdk/linux/newlib/bin/arm-none-eabi-objdump -dr
+
+
+/tmp/usb_phy_objects_0_sxfnj9/usb_hal.o:     file format elf32-littlearm
+
+
+Disassembly of section .text.usb_hal_core_reset:
+
+00000000 <usb_hal_core_reset>:
+   0:	b570      	push	{r4, r5, r6, lr}
+   2:	4c4b      	ldr	r4, [pc, #300]	; (130 <usb_hal_core_reset+0x130>)
+   4:	b0c0      	sub	sp, #256	; 0x100
+   6:	4b4b      	ldr	r3, [pc, #300]	; (134 <usb_hal_core_reset+0x134>)
+   8:	4668      	mov	r0, sp
+   a:	4a4b      	ldr	r2, [pc, #300]	; (138 <usb_hal_core_reset+0x138>)
+   c:	f44f 7180 	mov.w	r1, #256	; 0x100
+  10:	6c26      	ldr	r6, [r4, #64]	; 0x40
+  12:	f7ff fffe 	bl	0 <snprintf>
+			12: R_ARM_THM_CALL	snprintf
+  16:	1e43      	subs	r3, r0, #1
+  18:	2bfe      	cmp	r3, #254	; 0xfe
+  1a:	d944      	bls.n	a6 <usb_hal_core_reset+0xa6>
+  1c:	4669      	mov	r1, sp
+  1e:	4847      	ldr	r0, [pc, #284]	; (13c <usb_hal_core_reset+0x13c>)
+  20:	f7ff fffe 	bl	0 <printf>
+			20: R_ARM_THM_CALL	printf
+  24:	200a      	movs	r0, #10
+  26:	f7ff fffe 	bl	0 <usb_os_delay_us>
+			26: R_ARM_THM_CALL	usb_os_delay_us
+  2a:	4c45      	ldr	r4, [pc, #276]	; (140 <usb_hal_core_reset+0x140>)
+  2c:	4d40      	ldr	r5, [pc, #256]	; (130 <usb_hal_core_reset+0x130>)
+  2e:	e004      	b.n	3a <usb_hal_core_reset+0x3a>
+  30:	200a      	movs	r0, #10
+  32:	f7ff fffe 	bl	0 <usb_os_delay_us>
+			32: R_ARM_THM_CALL	usb_os_delay_us
+  36:	3c01      	subs	r4, #1
+  38:	d03d      	beq.n	b6 <usb_hal_core_reset+0xb6>
+  3a:	692b      	ldr	r3, [r5, #16]
+  3c:	2b00      	cmp	r3, #0
+  3e:	daf7      	bge.n	30 <usb_hal_core_reset+0x30>
+  40:	692b      	ldr	r3, [r5, #16]
+  42:	4a40      	ldr	r2, [pc, #256]	; (144 <usb_hal_core_reset+0x144>)
+  44:	f043 0301 	orr.w	r3, r3, #1
+  48:	4296      	cmp	r6, r2
+  4a:	612b      	str	r3, [r5, #16]
+  4c:	f242 7410 	movw	r4, #10000	; 0x2710
+  50:	4d37      	ldr	r5, [pc, #220]	; (130 <usb_hal_core_reset+0x130>)
+  52:	d902      	bls.n	5a <usb_hal_core_reset+0x5a>
+  54:	e01a      	b.n	8c <usb_hal_core_reset+0x8c>
+  56:	3c01      	subs	r4, #1
+  58:	d045      	beq.n	e6 <usb_hal_core_reset+0xe6>
+  5a:	2001      	movs	r0, #1
+  5c:	f7ff fffe 	bl	0 <usb_os_delay_us>
+			5c: R_ARM_THM_CALL	usb_os_delay_us
+  60:	692b      	ldr	r3, [r5, #16]
+  62:	07da      	lsls	r2, r3, #31
+  64:	d4f7      	bmi.n	56 <usb_hal_core_reset+0x56>
+  66:	200a      	movs	r0, #10
+  68:	f7ff fffe 	bl	0 <usb_os_delay_us>
+			68: R_ARM_THM_CALL	usb_os_delay_us
+  6c:	4c34      	ldr	r4, [pc, #208]	; (140 <usb_hal_core_reset+0x140>)
+  6e:	4d30      	ldr	r5, [pc, #192]	; (130 <usb_hal_core_reset+0x130>)
+  70:	e004      	b.n	7c <usb_hal_core_reset+0x7c>
+  72:	200a      	movs	r0, #10
+  74:	f7ff fffe 	bl	0 <usb_os_delay_us>
+			74: R_ARM_THM_CALL	usb_os_delay_us
+  78:	3c01      	subs	r4, #1
+  7a:	d046      	beq.n	10a <usb_hal_core_reset+0x10a>
+  7c:	692b      	ldr	r3, [r5, #16]
+  7e:	2b00      	cmp	r3, #0
+  80:	daf7      	bge.n	72 <usb_hal_core_reset+0x72>
+  82:	2000      	movs	r0, #0
+  84:	b040      	add	sp, #256	; 0x100
+  86:	bd70      	pop	{r4, r5, r6, pc}
+  88:	3c01      	subs	r4, #1
+  8a:	d02c      	beq.n	e6 <usb_hal_core_reset+0xe6>
+  8c:	2001      	movs	r0, #1
+  8e:	f7ff fffe 	bl	0 <usb_os_delay_us>
+			8e: R_ARM_THM_CALL	usb_os_delay_us
+  92:	692b      	ldr	r3, [r5, #16]
+  94:	009b      	lsls	r3, r3, #2
+  96:	d5f7      	bpl.n	88 <usb_hal_core_reset+0x88>
+  98:	692b      	ldr	r3, [r5, #16]
+  9a:	f023 0301 	bic.w	r3, r3, #1
+  9e:	f043 5300 	orr.w	r3, r3, #536870912	; 0x20000000
+  a2:	612b      	str	r3, [r5, #16]
+  a4:	e7df      	b.n	66 <usb_hal_core_reset+0x66>
+  a6:	f5c0 7180 	rsb	r1, r0, #256	; 0x100
+  aa:	4633      	mov	r3, r6
+  ac:	4a26      	ldr	r2, [pc, #152]	; (148 <usb_hal_core_reset+0x148>)
+  ae:	4468      	add	r0, sp
+  b0:	f7ff fffe 	bl	0 <snprintf>
+			b0: R_ARM_THM_CALL	snprintf
+  b4:	e7b2      	b.n	1c <usb_hal_core_reset+0x1c>
+  b6:	4b1f      	ldr	r3, [pc, #124]	; (134 <usb_hal_core_reset+0x134>)
+  b8:	4a1f      	ldr	r2, [pc, #124]	; (138 <usb_hal_core_reset+0x138>)
+  ba:	f44f 7180 	mov.w	r1, #256	; 0x100
+  be:	4668      	mov	r0, sp
+  c0:	f7ff fffe 	bl	0 <snprintf>
+			c0: R_ARM_THM_CALL	snprintf
+  c4:	1e43      	subs	r3, r0, #1
+  c6:	2bfe      	cmp	r3, #254	; 0xfe
+  c8:	d806      	bhi.n	d8 <usb_hal_core_reset+0xd8>
+  ca:	f5c0 7180 	rsb	r1, r0, #256	; 0x100
+  ce:	692b      	ldr	r3, [r5, #16]
+  d0:	4a1e      	ldr	r2, [pc, #120]	; (14c <usb_hal_core_reset+0x14c>)
+  d2:	4468      	add	r0, sp
+  d4:	f7ff fffe 	bl	0 <snprintf>
+			d4: R_ARM_THM_CALL	snprintf
+  d8:	4669      	mov	r1, sp
+  da:	4818      	ldr	r0, [pc, #96]	; (13c <usb_hal_core_reset+0x13c>)
+  dc:	f7ff fffe 	bl	0 <printf>
+			dc: R_ARM_THM_CALL	printf
+  e0:	2003      	movs	r0, #3
+  e2:	b040      	add	sp, #256	; 0x100
+  e4:	bd70      	pop	{r4, r5, r6, pc}
+  e6:	4b13      	ldr	r3, [pc, #76]	; (134 <usb_hal_core_reset+0x134>)
+  e8:	4a13      	ldr	r2, [pc, #76]	; (138 <usb_hal_core_reset+0x138>)
+  ea:	f44f 7180 	mov.w	r1, #256	; 0x100
+  ee:	4668      	mov	r0, sp
+  f0:	f7ff fffe 	bl	0 <snprintf>
+			f0: R_ARM_THM_CALL	snprintf
+  f4:	1e43      	subs	r3, r0, #1
+  f6:	2bfe      	cmp	r3, #254	; 0xfe
+  f8:	d8ee      	bhi.n	d8 <usb_hal_core_reset+0xd8>
+  fa:	f5c0 7180 	rsb	r1, r0, #256	; 0x100
+  fe:	692b      	ldr	r3, [r5, #16]
+ 100:	4a13      	ldr	r2, [pc, #76]	; (150 <usb_hal_core_reset+0x150>)
+ 102:	4468      	add	r0, sp
+ 104:	f7ff fffe 	bl	0 <snprintf>
+			104: R_ARM_THM_CALL	snprintf
+ 108:	e7e6      	b.n	d8 <usb_hal_core_reset+0xd8>
+ 10a:	4b0a      	ldr	r3, [pc, #40]	; (134 <usb_hal_core_reset+0x134>)
+ 10c:	4a0a      	ldr	r2, [pc, #40]	; (138 <usb_hal_core_reset+0x138>)
+ 10e:	f44f 7180 	mov.w	r1, #256	; 0x100
+ 112:	4668      	mov	r0, sp
+ 114:	f7ff fffe 	bl	0 <snprintf>
+			114: R_ARM_THM_CALL	snprintf
+ 118:	1e43      	subs	r3, r0, #1
+ 11a:	2bfe      	cmp	r3, #254	; 0xfe
+ 11c:	d8dc      	bhi.n	d8 <usb_hal_core_reset+0xd8>
+ 11e:	f5c0 7180 	rsb	r1, r0, #256	; 0x100
+ 122:	692b      	ldr	r3, [r5, #16]
+ 124:	4a0b      	ldr	r2, [pc, #44]	; (154 <usb_hal_core_reset+0x154>)
+ 126:	4468      	add	r0, sp
+ 128:	f7ff fffe 	bl	0 <snprintf>
+			128: R_ARM_THM_CALL	snprintf
+ 12c:	e7d4      	b.n	d8 <usb_hal_core_reset+0xd8>
+ 12e:	bf00      	nop
+ 130:	400c0000 	.word	0x400c0000
+ 134:	00000000 	.word	0x00000000
+			134: R_ARM_ABS32	.rodata.usb_hal_core_reset.str1.4
+ 138:	00000004 	.word	0x00000004
+			138: R_ARM_ABS32	.rodata.usb_hal_core_reset.str1.4
+ 13c:	00000024 	.word	0x00000024
+			13c: R_ARM_ABS32	.rodata.usb_hal_core_reset.str1.4
+ 140:	000186a0 	.word	0x000186a0
+ 144:	4f544209 	.word	0x4f544209
+ 148:	0000000c 	.word	0x0000000c
+			148: R_ARM_ABS32	.rodata.usb_hal_core_reset.str1.4
+ 14c:	00000028 	.word	0x00000028
+			14c: R_ARM_ABS32	.rodata.usb_hal_core_reset.str1.4
+ 150:	00000048 	.word	0x00000048
+			150: R_ARM_ABS32	.rodata.usb_hal_core_reset.str1.4
+ 154:	00000068 	.word	0x00000068
+			154: R_ARM_ABS32	.rodata.usb_hal_core_reset.str1.4
+
+Disassembly of section .text.usb_hal_load_phy_vendor_control_register:
+
+00000000 <usb_hal_load_phy_vendor_control_register>:
+   0:	b530      	push	{r4, r5, lr}
+   2:	0203      	lsls	r3, r0, #8
+   4:	f403 6370 	and.w	r3, r3, #3840	; 0xf00
+   8:	4d16      	ldr	r5, [pc, #88]	; (64 <usb_hal_load_phy_vendor_control_register+0x64>)
+   a:	f043 6323 	orr.w	r3, r3, #170917888	; 0xa300000
+   e:	b0c1      	sub	sp, #260	; 0x104
+  10:	636b      	str	r3, [r5, #52]	; 0x34
+  12:	2001      	movs	r0, #1
+  14:	f7ff fffe 	bl	0 <DelayUs>
+			14: R_ARM_THM_CALL	DelayUs
+  18:	f44f 747a 	mov.w	r4, #1000	; 0x3e8
+  1c:	e004      	b.n	28 <usb_hal_load_phy_vendor_control_register+0x28>
+  1e:	2001      	movs	r0, #1
+  20:	f7ff fffe 	bl	0 <DelayUs>
+			20: R_ARM_THM_CALL	DelayUs
+  24:	3c01      	subs	r4, #1
+  26:	d005      	beq.n	34 <usb_hal_load_phy_vendor_control_register+0x34>
+  28:	6b6b      	ldr	r3, [r5, #52]	; 0x34
+  2a:	011b      	lsls	r3, r3, #4
+  2c:	d5f7      	bpl.n	1e <usb_hal_load_phy_vendor_control_register+0x1e>
+  2e:	2000      	movs	r0, #0
+  30:	b041      	add	sp, #260	; 0x104
+  32:	bd30      	pop	{r4, r5, pc}
+  34:	4b0c      	ldr	r3, [pc, #48]	; (68 <usb_hal_load_phy_vendor_control_register+0x68>)
+  36:	4668      	mov	r0, sp
+  38:	4a0c      	ldr	r2, [pc, #48]	; (6c <usb_hal_load_phy_vendor_control_register+0x6c>)
+  3a:	f44f 7180 	mov.w	r1, #256	; 0x100
+  3e:	f7ff fffe 	bl	0 <snprintf>
+			3e: R_ARM_THM_CALL	snprintf
+  42:	1e43      	subs	r3, r0, #1
+  44:	2bfe      	cmp	r3, #254	; 0xfe
+  46:	d805      	bhi.n	54 <usb_hal_load_phy_vendor_control_register+0x54>
+  48:	f5c0 7180 	rsb	r1, r0, #256	; 0x100
+  4c:	4a08      	ldr	r2, [pc, #32]	; (70 <usb_hal_load_phy_vendor_control_register+0x70>)
+  4e:	4468      	add	r0, sp
+  50:	f7ff fffe 	bl	0 <snprintf>
+			50: R_ARM_THM_CALL	snprintf
+  54:	4669      	mov	r1, sp
+  56:	4807      	ldr	r0, [pc, #28]	; (74 <usb_hal_load_phy_vendor_control_register+0x74>)
+  58:	f7ff fffe 	bl	0 <printf>
+			58: R_ARM_THM_CALL	printf
+  5c:	2003      	movs	r0, #3
+  5e:	b041      	add	sp, #260	; 0x104
+  60:	bd30      	pop	{r4, r5, pc}
+  62:	bf00      	nop
+  64:	400c0000 	.word	0x400c0000
+  68:	00000000 	.word	0x00000000
+			68: R_ARM_ABS32	.rodata.usb_hal_core_reset.str1.4
+  6c:	00000004 	.word	0x00000004
+			6c: R_ARM_ABS32	.rodata.usb_hal_core_reset.str1.4
+  70:	00000000 	.word	0x00000000
+			70: R_ARM_ABS32	.rodata.usb_hal_load_phy_vendor_control_register.str1.4
+  74:	00000024 	.word	0x00000024
+			74: R_ARM_ABS32	.rodata.usb_hal_core_reset.str1.4
+
+Disassembly of section .text.usb_hal_core_init:
+
+00000000 <usb_hal_core_init>:
+   0:	b538      	push	{r3, r4, r5, lr}
+   2:	4c0f      	ldr	r4, [pc, #60]	; (40 <usb_hal_core_init+0x40>)
+   4:	4605      	mov	r5, r0
+   6:	68e3      	ldr	r3, [r4, #12]
+   8:	f023 0310 	bic.w	r3, r3, #16
+   c:	f043 0308 	orr.w	r3, r3, #8
+  10:	60e3      	str	r3, [r4, #12]
+  12:	f7ff fffe 	bl	0 <usb_hal_core_init>
+			12: R_ARM_THM_CALL	usb_hal_core_reset
+  16:	b2c0      	uxtb	r0, r0
+  18:	b930      	cbnz	r0, 28 <usb_hal_core_init+0x28>
+  1a:	2d01      	cmp	r5, #1
+  1c:	d005      	beq.n	2a <usb_hal_core_init+0x2a>
+  1e:	4a08      	ldr	r2, [pc, #32]	; (40 <usb_hal_core_init+0x40>)
+  20:	6813      	ldr	r3, [r2, #0]
+  22:	f423 1380 	bic.w	r3, r3, #1048576	; 0x100000
+  26:	6013      	str	r3, [r2, #0]
+  28:	bd38      	pop	{r3, r4, r5, pc}
+  2a:	68a3      	ldr	r3, [r4, #8]
+  2c:	4a04      	ldr	r2, [pc, #16]	; (40 <usb_hal_core_init+0x40>)
+  2e:	f043 032e 	orr.w	r3, r3, #46	; 0x2e
+  32:	60a3      	str	r3, [r4, #8]
+  34:	6813      	ldr	r3, [r2, #0]
+  36:	f423 1380 	bic.w	r3, r3, #1048576	; 0x100000
+  3a:	6013      	str	r3, [r2, #0]
+  3c:	e7f4      	b.n	28 <usb_hal_core_init+0x28>
+  3e:	bf00      	nop
+  40:	400c0000 	.word	0x400c0000
+
+Disassembly of section .text.usb_hal_enable_interrupt:
+
+00000000 <usb_hal_enable_interrupt>:
+   0:	b508      	push	{r3, lr}
+   2:	200c      	movs	r0, #12
+   4:	2105      	movs	r1, #5
+   6:	f7ff fffe 	bl	0 <hal_irq_set_priority_rtl8195bhp>
+			6: R_ARM_THM_CALL	hal_irq_set_priority_rtl8195bhp
+   a:	e8bd 4008 	ldmia.w	sp!, {r3, lr}
+   e:	200c      	movs	r0, #12
+  10:	f7ff bffe 	b.w	0 <hal_irq_enable_rtl8195bhp>
+			10: R_ARM_THM_JUMP24	hal_irq_enable_rtl8195bhp
+
+Disassembly of section .text.usb_hal_disable_interrupt:
+
+00000000 <usb_hal_disable_interrupt>:
+   0:	200c      	movs	r0, #12
+   2:	f7ff bffe 	b.w	0 <hal_irq_disable_rtl8195bhp>
+			2: R_ARM_THM_JUMP24	hal_irq_disable_rtl8195bhp
+   6:	bf00      	nop
+
+Disassembly of section .text.usb_hal_register_irq_handler:
+
+00000000 <usb_hal_register_irq_handler>:
+   0:	b150      	cbz	r0, 18 <usb_hal_register_irq_handler+0x18>
+   2:	b508      	push	{r3, lr}
+   4:	4601      	mov	r1, r0
+   6:	200c      	movs	r0, #12
+   8:	f7ff fffe 	bl	0 <hal_irq_set_vector_rtl8195bhp>
+			8: R_ARM_THM_CALL	hal_irq_set_vector_rtl8195bhp
+   c:	e8bd 4008 	ldmia.w	sp!, {r3, lr}
+  10:	2100      	movs	r1, #0
+  12:	200c      	movs	r0, #12
+  14:	f7ff bffe 	b.w	0 <hal_irq_set_priority_rtl8195bhp>
+			14: R_ARM_THM_JUMP24	hal_irq_set_priority_rtl8195bhp
+  18:	4770      	bx	lr
+  1a:	bf00      	nop
+
+Disassembly of section .text.usb_hal_unregister_irq_handler:
+
+00000000 <usb_hal_unregister_irq_handler>:
+   0:	b508      	push	{r3, lr}
+   2:	200c      	movs	r0, #12
+   4:	f7ff fffe 	bl	0 <hal_irq_disable_rtl8195bhp>
+			4: R_ARM_THM_CALL	hal_irq_disable_rtl8195bhp
+   8:	e8bd 4008 	ldmia.w	sp!, {r3, lr}
+   c:	200c      	movs	r0, #12
+   e:	f7ff bffe 	b.w	0 <hal_irq_unreg_rtl8195bhp>
+			e: R_ARM_THM_JUMP24	hal_irq_unreg_rtl8195bhp
+  12:	bf00      	nop
+
+Disassembly of section .text.usb_hal_enable_global_interrupt:
+
+00000000 <usb_hal_enable_global_interrupt>:
+   0:	4a02      	ldr	r2, [pc, #8]	; (c <usb_hal_enable_global_interrupt+0xc>)
+   2:	6893      	ldr	r3, [r2, #8]
+   4:	f043 0301 	orr.w	r3, r3, #1
+   8:	6093      	str	r3, [r2, #8]
+   a:	4770      	bx	lr
+   c:	400c0000 	.word	0x400c0000
+
+Disassembly of section .text.usb_hal_disable_global_interrupt:
+
+00000000 <usb_hal_disable_global_interrupt>:
+   0:	4a02      	ldr	r2, [pc, #8]	; (c <usb_hal_disable_global_interrupt+0xc>)
+   2:	6893      	ldr	r3, [r2, #8]
+   4:	f023 0301 	bic.w	r3, r3, #1
+   8:	6093      	str	r3, [r2, #8]
+   a:	4770      	bx	lr
+   c:	400c0000 	.word	0x400c0000
+
+Disassembly of section .text.usb_hal_read_interrupts:
+
+00000000 <usb_hal_read_interrupts>:
+   0:	4b02      	ldr	r3, [pc, #8]	; (c <usb_hal_read_interrupts+0xc>)
+   2:	6958      	ldr	r0, [r3, #20]
+   4:	699b      	ldr	r3, [r3, #24]
+   6:	4018      	ands	r0, r3
+   8:	4770      	bx	lr
+   a:	bf00      	nop
+   c:	400c0000 	.word	0x400c0000
+
+Disassembly of section .text.usb_hal_clear_interrupts:
+
+00000000 <usb_hal_clear_interrupts>:
+   0:	4a02      	ldr	r2, [pc, #8]	; (c <usb_hal_clear_interrupts+0xc>)
+   2:	6953      	ldr	r3, [r2, #20]
+   4:	4318      	orrs	r0, r3
+   6:	6150      	str	r0, [r2, #20]
+   8:	4770      	bx	lr
+   a:	bf00      	nop
+   c:	400c0000 	.word	0x400c0000
+
+Disassembly of section .text.usb_hal_set_otg_mode:
+
+00000000 <usb_hal_set_otg_mode>:
+   0:	4a09      	ldr	r2, [pc, #36]	; (28 <usb_hal_set_otg_mode+0x28>)
+   2:	b508      	push	{r3, lr}
+   4:	68d3      	ldr	r3, [r2, #12]
+   6:	f023 43c0 	bic.w	r3, r3, #1610612736	; 0x60000000
+   a:	b938      	cbnz	r0, 1c <usb_hal_set_otg_mode+0x1c>
+   c:	f043 4380 	orr.w	r3, r3, #1073741824	; 0x40000000
+  10:	60d3      	str	r3, [r2, #12]
+  12:	2064      	movs	r0, #100	; 0x64
+  14:	f7ff fffe 	bl	0 <usb_os_sleep_ms>
+			14: R_ARM_THM_CALL	usb_os_sleep_ms
+  18:	2000      	movs	r0, #0
+  1a:	bd08      	pop	{r3, pc}
+  1c:	2801      	cmp	r0, #1
+  1e:	d001      	beq.n	24 <usb_hal_set_otg_mode+0x24>
+  20:	2004      	movs	r0, #4
+  22:	bd08      	pop	{r3, pc}
+  24:	60d3      	str	r3, [r2, #12]
+  26:	e7f4      	b.n	12 <usb_hal_set_otg_mode+0x12>
+  28:	400c0000 	.word	0x400c0000
+
+Disassembly of section .text.usb_hal_get_otg_mode:
+
+00000000 <usb_hal_get_otg_mode>:
+   0:	4b02      	ldr	r3, [pc, #8]	; (c <usb_hal_get_otg_mode+0xc>)
+   2:	6958      	ldr	r0, [r3, #20]
+   4:	f000 0001 	and.w	r0, r0, #1
+   8:	4770      	bx	lr
+   a:	bf00      	nop
+   c:	400c0000 	.word	0x400c0000
+
+Disassembly of section .text.usb_hal_set_rx_fifo:
+
+00000000 <usb_hal_set_rx_fifo>:
+   0:	4602      	mov	r2, r0
+   2:	4b02      	ldr	r3, [pc, #8]	; (c <usb_hal_set_rx_fifo+0xc>)
+   4:	2000      	movs	r0, #0
+   6:	625a      	str	r2, [r3, #36]	; 0x24
+   8:	4770      	bx	lr
+   a:	bf00      	nop
+   c:	400c0000 	.word	0x400c0000
+
+Disassembly of section .text.usb_hal_set_np_tx_fifo:
+
+00000000 <usb_hal_set_np_tx_fifo>:
+   0:	4a03      	ldr	r2, [pc, #12]	; (10 <usb_hal_set_np_tx_fifo+0x10>)
+   2:	6a53      	ldr	r3, [r2, #36]	; 0x24
+   4:	ea43 4000 	orr.w	r0, r3, r0, lsl #16
+   8:	6290      	str	r0, [r2, #40]	; 0x28
+   a:	2000      	movs	r0, #0
+   c:	4770      	bx	lr
+   e:	bf00      	nop
+  10:	400c0000 	.word	0x400c0000
+
+Disassembly of section .text.usb_hal_set_ptx_fifo:
+
+00000000 <usb_hal_set_ptx_fifo>:
+   0:	b430      	push	{r4, r5}
+   2:	4d13      	ldr	r5, [pc, #76]	; (50 <usb_hal_set_ptx_fifo+0x50>)
+   4:	6a6c      	ldr	r4, [r5, #36]	; 0x24
+   6:	6aaa      	ldr	r2, [r5, #40]	; 0x28
+   8:	696b      	ldr	r3, [r5, #20]
+   a:	eb04 4412 	add.w	r4, r4, r2, lsr #16
+   e:	f013 0301 	ands.w	r3, r3, #1
+  12:	d115      	bne.n	40 <usb_hal_set_ptx_fifo+0x40>
+  14:	3801      	subs	r0, #1
+  16:	d00a      	beq.n	2e <usb_hal_set_ptx_fifo+0x2e>
+  18:	f103 0240 	add.w	r2, r3, #64	; 0x40
+  1c:	eb05 0282 	add.w	r2, r5, r2, lsl #2
+  20:	3301      	adds	r3, #1
+  22:	6852      	ldr	r2, [r2, #4]
+  24:	b2db      	uxtb	r3, r3
+  26:	4283      	cmp	r3, r0
+  28:	eb04 4412 	add.w	r4, r4, r2, lsr #16
+  2c:	d3f4      	bcc.n	18 <usb_hal_set_ptx_fifo+0x18>
+  2e:	4b09      	ldr	r3, [pc, #36]	; (54 <usb_hal_set_ptx_fifo+0x54>)
+  30:	0080      	lsls	r0, r0, #2
+  32:	ea44 4401 	orr.w	r4, r4, r1, lsl #16
+  36:	4403      	add	r3, r0
+  38:	605c      	str	r4, [r3, #4]
+  3a:	2000      	movs	r0, #0
+  3c:	bc30      	pop	{r4, r5}
+  3e:	4770      	bx	lr
+  40:	ea44 4401 	orr.w	r4, r4, r1, lsl #16
+  44:	f8c5 4100 	str.w	r4, [r5, #256]	; 0x100
+  48:	2000      	movs	r0, #0
+  4a:	bc30      	pop	{r4, r5}
+  4c:	4770      	bx	lr
+  4e:	bf00      	nop
+  50:	400c0000 	.word	0x400c0000
+  54:	400c0100 	.word	0x400c0100
+
+Disassembly of section .text.usb_hal_flush_tx_fifo:
+
+00000000 <usb_hal_flush_tx_fifo>:
+   0:	b570      	push	{r4, r5, r6, lr}
+   2:	0180      	lsls	r0, r0, #6
+   4:	4e0a      	ldr	r6, [pc, #40]	; (30 <usb_hal_flush_tx_fifo+0x30>)
+   6:	f040 0020 	orr.w	r0, r0, #32
+   a:	6130      	str	r0, [r6, #16]
+   c:	4d09      	ldr	r5, [pc, #36]	; (34 <usb_hal_flush_tx_fifo+0x34>)
+   e:	e001      	b.n	14 <usb_hal_flush_tx_fifo+0x14>
+  10:	3d01      	subs	r5, #1
+  12:	d00b      	beq.n	2c <usb_hal_flush_tx_fifo+0x2c>
+  14:	2001      	movs	r0, #1
+  16:	f7ff fffe 	bl	0 <usb_os_delay_us>
+			16: R_ARM_THM_CALL	usb_os_delay_us
+  1a:	6934      	ldr	r4, [r6, #16]
+  1c:	f014 0420 	ands.w	r4, r4, #32
+  20:	d1f6      	bne.n	10 <usb_hal_flush_tx_fifo+0x10>
+  22:	2001      	movs	r0, #1
+  24:	f7ff fffe 	bl	0 <usb_os_delay_us>
+			24: R_ARM_THM_CALL	usb_os_delay_us
+  28:	4620      	mov	r0, r4
+  2a:	bd70      	pop	{r4, r5, r6, pc}
+  2c:	2003      	movs	r0, #3
+  2e:	bd70      	pop	{r4, r5, r6, pc}
+  30:	400c0000 	.word	0x400c0000
+  34:	00030d40 	.word	0x00030d40
+
+Disassembly of section .text.usb_hal_flush_rx_fifo:
+
+00000000 <usb_hal_flush_rx_fifo>:
+   0:	2310      	movs	r3, #16
+   2:	b570      	push	{r4, r5, r6, lr}
+   4:	4e09      	ldr	r6, [pc, #36]	; (2c <usb_hal_flush_rx_fifo+0x2c>)
+   6:	4d0a      	ldr	r5, [pc, #40]	; (30 <usb_hal_flush_rx_fifo+0x30>)
+   8:	6133      	str	r3, [r6, #16]
+   a:	e001      	b.n	10 <usb_hal_flush_rx_fifo+0x10>
+   c:	3d01      	subs	r5, #1
+   e:	d00b      	beq.n	28 <usb_hal_flush_rx_fifo+0x28>
+  10:	2001      	movs	r0, #1
+  12:	f7ff fffe 	bl	0 <usb_os_delay_us>
+			12: R_ARM_THM_CALL	usb_os_delay_us
+  16:	6934      	ldr	r4, [r6, #16]
+  18:	f014 0410 	ands.w	r4, r4, #16
+  1c:	d1f6      	bne.n	c <usb_hal_flush_rx_fifo+0xc>
+  1e:	2001      	movs	r0, #1
+  20:	f7ff fffe 	bl	0 <usb_os_delay_us>
+			20: R_ARM_THM_CALL	usb_os_delay_us
+  24:	4620      	mov	r0, r4
+  26:	bd70      	pop	{r4, r5, r6, pc}
+  28:	2003      	movs	r0, #3
+  2a:	bd70      	pop	{r4, r5, r6, pc}
+  2c:	400c0000 	.word	0x400c0000
+  30:	00030d40 	.word	0x00030d40
+
+Disassembly of section .text.usb_hal_write_packet:
+
+00000000 <usb_hal_write_packet>:
+   0:	3203      	adds	r2, #3
+   2:	0892      	lsrs	r2, r2, #2
+   4:	d00b      	beq.n	1e <usb_hal_write_packet+0x1e>
+   6:	f501 2180 	add.w	r1, r1, #262144	; 0x40000
+   a:	31c1      	adds	r1, #193	; 0xc1
+   c:	4603      	mov	r3, r0
+   e:	0309      	lsls	r1, r1, #12
+  10:	eb00 0082 	add.w	r0, r0, r2, lsl #2
+  14:	f853 2b04 	ldr.w	r2, [r3], #4
+  18:	4283      	cmp	r3, r0
+  1a:	600a      	str	r2, [r1, #0]
+  1c:	d1fa      	bne.n	14 <usb_hal_write_packet+0x14>
+  1e:	2000      	movs	r0, #0
+  20:	4770      	bx	lr
+  22:	bf00      	nop
+
+Disassembly of section .text.usb_hal_read_packet:
+
+00000000 <usb_hal_read_packet>:
+   0:	3203      	adds	r2, #3
+   2:	0892      	lsrs	r2, r2, #2
+   4:	d00b      	beq.n	1e <usb_hal_read_packet+0x1e>
+   6:	f501 2180 	add.w	r1, r1, #262144	; 0x40000
+   a:	31c1      	adds	r1, #193	; 0xc1
+   c:	4603      	mov	r3, r0
+   e:	0309      	lsls	r1, r1, #12
+  10:	eb00 0082 	add.w	r0, r0, r2, lsl #2
+  14:	680a      	ldr	r2, [r1, #0]
+  16:	f843 2b04 	str.w	r2, [r3], #4
+  1a:	4283      	cmp	r3, r0
+  1c:	d1fa      	bne.n	14 <usb_hal_read_packet+0x14>
+  1e:	2000      	movs	r0, #0
+  20:	4770      	bx	lr
+  22:	bf00      	nop
+
+Disassembly of section .text.usb_hal_dump_registers:
+
+00000000 <usb_hal_dump_registers>:
+   0:	4770      	bx	lr
+   2:	bf00      	nop
+
+Disassembly of section .text.usb_hal_write_phy_register:
+
+00000000 <usb_hal_write_phy_register>:
+   0:	4a09      	ldr	r2, [pc, #36]	; (28 <usb_hal_write_phy_register+0x28>)
+   2:	b510      	push	{r4, lr}
+   4:	6813      	ldr	r3, [r2, #0]
+   6:	4604      	mov	r4, r0
+   8:	f023 03ff 	bic.w	r3, r3, #255	; 0xff
+   c:	4319      	orrs	r1, r3
+   e:	f000 000f 	and.w	r0, r0, #15
+  12:	6011      	str	r1, [r2, #0]
+  14:	f7ff fffe 	bl	0 <usb_hal_write_phy_register>
+			14: R_ARM_THM_CALL	usb_hal_load_phy_vendor_control_register
+  18:	b100      	cbz	r0, 1c <usb_hal_write_phy_register+0x1c>
+  1a:	bd10      	pop	{r4, pc}
+  1c:	0920      	lsrs	r0, r4, #4
+  1e:	e8bd 4010 	ldmia.w	sp!, {r4, lr}
+  22:	f7ff bffe 	b.w	0 <usb_hal_write_phy_register>
+			22: R_ARM_THM_JUMP24	usb_hal_load_phy_vendor_control_register
+  26:	bf00      	nop
+  28:	400f001c 	.word	0x400f001c
+
+Disassembly of section .text.usb_hal_read_phy_register:
+
+00000000 <usb_hal_read_phy_register>:
+   0:	b538      	push	{r3, r4, r5, lr}
+   2:	4604      	mov	r4, r0
+   4:	28df      	cmp	r0, #223	; 0xdf
+   6:	bf84      	itt	hi
+   8:	f1a0 0420 	subhi.w	r4, r0, #32
+   c:	b2e4      	uxtbhi	r4, r4
+   e:	f004 000f 	and.w	r0, r4, #15
+  12:	460d      	mov	r5, r1
+  14:	f7ff fffe 	bl	0 <usb_hal_read_phy_register>
+			14: R_ARM_THM_CALL	usb_hal_load_phy_vendor_control_register
+  18:	b100      	cbz	r0, 1c <usb_hal_read_phy_register+0x1c>
+  1a:	bd38      	pop	{r3, r4, r5, pc}
+  1c:	0920      	lsrs	r0, r4, #4
+  1e:	f7ff fffe 	bl	0 <usb_hal_read_phy_register>
+			1e: R_ARM_THM_CALL	usb_hal_load_phy_vendor_control_register
+  22:	2800      	cmp	r0, #0
+  24:	d1f9      	bne.n	1a <usb_hal_read_phy_register+0x1a>
+  26:	4b02      	ldr	r3, [pc, #8]	; (30 <usb_hal_read_phy_register+0x30>)
+  28:	6b5b      	ldr	r3, [r3, #52]	; 0x34
+  2a:	702b      	strb	r3, [r5, #0]
+  2c:	bd38      	pop	{r3, r4, r5, pc}
+  2e:	bf00      	nop
+  30:	400c0000 	.word	0x400c0000
+
+Disassembly of section .text.usb_hal_select_phy_register_page:
+
+00000000 <usb_hal_select_phy_register_page>:
+   0:	b530      	push	{r4, r5, lr}
+   2:	b0c3      	sub	sp, #268	; 0x10c
+   4:	4605      	mov	r5, r0
+   6:	f10d 0107 	add.w	r1, sp, #7
+   a:	20f4      	movs	r0, #244	; 0xf4
+   c:	f7ff fffe 	bl	0 <usb_hal_select_phy_register_page>
+			c: R_ARM_THM_CALL	usb_hal_read_phy_register
+  10:	b190      	cbz	r0, 38 <usb_hal_select_phy_register_page+0x38>
+  12:	ad02      	add	r5, sp, #8
+  14:	4b1e      	ldr	r3, [pc, #120]	; (90 <usb_hal_select_phy_register_page+0x90>)
+  16:	4604      	mov	r4, r0
+  18:	4a1e      	ldr	r2, [pc, #120]	; (94 <usb_hal_select_phy_register_page+0x94>)
+  1a:	4628      	mov	r0, r5
+  1c:	f44f 7180 	mov.w	r1, #256	; 0x100
+  20:	f7ff fffe 	bl	0 <snprintf>
+			20: R_ARM_THM_CALL	snprintf
+  24:	1e43      	subs	r3, r0, #1
+  26:	2bfe      	cmp	r3, #254	; 0xfe
+  28:	d92a      	bls.n	80 <usb_hal_select_phy_register_page+0x80>
+  2a:	4629      	mov	r1, r5
+  2c:	481a      	ldr	r0, [pc, #104]	; (98 <usb_hal_select_phy_register_page+0x98>)
+  2e:	f7ff fffe 	bl	0 <printf>
+			2e: R_ARM_THM_CALL	printf
+  32:	4620      	mov	r0, r4
+  34:	b043      	add	sp, #268	; 0x10c
+  36:	bd30      	pop	{r4, r5, pc}
+  38:	f89d 3007 	ldrb.w	r3, [sp, #7]
+  3c:	016d      	lsls	r5, r5, #5
+  3e:	f005 0560 	and.w	r5, r5, #96	; 0x60
+  42:	f023 0360 	bic.w	r3, r3, #96	; 0x60
+  46:	432b      	orrs	r3, r5
+  48:	4619      	mov	r1, r3
+  4a:	20f4      	movs	r0, #244	; 0xf4
+  4c:	f88d 3007 	strb.w	r3, [sp, #7]
+  50:	f7ff fffe 	bl	0 <usb_hal_select_phy_register_page>
+			50: R_ARM_THM_CALL	usb_hal_write_phy_register
+  54:	4604      	mov	r4, r0
+  56:	2800      	cmp	r0, #0
+  58:	d0eb      	beq.n	32 <usb_hal_select_phy_register_page+0x32>
+  5a:	ad02      	add	r5, sp, #8
+  5c:	4b0c      	ldr	r3, [pc, #48]	; (90 <usb_hal_select_phy_register_page+0x90>)
+  5e:	4628      	mov	r0, r5
+  60:	4a0c      	ldr	r2, [pc, #48]	; (94 <usb_hal_select_phy_register_page+0x94>)
+  62:	f44f 7180 	mov.w	r1, #256	; 0x100
+  66:	f7ff fffe 	bl	0 <snprintf>
+			66: R_ARM_THM_CALL	snprintf
+  6a:	1e43      	subs	r3, r0, #1
+  6c:	2bfe      	cmp	r3, #254	; 0xfe
+  6e:	d8dc      	bhi.n	2a <usb_hal_select_phy_register_page+0x2a>
+  70:	f5c0 7180 	rsb	r1, r0, #256	; 0x100
+  74:	4623      	mov	r3, r4
+  76:	4a09      	ldr	r2, [pc, #36]	; (9c <usb_hal_select_phy_register_page+0x9c>)
+  78:	4428      	add	r0, r5
+  7a:	f7ff fffe 	bl	0 <snprintf>
+			7a: R_ARM_THM_CALL	snprintf
+  7e:	e7d4      	b.n	2a <usb_hal_select_phy_register_page+0x2a>
+  80:	f5c0 7180 	rsb	r1, r0, #256	; 0x100
+  84:	4623      	mov	r3, r4
+  86:	4a06      	ldr	r2, [pc, #24]	; (a0 <usb_hal_select_phy_register_page+0xa0>)
+  88:	4428      	add	r0, r5
+  8a:	f7ff fffe 	bl	0 <snprintf>
+			8a: R_ARM_THM_CALL	snprintf
+  8e:	e7cc      	b.n	ffffff9c <usb_hal_core_reset+0xffffff9c>
+  90:	00000000 	.word	0x00000000
+			90: R_ARM_ABS32	.rodata.usb_hal_core_reset.str1.4
+  94:	00000004 	.word	0x00000004
+			94: R_ARM_ABS32	.rodata.usb_hal_core_reset.str1.4
+  98:	00000024 	.word	0x00000024
+			98: R_ARM_ABS32	.rodata.usb_hal_core_reset.str1.4
+  9c:	0000001c 	.word	0x0000001c
+			9c: R_ARM_ABS32	.rodata.usb_hal_select_phy_register_page.str1.4
+  a0:	00000000 	.word	0x00000000
+			a0: R_ARM_ABS32	.rodata.usb_hal_select_phy_register_page.str1.4
+
+Disassembly of section .text.usb_hal_enable_otg:
+
+00000000 <usb_hal_enable_otg>:
+   0:	b530      	push	{r4, r5, lr}
+   2:	2001      	movs	r0, #1
+   4:	b0c3      	sub	sp, #268	; 0x10c
+   6:	f7ff fffe 	bl	0 <usb_hal_enable_otg>
+			6: R_ARM_THM_CALL	usb_hal_select_phy_register_page
+   a:	b190      	cbz	r0, 32 <usb_hal_enable_otg+0x32>
+   c:	ad02      	add	r5, sp, #8
+   e:	4b2a      	ldr	r3, [pc, #168]	; (b8 <usb_hal_enable_otg+0xb8>)
+  10:	4604      	mov	r4, r0
+  12:	4a2a      	ldr	r2, [pc, #168]	; (bc <usb_hal_enable_otg+0xbc>)
+  14:	4628      	mov	r0, r5
+  16:	f44f 7180 	mov.w	r1, #256	; 0x100
+  1a:	f7ff fffe 	bl	0 <snprintf>
+			1a: R_ARM_THM_CALL	snprintf
+  1e:	1e43      	subs	r3, r0, #1
+  20:	2bfe      	cmp	r3, #254	; 0xfe
+  22:	d940      	bls.n	a6 <usb_hal_enable_otg+0xa6>
+  24:	4629      	mov	r1, r5
+  26:	4826      	ldr	r0, [pc, #152]	; (c0 <usb_hal_enable_otg+0xc0>)
+  28:	f7ff fffe 	bl	0 <printf>
+			28: R_ARM_THM_CALL	printf
+  2c:	4620      	mov	r0, r4
+  2e:	b043      	add	sp, #268	; 0x10c
+  30:	bd30      	pop	{r4, r5, pc}
+  32:	f10d 0107 	add.w	r1, sp, #7
+  36:	20e1      	movs	r0, #225	; 0xe1
+  38:	f7ff fffe 	bl	0 <usb_hal_enable_otg>
+			38: R_ARM_THM_CALL	usb_hal_read_phy_register
+  3c:	4604      	mov	r4, r0
+  3e:	b190      	cbz	r0, 66 <usb_hal_enable_otg+0x66>
+  40:	ad02      	add	r5, sp, #8
+  42:	4b1d      	ldr	r3, [pc, #116]	; (b8 <usb_hal_enable_otg+0xb8>)
+  44:	4628      	mov	r0, r5
+  46:	4a1d      	ldr	r2, [pc, #116]	; (bc <usb_hal_enable_otg+0xbc>)
+  48:	f44f 7180 	mov.w	r1, #256	; 0x100
+  4c:	f7ff fffe 	bl	0 <snprintf>
+			4c: R_ARM_THM_CALL	snprintf
+  50:	1e43      	subs	r3, r0, #1
+  52:	2bfe      	cmp	r3, #254	; 0xfe
+  54:	d8e6      	bhi.n	24 <usb_hal_enable_otg+0x24>
+  56:	f5c0 7180 	rsb	r1, r0, #256	; 0x100
+  5a:	4623      	mov	r3, r4
+  5c:	4a19      	ldr	r2, [pc, #100]	; (c4 <usb_hal_enable_otg+0xc4>)
+  5e:	4428      	add	r0, r5
+  60:	f7ff fffe 	bl	0 <snprintf>
+			60: R_ARM_THM_CALL	snprintf
+  64:	e7de      	b.n	24 <usb_hal_enable_otg+0x24>
+  66:	f89d 3007 	ldrb.w	r3, [sp, #7]
+  6a:	20e1      	movs	r0, #225	; 0xe1
+  6c:	f043 0380 	orr.w	r3, r3, #128	; 0x80
+  70:	4619      	mov	r1, r3
+  72:	f88d 3007 	strb.w	r3, [sp, #7]
+  76:	f7ff fffe 	bl	0 <usb_hal_enable_otg>
+			76: R_ARM_THM_CALL	usb_hal_write_phy_register
+  7a:	4604      	mov	r4, r0
+  7c:	2800      	cmp	r0, #0
+  7e:	d0d5      	beq.n	2c <usb_hal_enable_otg+0x2c>
+  80:	ad02      	add	r5, sp, #8
+  82:	4b0d      	ldr	r3, [pc, #52]	; (b8 <usb_hal_enable_otg+0xb8>)
+  84:	4628      	mov	r0, r5
+  86:	4a0d      	ldr	r2, [pc, #52]	; (bc <usb_hal_enable_otg+0xbc>)
+  88:	f44f 7180 	mov.w	r1, #256	; 0x100
+  8c:	f7ff fffe 	bl	0 <snprintf>
+			8c: R_ARM_THM_CALL	snprintf
+  90:	1e43      	subs	r3, r0, #1
+  92:	2bfe      	cmp	r3, #254	; 0xfe
+  94:	d8c6      	bhi.n	24 <usb_hal_enable_otg+0x24>
+  96:	f5c0 7180 	rsb	r1, r0, #256	; 0x100
+  9a:	4623      	mov	r3, r4
+  9c:	4a0a      	ldr	r2, [pc, #40]	; (c8 <usb_hal_enable_otg+0xc8>)
+  9e:	4428      	add	r0, r5
+  a0:	f7ff fffe 	bl	0 <snprintf>
+			a0: R_ARM_THM_CALL	snprintf
+  a4:	e7be      	b.n	24 <usb_hal_enable_otg+0x24>
+  a6:	f5c0 7180 	rsb	r1, r0, #256	; 0x100
+  aa:	4623      	mov	r3, r4
+  ac:	4a07      	ldr	r2, [pc, #28]	; (cc <usb_hal_enable_otg+0xcc>)
+  ae:	4428      	add	r0, r5
+  b0:	f7ff fffe 	bl	0 <snprintf>
+			b0: R_ARM_THM_CALL	snprintf
+  b4:	e7b6      	b.n	24 <usb_hal_enable_otg+0x24>
+  b6:	bf00      	nop
+  b8:	00000000 	.word	0x00000000
+			b8: R_ARM_ABS32	.rodata.usb_hal_core_reset.str1.4
+  bc:	00000004 	.word	0x00000004
+			bc: R_ARM_ABS32	.rodata.usb_hal_core_reset.str1.4
+  c0:	00000024 	.word	0x00000024
+			c0: R_ARM_ABS32	.rodata.usb_hal_core_reset.str1.4
+  c4:	00000028 	.word	0x00000028
+			c4: R_ARM_ABS32	.rodata.usb_hal_enable_otg.str1.4
+  c8:	00000048 	.word	0x00000048
+			c8: R_ARM_ABS32	.rodata.usb_hal_enable_otg.str1.4
+  cc:	00000000 	.word	0x00000000
+			cc: R_ARM_ABS32	.rodata.usb_hal_enable_otg.str1.4
+
+Disassembly of section .text.usb_hal_calibrate:
+
+00000000 <usb_hal_calibrate>:
+   0:	b538      	push	{r3, r4, r5, lr}
+   2:	4b11      	ldr	r3, [pc, #68]	; (48 <usb_hal_calibrate+0x48>)
+   4:	689b      	ldr	r3, [r3, #8]
+   6:	b1e3      	cbz	r3, 42 <usb_hal_calibrate+0x42>
+   8:	4798      	blx	r3
+   a:	4604      	mov	r4, r0
+   c:	b1c8      	cbz	r0, 42 <usb_hal_calibrate+0x42>
+   e:	7800      	ldrb	r0, [r0, #0]
+  10:	28ff      	cmp	r0, #255	; 0xff
+  12:	d016      	beq.n	42 <usb_hal_calibrate+0x42>
+  14:	25ff      	movs	r5, #255	; 0xff
+  16:	3403      	adds	r4, #3
+  18:	e003      	b.n	22 <usb_hal_calibrate+0x22>
+  1a:	f814 0b03 	ldrb.w	r0, [r4], #3
+  1e:	28ff      	cmp	r0, #255	; 0xff
+  20:	d00f      	beq.n	42 <usb_hal_calibrate+0x42>
+  22:	4285      	cmp	r5, r0
+  24:	d004      	beq.n	30 <usb_hal_calibrate+0x30>
+  26:	f7ff fffe 	bl	0 <usb_hal_calibrate>
+			26: R_ARM_THM_CALL	usb_hal_select_phy_register_page
+  2a:	b948      	cbnz	r0, 40 <usb_hal_calibrate+0x40>
+  2c:	f814 5c03 	ldrb.w	r5, [r4, #-3]
+  30:	f814 1c01 	ldrb.w	r1, [r4, #-1]
+  34:	f814 0c02 	ldrb.w	r0, [r4, #-2]
+  38:	f7ff fffe 	bl	0 <usb_hal_calibrate>
+			38: R_ARM_THM_CALL	usb_hal_write_phy_register
+  3c:	2800      	cmp	r0, #0
+  3e:	d0ec      	beq.n	1a <usb_hal_calibrate+0x1a>
+  40:	bd38      	pop	{r3, r4, r5, pc}
+  42:	2000      	movs	r0, #0
+  44:	bd38      	pop	{r3, r4, r5, pc}
+  46:	bf00      	nop
+  48:	00000000 	.word	0x00000000
+			48: R_ARM_ABS32	usb_hal_driver

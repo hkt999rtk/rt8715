@@ -1,0 +1,243 @@
+Title: Synopsys USB 2.0 PHY overview
+Source: https://www.synopsys.com/designware-ip/interface-ip/usb/usb-2-0-phy.html
+Retrieved: 2026-09-18T09:44:54.915174+00:00
+Note: Automatically extracted searchable text. Original document is authoritative for tables and diagrams.
+
+Language
+English
+日本語
+简体中文
+繁體中文
+한국어
+Ask
+Search Synopsys.com
+Contact Sales
+Contact Sales
+ansys.com
+Synopsys
+and
+Ansys
+power the future of innovation—connecting silicon to systems.
+Search Synopsys
+Cancel
+Popular Content
+Multiphysics Fusion Technology for Multi-Die Designs Explained
+Unified multiphysics fusion helps multi-die teams validate earlier and sign off faster.
+Automotive Executive Guide: Rethinking Automotive Development
+A guide to virtualization in software-defined vehicles for automotive leaders.
+Mastering AI Chip Complexity
+This eBook explores AI chip design trends, challenges,
+and strategies for first-pass silicon success.
+Back
+Our Company
+Careers
+Ecosystem Partners
+Global Offices
+Investors
+Leadership
+Responsible Business
+×
+Why Synopsys?
+Our Technology, Your Innovation™. Trusted industry leader.
+Learn more
+Industry
+AI Infrastructure​
+Physical AI
+Automotive
+Aerospace & Government
+Edge AI
+Data Center
+Mobile
+View all Solutions
+Technology
+Artificial Intelligence
+Cloud
+Electronics Digital Twins
+Multiphysics Fusion
+Energy-Efficient SoCs
+Multi-Die Design
+Photonics & Optics
+Multiphysics Fusion Technology for Multi-Die Designs Explained
+Unified multiphysics fusion helps multi-die teams validate earlier and sign off faster.
+Download eBook
+By Function
+Analog Design
+Digital Design
+Design for Test
+Verification
+Virtual Prototyping
+Hardware Assisted Verification
+Signoff
+Silicon Lifecycle Management
+Manufacturing
+SoC Integration
+View all Products
+Synopsys.ai
+AI-enabled EDA
+Design, Automation, Insights
+AI-powered Optimization
+Design, Verification, Test, Analog
+AI-powered Analytics
+Design, Process Control, Production
+GenAI
+24/7 Expert Copilot
+Agentic AI
+Multi-Agent Workflows
+EDA
+Fusion Compiler
+Synthesis & Implementation
+Custom Compiler
+Analog & Custom IC Design
+3DIC Compiler
+Multi-die Design
+PrimeTime
+Design Signoff
+VCS
+Logic Simulation
+TestMAX
+IC Test
+IC Validator
+Physical Verification
+RedHawk-SC
+Digital Power Integrity Signoff
+System
+Platform Architect
+SoC Architecture Exploration
+ZeBu
+IC Emulation
+HAPS
+IC Prototyping
+Virtualizer
+Virtual Prototyping
+Synplify
+Complete FPGA Flow
+Multiphysics
+3DIC Package Analysis
+HFSS
+EM Analysis
+Icepak
+Thermal Analysis
+IP
+Interface IP
+PCIe, DDR, MIPI, USB...
+Foundation IP
+Logic, Memory, IO...
+Security IP
+RoT, Cryptography...
+SoC Infrastructure IP
+AMBA, Foundation, VIP...
+IP by Markets
+Automotive, HPC, Edge AI
+SLM IP
+In-Chip Monitor IP
+Verification IP
+AMBA, Ethernet, MIPI...
+SMS IP
+STAR Memory System IP
+SolvNetPlus
+SolvNetPlus gives instant access to docs, downloads, training, and self-help support resources online.
+Training & Education
+Synopsys provides training delivered by subject matter experts, offering both public and private courses.
+Learn
+Blogs
+Events
+Glossary
+Newsroom
+Success Stories
+Technical Articles
+Webinars
+White Papers & Docs
+Synopsys Converge
+SNUG
+SNUG Silicon Valley
+SNUG Proceedings
+Simulation World
+Language
+English
+日本語
+简体中文
+繁體中文
+한국어
+Contact Sales
+ansys.com
+Synopsys
+and
+Ansys
+power the future of innovation—connecting silicon to systems.
+Synopsys USB 2.0 PHY IP
+Synopsys USB 2.0 PHY IP
+Overview
+Highlights & Features
+Product Details
+Resources
+IP Selector
+Talk to an Expert
+Synopsys' USB 2.0 PHY IP provides designers with the industry's best combination of low area and low power with support for USB Type-C connectivity in leading process technologies from 65-nm to 14/16-nm FinFET. The Synopsys USB 2.0 PHY IP products include the
+USB 2.0 femtoPHYs
+,
+USB 2.0 picoPHYs
+, USB 2.0 nanoPHYs, and
+USB 2.0 HSIC-LPM PHYs
+.
+The Synopsys USB IP is the most certified USB IP solution in the industry. With over 3,000 design wins and over one billion silicon-proven units shipped, Synopsys' complete USB IP solution, consisting of digital controllers, PHY and Verification IP, enables designers to lower integration risk and speed time-to-market.
+Highlights & Key Features
+Highlights
+Datasheets
+Highlights
++
+-
+Ported to over 50 different processes and configurations ranging from 65-nm to 14/16-nm FinFET
+Supports the USB 2.0 protocol and data rate (480 Mbps)
+Supports the USB Type-C specification
+USB femtoPHY, USB nanoPHY and USB picoPHY offer a tunability feature that allows quick, post-silicon adjustments that occur due to process variations, or unexpected chip and board parasitic, without modifying the existing design
+USB 2.0 PHYs support Device, Host and OTG configurations
+Datasheets
++
+-
+Synopsys USB 2.0 nanoPHY for Common Platform Processes Datasheet
+Synopsys USB 2.0 picoPHY
+Synopsys USB Link Power Management and High Speed Inter-Chip Datasheet
+Synopsys USB 2.0 nanoPHY Datasheet
+Synopsys USB 2.0 femtoPHY IP
+Product Details
+Resources
+Brochure
+Synopsys IP Brochure
+A comprehensive portfolio of leading-edge Synopsys IP.
+Download
+Article
+Synopsys IP Technical Bulletin
+In-depth technical articles, white papers, videos, webinars, product announcements and more.
+Read now
+Brochure
+IP Solutions for Edge AI
+A collection of articles on innovations and best practices.
+Download
+Find Your IP
+Search for IP
+Quickly identify and access the right IP solutions for your project needs.
+Foundation IP Selector
+Find embedded memory and logic IP for your SoC design.
+Explore
+Non-Volatile Memory IP Selector
+Find silicon-proven NVM IP for your SoC design needs.
+Explore
+Talk with an IP Expert
+Talk with an IP Expert
+Contact Us
+Ask a Question
+Ask
+BETA
+This experience is in beta mode. Please double check responses for accuracy.
+i
+NOTICE: You are interacting with an AI-powered chatbot that provides general information about Synopsys, including its products and services, which may be incorrect or incomplete. In the event of any conflict or discrepancy, the terms of your applicable agreements supersede any information provided by this chatbot. These chats may be accessed by Synopsys and its service providers to customize the experience and improve this tool, and your use of this chatbot is an agreement to that data processing activity.
+−
+×
+End Chat
+Closing this window clears your chat history and ends your session. Are
+you sure you want to end this chat?
+No
+Yes
+Legal Disclaimer
+NOTICE: You are interacting with an AI-powered chatbot that provides general information about Synopsys, including its products and services, which may be incorrect or incomplete. In the event of any conflict or discrepancy, the terms of your applicable agreements supersede any information provided by this chatbot. These chats may be accessed by Synopsys and its service providers to customize the experience and improve this tool, and your use of this chatbot is an agreement to that data processing activity.
+Close

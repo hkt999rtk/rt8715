@@ -24,6 +24,7 @@
 #include "screen_rx_stage_profiler.h"
 #include "screen_tcp_write_profiler.h"
 #include "spic_overclock.h"
+#include "nor_uuid.h"
 #include "system_overclock.h"
 #include "ncm/usb_boot_profiler.h"
 #include "ncm/ncm_tx_profile.h"
@@ -1754,6 +1755,9 @@ static void pcprof_task(void *arg)
 		}
 
 		sequence++;
+		/* The NOR line is intentionally cache-only. The UUID/OTP probe ran
+		 * before the scheduler, so this reporter cannot disturb XIP or SPIC. */
+		carbox_nor_identity_cache_profile_report(sequence);
 #if defined(CONFIG_PC_PROFILER_SELF_REPORT) && CONFIG_PC_PROFILER_SELF_REPORT
 		pcprof_watch_progress(PCPROF_PHASE_SELF_REPORT, sequence);
 		pcprof_report(sequence, old_buffer, count, invalid, nested, late,

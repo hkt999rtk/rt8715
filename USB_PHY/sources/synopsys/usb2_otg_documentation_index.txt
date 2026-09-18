@@ -1,0 +1,231 @@
+Title: Synopsys USB 2.0 OTG IP documentation index
+Source: https://www.synopsys.com/dw/ipdir.php?c=dwc_usb_2_0_hs_otg_v4
+Retrieved: 2026-09-18T09:44:55.182455+00:00
+Note: Automatically extracted searchable text. Original document is authoritative for tables and diagrams.
+
+Search Synopsys.com
+Contact Sales
+Contact Sales
+Search Synopsys
+Cancel
+Popular Content
+Innovate Faster with Synopsys Multi-Die Solution
+Explore our eBook for scalable multi-die solutions to boost innovation, productivity, and success.
+Automotive Executive Guide: Rethinking Automotive Development
+A guide to virtualization in software-defined vehicles for automotive leaders.
+Mastering AI Chip Complexity
+This eBook explores AI chip design trends, challenges,
+and strategies for first-pass silicon success.
+Back
+Our Company
+Careers
+Ecosystem
+Global Offices
+Investors
+Leadership
+Responsible Business
+Synopsys and Ansys are Now United
+Learn more
+Industry
+Aerospace & Government
+AI Chip Development
+Automotive
+Edge AI
+HPC & Data Center
+Mobile
+Technology
+Artificial Intelligence
+Cloud
+Energy-Efficient SoCs
+Memory
+Multi-Die
+RISC-V
+Automotive Executive Guide: Rethinking Automotive Development
+A guide to virtualization in software-defined vehicles for automotive leaders.
+Download
+By Function
+Analog Design
+Digital Design
+Design for Test
+Verification
+Hardware Assisted Verification
+Signoff
+Silicon Lifecycle Management
+Manufacturing
+SoC Integration
+View all Products
+Synopsys.ai
+AI-enabled EDA
+Design, Automation, Insights
+AI-powered Optimization
+Design, Verification, Test, Analog
+AI-powered Analytics
+Design, Process Control, Production
+GenAI
+24/7 Expert Copilot
+Agentic AI
+Multi-Agent Workflows
+EDA
+Fusion Compiler
+Synthesis & Implementation
+Custom Compiler
+Analog & Custom IC Design
+3DIC Compiler
+Multi-die Design
+PrimeTime
+Design Signoff
+VCS
+Logic Simulation
+TestMAX
+IC Test
+IC Validator
+Physical Verification
+HFSS-IC
+IC EM Analysis
+System
+Platform Architect
+SoC Architecture Exploration
+ZeBu
+IC Emulation
+HAPS
+IC Prototyping
+Virtualizer
+Virtual Prototyping
+Synplify
+Complete FPGA Flow
+Multiphysics
+3DIC Package Analysis
+HFSS
+EM Analysis
+Icepak
+Thermal Analysis
+IP
+Interface IP
+PCIe, DDR, MIPI, USB...
+Foundation IP
+Logic, Memory, IO...
+Security IP
+RoT, Cryptography...
+Processor IP & Tools
+CPU, DSP, NPU, ASIP...
+SoC Infrastructure IP
+AMBA, Foundation, VIP...
+IP by Markets
+Automotive, HPC, Edge AI
+SLM IP
+In-Chip Monitor IP
+Verification IP
+AMBA, Ethernet, MIPI...
+SolvNetPlus
+SolvNetPlus gives instant access to docs, downloads, training, and self-help support resources online.
+Training & Education
+Synopsys provides training delivered by subject matter experts, offering both public and private courses.
+Learn
+Blogs
+Events
+Glossary
+Newsroom
+Success Stories
+Technical Articles
+Training
+Webinars
+SNUG
+Silicon Valley
+Call for Content
+Proceedings
+dwc_usb_2_0_hs_otg_v4
+coveo-noindex
+IP Directory Component Detail
+Description:
+USB 2.0 Hi-Speed OTG Controller version 4 with Active Clock Gating to save active power
+Name:
+dwc_usb_2_0_hs_otg_v4
+Version:
+5.00b
+ECCN:
+5E991/NLR
+STARs:
+Open and/or Closed STARs
+myDesignWare:
+Subscribe for Notifications
+Product Type:
+DesignWare Cores
+Overview:
+Product Overview Website
+Documentation:
+Show Documents...
+Hide Documents...
+Application Notes
+Integrating HS OTG Controller and USB 2.0 femtoPHY Application Note
+(
+PDF
+|
+HTML
+)
+Databooks
+Synopsys Controller IP USB 2.0 Hi-Speed On-The-Go (OTG) Databook (5.00b)
+(
+PDF
+|
+HTML
+)
+Synopsys Controller IP USB 2.0 Hi-Speed On-The-Go (OTG) Databook with Change Bars (5.00a)
+(
+PDF
+)
+Installation Guide
+Synopsys Controller IP USB 2.0 Hi-Speed On-The-Go (OTG) Installation Guide (5.00b)
+(
+PDF
+|
+HTML
+)
+Programming Guides
+Synopsys Controller IP USB 2.0 Hi-Speed On-The-Go (OTG) Programming Guide (5.00b)
+(
+PDF
+|
+HTML
+)
+Synopsys Controller IP USB 2.0 Hi-Speed On-The-Go (OTG) Programming Guide with Change Bars (5.00a)
+(
+PDF
+)
+Release Notes
+Synopsys Controller IP USB 2.0 Hi-Speed On-The-Go (OTG) Release Notes (5.00b)
+(
+PDF
+)
+User Guides
+Synopsys Controller IP USB 2.0 Hi-Speed On-The-Go (OTG) User Guide (5.00b)
+(
+PDF
+|
+HTML
+)
+Synopsys Controller IP USB 2.0 Hi-Speed On-The-Go (OTG) User Guide with Change Bars (5.00a)
+(
+PDF
+)
+Toolsets:
+Qualified Toolsets
+Download:
+dw_iip_DWC_otg
+Product Code:
+C435-0
+Search Tools
+🔍
+Foundation IP Selector
+Non-Volatile Memory IP Selector
+More IP Resources
+News
+Videos
+Articles
+Customer Successes
+White Papers
+Webinars
+Blogs
+Synopsys IP Technical Bulletin
+IP Reuse Tools
+IP OEM Partner Program
+myDesignWare Subscriptions

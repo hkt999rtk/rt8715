@@ -1,0 +1,7 @@
+Source: /home/kevin/work/rt8715/project/realtek_amebapro_v0_example/GCC-RELEASE/application.is.mk
+
+230: CARBOX_USB_VENDOR_ARCHIVE := usb_lib/build/lib_usbsmart.a
+231: CARBOX_USB_ARCHIVE := usb_lib/build/lib_usbsmart_link.a
+2191: $(CARBOX_USB_ARCHIVE): $(CARBOX_USB_VENDOR_ARCHIVE) application.is.mk
+2212: application: $(CARBOX_USB_ARCHIVE)
+2213: LIBFLAGS += -Wl,--whole-archive $(CARBOX_USB_ARCHIVE) -Wl,--no-whole-archive

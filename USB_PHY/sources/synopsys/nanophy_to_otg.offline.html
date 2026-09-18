@@ -1,0 +1,1024 @@
+
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta content="external" name="client-type"/>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<meta content="IE=edge" http-equiv="X-UA-Compatible"/>
+<title>Synopsys IP Technical Bulletin: How to Connect Your DesignWare USB 2.0 nanoPHY to Your DesignWare USB 2.0 OTG Controller</title>
+
+
+<meta content="text/html; charset=utf-8" http-equiv="Content-Type"/>
+
+
+
+
+
+
+
+<meta content="text/html; charset=utf-8" http-equiv="Content-Type"/>
+<style type="text/css">
+    body    {font-family: arial,helvetica; font-size: 10pt; font-weight: normal;}
+    caption {font-family: arial,helvetica; font-size: 10pt; font-weight: normal;}
+    p       {font-family: arial,helvetica; font-size: 10pt; font-weight: normal;}
+    td      {font-family: arial,helvetica; font-size: 10pt; font-weight: normal;}
+    th      {font-family: arial,helvetica; font-size: 10pt; font-weight: bold;}
+    li      {font-family: arial,helvetica; font-size: 10pt; font-weight: normal;}
+    ul      {font-family: arial,helvetica; font-size: 10pt; font-weight: normal;}
+    ol      {font-family: arial,helvetica; font-size: 10pt; font-weight: normal;}
+    h1      {font-family: arial,helvetica; font-size: 12pt; font-weight: bold;}
+    h2      {font-family: arial,helvetica; font-size: 11pt; font-weight: bold;}
+    h3      {font-family: arial,helvetica; font-size: 10pt; font-weight: bold;}
+    h4      {font-family: arial,helvetica; font-size:  9pt; font-weight: bold;}
+    h5      {font-family: arial,helvetica; font-size:  9pt; font-weight: bold;}
+    h6      {font-family: arial,helvetica; font-size:  9pt; font-weight: bold;}
+    blockquote {font-family: Courier New,courier; font-size: 9pt}
+    code       {font-family: Courier New,courier; font-size: 8pt}
+    pre        {font-size: 8pt}
+    hr {height:1px; color:#eeeeee;}
+    .subHeader {font-family: verdana; color: #cc0000; font-size: 12px; font-weight: bold;}
+  </style>
+
+<style>.btn-nav { margin-bottom: 10px;} </style>
+
+
+</head><body class="page"><div class="site-wrapper"><div class="topNav aem-GridColumn aem-GridColumn--default--12">
+<div class="component-nav-top" data-color-theme="dark" data-version="1.0.0" id="topNav">
+<div class="nav-top-wrapper d-flex">
+<a class="logo d-block" href="https://www.synopsys.com">
+<svg aria-label="Synopsys" class="d-block" role="img" viewbox="0 0 276.32 60.13" width="166" xmlns="http://www.w3.org/2000/svg">
+<g data-name="logo"><path d="M19.24 7c0-1.84-.92-3.23-5-3.23s-5 1.39-5 3.23v5a5.43 5.43 0 0 0 2 4.28L25 28.18A7.75 7.75 0 0 1 28.2 34v7.52c0 4.48-5.27 7-14 7C4.61 48.47 0 46.3 0 41.49V35h8.7v6.26c0 2.25 1.71 3.56 5.53 3.56 3.56 0 5.27-1.31 5.27-3.56v-6.69c0-1.65-.66-2.9-2.51-4.55L4.22 18.88c-2.37-2-3.69-3.62-3.69-6.06V7.09c0-4.68 4.88-7 13.7-7C24 .1 27.94 2.41 27.94 6.76v6.06h-8.7ZM103.13 8c0-4.68 3.55-8 15.29-8s15.28 3.36 15.28 8v32.33c0 4.68-3.56 8-15.29 8s-15.29-3.36-15.29-8Zm8.69 32.15c0 2.64 1.06 4.49 6.59 4.49s6.59-1.81 6.59-4.45v-32c0-2.64-1-4.48-6.58-4.48s-6.6 1.84-6.6 4.48ZM138.51.39h13.84c11.21 0 14.5 1.85 14.5 7.25v11.67c0 5.4-3.3 7.25-14.5 7.25h-5.14V48h-8.7Zm12.92 22.47c3.95 0 6.72-.52 6.72-3V7.05c0-2.44-2.77-3-6.72-3h-4.22v18.81ZM188.57 6.92c0-1.85-.92-3.23-5-3.23s-5 1.38-5 3.23v5a5.45 5.45 0 0 0 2 4.28l13.84 11.86a7.8 7.8 0 0 1 3.16 5.8v7.51c0 4.49-5.27 7-14 7-9.62 0-14.23-2.18-14.23-7v-6.51H178v6.26c0 2.24 1.71 3.56 5.53 3.56 3.56 0 5.27-1.32 5.27-3.56v-6.66c0-1.64-.65-2.9-2.5-4.54l-12.75-11.14c-2.38-2-3.69-3.62-3.69-6.06V7c0-4.68 4.87-7 13.71-7 9.75 0 13.7 2.3 13.7 6.66v6.06h-8.7ZM252.76 6.92c0-1.85-.92-3.23-5-3.23s-5 1.38-5 3.23v5a5.45 5.45 0 0 0 2 4.28l13.84 11.86a7.77 7.77 0 0 1 3.16 5.8v7.51c0 4.49-5.27 7-14 7-9.62 0-14.24-2.18-14.24-7v-6.51h8.71v6.26c0 2.24 1.72 3.56 5.54 3.56 3.56 0 5.27-1.32 5.27-3.56v-6.66c0-1.64-.66-2.9-2.5-4.54l-12.81-11.14c-2.37-2-3.69-3.62-3.69-6.06V7c0-4.67 4.88-7 13.71-7 9.75 0 13.71 2.31 13.71 6.66v6.06h-8.7ZM55.12.4h8.71L44.77 60.13h-8.71L55.12.4zM41.38 37.5 29.6.5h8.71l7.42 23.33-4.35 13.67zM224.35.4h8.71L214 60.13h-8.71L224.35.4zM210.66 37.39 198.87.4h8.71l7.43 23.32-4.35 13.67zM97.76 48V7.65c0-5.4-3.3-7.25-14.5-7.25H66.54V48h8.7V4.1h7.16c4 0 6.72.52 6.72 3V48ZM265.1 6.27a5.61 5.61 0 1 1 5.63 5.56 5.53 5.53 0 0 1-5.63-5.56Zm5.63 4.63a4.47 4.47 0 0 0 4.48-4.63 4.5 4.5 0 1 0-9 0 4.48 4.48 0 0 0 4.52 4.63Zm-1.18-1.42h-1V3.09H271c1.51 0 2.26.56 2.26 1.82a1.67 1.67 0 0 1-1.66 1.76l1.82 2.81h-1.08l-1.69-2.77h-1.12Zm1.16-3.59c.82 0 1.56-.06 1.56-1 0-.79-.72-.94-1.39-.94h-1.33v2Z"></path></g>
+</svg>
+</a>
+<!-- 1st level menu -->
+
+<!-- End 1st level menu -->
+<div class="nav-items-right d-flex">
+<!-- Magnify icon -->
+<button class="icon-search" id="nav-coveo-search-btn">
+<span class="visually-hidden">Search Synopsys.com</span>
+<i class="fa-regular fa-magnifying-glass"></i>
+</button>
+<!-- End magnify icon -->
+<!-- Menu CTA desktop -->
+<a class="component-button m-0 d-flex cta" href="https://www.synopsys.com/contact-sales.html" target="_blank">Contact Sales</a>
+<!-- End menu CTA desktop -->
+<!-- mobile menu -->
+<button aria-expanded="false" aria-label="Toggle navigation" class="navbar-toggler border-0 d-flex" type="button">
+<svg class="svg-open" fill="none" height="16" viewbox="0 0 14 16" width="14" xmlns="http://www.w3.org/2000/svg">
+<path d="M0 2.75C0 2.33437 0.334375 2 0.75 2H13.25C13.6656 2 14 2.33437 14 2.75C14 3.16562 13.6656 3.5 13.25 3.5H0.75C0.334375 3.5 0 3.16562 0 2.75ZM0 7.75C0 7.33437 0.334375 7 0.75 7H13.25C13.6656 7 14 7.33437 14 7.75C14 8.16563 13.6656 8.5 13.25 8.5H0.75C0.334375 8.5 0 8.16563 0 7.75ZM14 12.75C14 13.1656 13.6656 13.5 13.25 13.5H0.75C0.334375 13.5 0 13.1656 0 12.75C0 12.3344 0.334375 12 0.75 12H13.25C13.6656 12 14 12.3344 14 12.75Z" fill="white"></path>
+</svg>
+<svg class="svg-close" fill="none" height="10" viewbox="0 0 10 10" width="10" xmlns="http://www.w3.org/2000/svg">
+<path d="M9.14062 9.84688C9.33438 10.0406 9.65312 10.0406 9.84688 9.84688C10.0406 9.65312 10.0406 9.33438 9.84688 9.14062L5.70625 5L9.84688 0.859375C10.0406 0.665625 10.0406 0.346875 9.84688 0.153125C9.65312 -0.040625 9.33438 -0.040625 9.14062 0.153125L5 4.29375L0.859375 0.153125C0.665625 -0.040625 0.346875 -0.040625 0.153125 0.153125C-0.040625 0.346875 -0.040625 0.665625 0.153125 0.859375L4.29375 5L0.153125 9.14062C-0.040625 9.33438 -0.040625 9.65312 0.153125 9.84688C0.346875 10.0406 0.665625 10.0406 0.859375 9.84688L5 5.70625L9.14062 9.84688Z" fill="black"></path>
+</svg>
+</button>
+<!--end mobile menu -->
+</div>
+</div>
+<!-- Menu CTA desktop -->
+<div class="cta-mobile-holder">
+<a class="component-button m-0 d-flex cta cta-mobile" href="https://www.synopsys.com/contact-sales.html" target="_blank">Contact Sales</a>
+</div>
+<!-- End menu CTA desktop -->
+<!-- Coveo Search - TD-->
+<div id="modal-overlay-coveo-search"></div>
+<div id="search-wrapper">
+<div id="coveo-search-wrapper">
+<div class="search-header d-flex">
+<h5 class="p-0 m-0">Search Synopsys</h5>
+<button class="close">Cancel</button>
+</div>
+<section class="component-search clearfix">
+<div class="snps-searchbox" data-enable-history="true" data-endpoint="default" id="searchbox">
+<div class="coveo-search-section">
+<atomic-external id="coveoSearchboxExt">
+<atomic-search-box class="CoveoSearchbox hydrated" clear-filters="false" data-atomic-loaded="true" data-atomic-rendered="true" minimum-query-length="0" number-of-queries="5"></atomic-search-box>
+</atomic-external>
+<atomic-search-interface id="coveoSearchboxInterface"></atomic-search-interface>
+</div>
+</div>
+</section>
+<a class="close-button" href=""></a>
+<h5 class="popular-content-header">Popular Content</h5>
+<div class="popular-content-wrapper d-flex">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="mediaLinkTile image aem-GridColumn aem-GridColumn--default--12">
+<div class="container">
+<section class="component-mediaLinkTile">
+<a class="cta-link" href="https://www.synopsys.com/multi-die-system/innovate-faster.html">
+<div class="container">
+<div class="row mediatext">
+<div class="col-xs-12 col-sm-6 mediatext img-col">
+<div class="component-image">
+<div class="cmp-image" data-asset-id="dc3512dc-9eca-4789-9173-cf28138d9ef3" data-cmp-dmimage="" id="mediaLinkTile-0c7a82ded7" itemscope="" itemtype="http://schema.org/ImageObject">
+
+</div>
+</div>
+</div>
+<div class="col-xs-12 col-sm-6 text-col">
+<h2 class="title">
+														Innovate Faster with Synopsys Multi-Die Solution
+
+														<i class="arrow-icon fa-regular fa-chevron-right"></i>
+</h2>
+<h3 class="subtitle">Explore our eBook for scalable multi-die solutions to boost innovation, productivity, and success.</h3>
+</div>
+</div>
+</div>
+</a>
+</section>
+</div>
+</div>
+<div class="mediaLinkTile image aem-GridColumn aem-GridColumn--default--12">
+<div class="container">
+<section class="component-mediaLinkTile">
+<a class="cta-link" href="https://www.synopsys.com/resources/rethinking-automotive.html">
+<div class="container">
+<div class="row mediatext">
+<div class="col-xs-12 col-sm-6 mediatext img-col">
+<div class="component-image">
+<div class="cmp-image" data-asset-id="8ed87ae5-d5c6-46f7-9017-39b2faa24f63" data-cmp-dmimage="" id="mediaLinkTile-33e2deafc3" itemscope="" itemtype="http://schema.org/ImageObject">
+
+</div>
+</div>
+</div>
+<div class="col-xs-12 col-sm-6 text-col">
+<h2 class="title">
+														Automotive Executive Guide: Rethinking Automotive Development
+
+														<i class="arrow-icon fa-regular fa-chevron-right"></i>
+</h2>
+<h3 class="subtitle">A guide to virtualization in software-defined vehicles for automotive leaders.</h3>
+</div>
+</div>
+</div>
+</a>
+</section>
+</div>
+</div>
+<div class="mediaLinkTile image aem-GridColumn aem-GridColumn--default--12">
+<div class="container">
+<section class="component-mediaLinkTile">
+<a class="cta-link" href="https://www.synopsys.com/ai/ai-chip-development/mastering-ai-chip-complexity-ebook.html">
+<div class="container">
+<div class="row mediatext">
+<div class="col-xs-12 col-sm-6 mediatext img-col">
+<div class="component-image">
+<div class="cmp-image" data-asset-id="13ac8053-6e13-40dd-810a-e63d71d24a47" data-cmp-dmimage="" id="mediaLinkTile-e9dcd13d2f" itemscope="" itemtype="http://schema.org/ImageObject">
+
+</div>
+</div>
+</div>
+<div class="col-xs-12 col-sm-6 text-col">
+<h2 class="title">
+														Mastering AI Chip Complexity
+
+														<i class="arrow-icon fa-regular fa-chevron-right"></i>
+</h2>
+<h3 class="subtitle">
+														This eBook explores AI chip design trends, challenges, <br/>
+
+														and strategies for first-pass silicon success.
+													</h3>
+</div>
+</div>
+</div>
+</a>
+</section>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Coveo Search - TD-->
+<!-- 2nd lvl menu subnav -->
+<div id="morph-dropdown-wrapper">
+<svg class="triangle main" height="100%" viewbox="0 0 21 11" width="100%" xmlns="http://www.w3.org/2000/svg">
+<path d="M9.46 0.66 C10.26 -0.22 11.65 -0.22 12.44 0.66 L21.39 10.66 L0.51 10.66 L9.46 0.66 Z" fill="white"></path>
+</svg>
+<svg class="triangle triangle_shadow" height="100%" viewbox="0 0 21 11" width="100%" xmlns="http://www.w3.org/2000/svg">
+<path d="M9.46 0.66 C10.26 -0.22 11.65 -0.22 12.44 0.66 L21.39 10.66 L0.51 10.66 L9.46 0.66 Z" fill="white"></path>
+</svg>
+<div class="header w-100">
+<button class="back">Back</button>
+</div>
+<div class="dropdown-list">
+<div class="dropdown" data-menu="Why Synopsys">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="subNavLinks image aem-GridColumn aem-GridColumn--default--12">
+<div class="component-subnav d-flex two-column" data-total-columns="two-column">
+<div class="w-100 d-flex">
+<div class="col col-sm-6">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="navList aem-GridColumn aem-GridColumn--default--12">
+<div class="component-nav-list" data-submenu-mobile="Our Company">
+<span class="header-item" data-submenu-mobile="Our Company"> Our Company </span>
+<ul class="nav-list" data-submenu-mobile="Our Company">
+<li>
+<a href="https://careers.synopsys.com/" rel="noreferer noopener" target="_blank">
+<div class="nav-item-title">
+																	Careers
+																	<i class="fa-regular fa-arrow-up-right-from-square external-link-icon"></i>
+</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/partners.html">
+<div class="nav-item-title">Ecosystem</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/company/contact-synopsys/office-locations.html">
+<div class="nav-item-title">Global Offices</div>
+</a>
+</li>
+<li>
+<a href="https://investor.synopsys.com/overview/default.aspx" rel="noreferer noopener" target="_blank">
+<div class="nav-item-title">
+																	Investors
+																	<i class="fa-regular fa-arrow-up-right-from-square external-link-icon"></i>
+</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/company/management-team.html">
+<div class="nav-item-title">Leadership</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/company/responsible-business.html">
+<div class="nav-item-title">Responsible Business</div>
+</a>
+</li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+<div class="col col-sm-6 m-0 light-grey-bg align-items-center">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="topNavAd image aem-GridColumn aem-GridColumn--default--12">
+<section class="component-topNavAd">
+<a href="https://www.synopsys.com/synopsys-ansys-united.html">
+<div class="component-topNavAd hideOnMobile component-image">
+
+</div>
+<div class="title">Synopsys and Ansys are Now United</div>
+<div class="cta">Learn more</div>
+</a>
+</section>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="dropdown" data-menu="Solutions">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="subNavLinks image aem-GridColumn aem-GridColumn--default--12">
+<div class="component-subnav d-flex three-column" data-total-columns="three-column">
+<div class="w-100 d-flex">
+<div class="col col-xs-12 col-sm-4">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="navList aem-GridColumn aem-GridColumn--default--12">
+<div class="component-nav-list" data-submenu-mobile="Industry">
+<span class="header-item" data-submenu-mobile="Industry"> Industry </span>
+<ul class="nav-list" data-submenu-mobile="Industry">
+<li>
+<a href="https://www.synopsys.com/aerospace-government.html">
+
+<div class="nav-item-title">Aerospace &amp; Government</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/ai/ai-chip-development.html">
+
+<div class="nav-item-title">AI Chip Development</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/automotive.html">
+
+<div class="nav-item-title">Automotive</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/designware-ip/ip-market-segments/edge-ai.html">
+
+<div class="nav-item-title">Edge AI</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/hpc-data-center.html">
+
+<div class="nav-item-title">HPC &amp; Data Center</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/5g.html">
+
+<div class="nav-item-title">Mobile</div>
+</a>
+</li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+<div class="col col-xs-12 col-sm-4">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="navList aem-GridColumn aem-GridColumn--default--12">
+<div class="component-nav-list" data-submenu-mobile="Technology">
+<span class="header-item" data-submenu-mobile="Technology"> Technology </span>
+<ul class="nav-list" data-submenu-mobile="Technology">
+<li>
+<a href="https://www.synopsys.com/ai.html">
+
+<div class="nav-item-title">Artificial Intelligence</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/cloud.html">
+
+<div class="nav-item-title">Cloud</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/energy-efficient.html">
+
+<div class="nav-item-title">Energy-Efficient SoCs</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/memory.html">
+
+<div class="nav-item-title">Memory</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/multi-die-system.html">
+
+<div class="nav-item-title">Multi-Die</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/risc-v.html">
+
+<div class="nav-item-title">RISC-V</div>
+</a>
+</li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+<div class="col col-xs-12 col-sm-4 light-grey-bg align-items-center">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="topNavAd image aem-GridColumn aem-GridColumn--default--12">
+<section class="component-topNavAd hideOnMobile">
+<div class="component-image">
+<div class="cmp-image" data-asset-id="8ed87ae5-d5c6-46f7-9017-39b2faa24f63" data-cmp-dmimage="" id="topNavAd-2615db38ad" itemscope="" itemtype="http://schema.org/ImageObject">
+
+</div>
+</div>
+<a href="https://www.synopsys.com/resources/rethinking-automotive.html">
+<div class="title">Automotive Executive Guide: Rethinking Automotive Development</div>
+<div class="description m-0 p-0">
+<p>A guide to virtualization in software-defined vehicles for automotive leaders.</p>
+</div>
+<div class="cta">Download</div>
+</a>
+</section>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="dropdown" data-menu="Products">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="subNavLinks image aem-GridColumn aem-GridColumn--default--12">
+<div class="component-subnav d-flex five-column" data-total-columns="five-column">
+<div class="w-100 d-flex">
+<div class="col col-sm-3 left-col">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="navList aem-GridColumn aem-GridColumn--default--12">
+<div class="component-nav-list" data-submenu-mobile="By Function">
+<span class="header-item" data-submenu-mobile="By Function"> By Function </span>
+<ul class="nav-list" data-submenu-mobile="By Function">
+<li>
+<a href="https://www.synopsys.com/implementation-and-signoff/custom-design-platform.html">
+<div class="nav-item-title">Analog Design</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/implementation-and-signoff/fusion-design-platform.html">
+<div class="nav-item-title">Digital Design</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/implementation-and-signoff/test-automation.html">
+<div class="nav-item-title">Design for Test</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/verification.html">
+<div class="nav-item-title">Verification</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/verification/emulation-prototyping.html">
+<div class="nav-item-title">Hardware Assisted Verification</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/implementation-and-signoff/signoff.html">
+<div class="nav-item-title">Signoff</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/solutions/silicon-lifecycle-management.html">
+<div class="nav-item-title">Silicon Lifecycle Management</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/manufacturing.html">
+<div class="nav-item-title">Manufacturing</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/designware-ip.html">
+<div class="nav-item-title">SoC Integration</div>
+</a>
+</li>
+</ul>
+</div>
+</div>
+</div>
+<div>
+<a class="sub-nav-footer cta" href="https://www.synopsys.com/products.html" rel="noreferer noopener" style="color: #111c24" target="_blank">View all Products</a>
+</div>
+</div>
+<div class="light-grey-bg middle-right-col">
+<div class="col col-sm-3">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="navList aem-GridColumn aem-GridColumn--default--12">
+<div class="component-nav-list" data-submenu-mobile="Synopsys.ai">
+<a class="header-item" data-submenu-mobile="Synopsys.ai" href="https://www.synopsys.com/ai.html">
+
+
+															Synopsys.ai
+														</a>
+<ul class="nav-list" data-submenu-mobile="Synopsys.ai">
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/ai/ai-powered-eda.html">
+<div class="nav-item-title">AI-enabled EDA</div>
+<span class="nav-item-subtitle"> Design, Automation, Insights </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/ai/ai-powered-eda.html">
+<div class="nav-item-title">AI-powered Optimization</div>
+<span class="nav-item-subtitle"> Design, Verification, Test, Analog </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/ai/ai-powered-eda.html">
+<div class="nav-item-title">AI-powered Analytics</div>
+<span class="nav-item-subtitle"> Design, Process Control, Production </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/ai/generative-ai.html">
+<div class="nav-item-title">GenAI</div>
+<span class="nav-item-subtitle"> 24/7 Expert Copilot </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/ai/agentic-ai.html">
+<div class="nav-item-title">Agentic AI</div>
+<span class="nav-item-subtitle"> Multi-Agent Workflows </span>
+</a>
+</li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+<div class="col col-sm-3">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="navList aem-GridColumn aem-GridColumn--default--12">
+<div class="component-nav-list" data-submenu-mobile="EDA">
+<a class="header-item" data-submenu-mobile="EDA" href="https://www.synopsys.com/silicon-design.html">
+
+
+															EDA
+														</a>
+<ul class="nav-list" data-submenu-mobile="EDA">
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/implementation-and-signoff/physical-implementation/fusion-compiler.html">
+<div class="nav-item-title">Fusion Compiler</div>
+<span class="nav-item-subtitle"> Synthesis &amp; Implementation </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/implementation-and-signoff/custom-design-platform/custom-compiler.html">
+<div class="nav-item-title">Custom Compiler</div>
+<span class="nav-item-subtitle"> Analog &amp; Custom IC Design </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/implementation-and-signoff/3dic-design.html">
+<div class="nav-item-title">3DIC Compiler</div>
+<span class="nav-item-subtitle"> Multi-die Design </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/implementation-and-signoff/signoff/primetime.html">
+<div class="nav-item-title">PrimeTime</div>
+<span class="nav-item-subtitle"> Design Signoff </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/verification/simulation/vcs.html">
+<div class="nav-item-title">VCS</div>
+<span class="nav-item-subtitle"> Logic Simulation </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/implementation-and-signoff/test-automation.html">
+<div class="nav-item-title">TestMAX</div>
+<span class="nav-item-subtitle"> IC Test </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/implementation-and-signoff/physical-verification.html">
+<div class="nav-item-title">IC Validator</div>
+<span class="nav-item-subtitle"> Physical Verification </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.ansys.com/products/electronics/ansys-hfss" rel="noreferer noopener" target="_blank">
+<div class="nav-item-title">
+																		HFSS-IC
+																		<i class="fa-regular fa-arrow-up-right-from-square external-link-icon"></i>
+</div>
+<span class="nav-item-subtitle"> IC EM Analysis </span>
+</a>
+</li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+<div class="col col-sm-3">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="navList aem-GridColumn aem-GridColumn--default--12">
+<div class="component-nav-list" data-submenu-mobile="System">
+<a class="header-item" data-submenu-mobile="System" href="https://www.synopsys.com/systems.html">
+
+
+															System
+														</a>
+<ul class="nav-list" data-submenu-mobile="System">
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/verification/virtual-prototyping/platform-architect.html">
+<div class="nav-item-title">Platform Architect</div>
+<span class="nav-item-subtitle"> SoC Architecture Exploration </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/verification/emulation-prototyping/emulation.html">
+<div class="nav-item-title">ZeBu</div>
+<span class="nav-item-subtitle"> IC Emulation </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/verification/emulation-prototyping/prototyping.html">
+<div class="nav-item-title">HAPS</div>
+<span class="nav-item-subtitle"> IC Prototyping </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/verification/virtual-prototyping/virtualizer.html">
+<div class="nav-item-title">Virtualizer</div>
+<span class="nav-item-subtitle"> Virtual Prototyping </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/implementation-and-signoff/fpga-based-design/synplify.html">
+<div class="nav-item-title">Synplify</div>
+<span class="nav-item-subtitle"> Complete FPGA Flow </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.ansys.com/simulation-topics/what-is-multiphysics" rel="noreferer noopener" target="_blank">
+<div class="nav-item-title">
+																		Multiphysics
+																		<i class="fa-regular fa-arrow-up-right-from-square external-link-icon"></i>
+</div>
+<span class="nav-item-subtitle"> 3DIC Package Analysis </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.ansys.com/products/electronics/ansys-hfss" rel="noreferer noopener" target="_blank">
+<div class="nav-item-title">
+																		HFSS
+																		<i class="fa-regular fa-arrow-up-right-from-square external-link-icon"></i>
+</div>
+<span class="nav-item-subtitle"> EM Analysis </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.ansys.com/products/electronics/ansys-icepak" rel="noreferer noopener" target="_blank">
+<div class="nav-item-title">
+																		Icepak
+																		<i class="fa-regular fa-arrow-up-right-from-square external-link-icon"></i>
+</div>
+<span class="nav-item-subtitle"> Thermal Analysis </span>
+</a>
+</li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+<div class="col col-sm-3">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="navList aem-GridColumn aem-GridColumn--default--12">
+<div class="component-nav-list" data-submenu-mobile="IP">
+<a class="header-item" data-submenu-mobile="IP" href="https://www.synopsys.com/designware-ip.html">
+
+
+															IP
+														</a>
+<ul class="nav-list" data-submenu-mobile="IP">
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/designware-ip/interface-ip.html">
+<div class="nav-item-title">Interface IP</div>
+<span class="nav-item-subtitle"> PCIe, DDR, MIPI, USB... </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/designware-ip/memories-logic-libraries.html">
+<div class="nav-item-title">Foundation IP</div>
+<span class="nav-item-subtitle"> Logic, Memory, IO... </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/designware-ip/security-ip.html">
+<div class="nav-item-title">Security IP</div>
+<span class="nav-item-subtitle"> RoT, Cryptography... </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/designware-ip/processor-solutions.html">
+<div class="nav-item-title">Processor IP &amp; Tools</div>
+<span class="nav-item-subtitle"> CPU, DSP, NPU, ASIP... </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/designware-ip/soc-infrastructure-ip.html">
+<div class="nav-item-title">SoC Infrastructure IP</div>
+<span class="nav-item-subtitle"> AMBA, Foundation, VIP... </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/designware-ip/ip-market-segments.html">
+<div class="nav-item-title">IP by Markets</div>
+<span class="nav-item-subtitle"> Automotive, HPC, Edge AI </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/solutions/silicon-lifecycle-management/environmental-monitors/slm-pvt-monitor-ip.html">
+<div class="nav-item-title">SLM IP</div>
+<span class="nav-item-subtitle"> In-Chip Monitor IP </span>
+</a>
+</li>
+<li class="hasSubtitle">
+<a class="hasSubtitle" href="https://www.synopsys.com/verification/verification-ip.html">
+<div class="nav-item-title">Verification IP</div>
+<span class="nav-item-subtitle"> AMBA, Ethernet, MIPI... </span>
+</a>
+</li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="dropdown" data-menu="Support &amp; Training">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="subNavLinks image aem-GridColumn aem-GridColumn--default--12">
+<div class="component-subnav d-flex two-column-simple" data-total-columns="two-column-simple">
+<div class="w-100 d-flex">
+<div class="col col-sm-6" data-column-no="one">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="navList aem-GridColumn aem-GridColumn--default--12">
+<div class="component-nav-list" data-submenu-mobile="SolvNetPlus">
+<a class="header-item" data-submenu-mobile="SolvNetPlus" href="https://solvnetplus.synopsys.com/">
+
+
+														SolvNetPlus
+
+														<span class="nav-list-header-subtitle"> SolvNetPlus gives instant access to docs, downloads, training, and self-help support resources online. </span>
+</a>
+</div>
+</div>
+</div>
+</div>
+<div class="col col-sm-6" data-column-no="two">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="navList aem-GridColumn aem-GridColumn--default--12">
+<div class="component-nav-list" data-submenu-mobile="Training &amp; Education">
+<a class="header-item" data-submenu-mobile="Training &amp; Education" href="https://training.synopsys.com/learn">
+
+
+														Training &amp; Education
+
+														<span class="nav-list-header-subtitle"> Synopsys provides training delivered by subject matter experts, offering both public and private courses. </span>
+</a>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="dropdown" data-menu="Resources">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="subNavLinks image aem-GridColumn aem-GridColumn--default--12">
+<div class="component-subnav d-flex three-column" data-total-columns="three-column">
+<div class="w-100 d-flex">
+<div class="col col-xs-12 col-sm-4">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="navList aem-GridColumn aem-GridColumn--default--12">
+<div class="component-nav-list" data-submenu-mobile="Learn">
+<span class="header-item" data-submenu-mobile="Learn"> Learn </span>
+<ul class="nav-list" data-submenu-mobile="Learn">
+<li>
+<a href="https://www.synopsys.com/blogs/chip-design.html">
+<div class="nav-item-title">Blogs</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/events.html">
+<div class="nav-item-title">Events</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/glossary.html">
+<div class="nav-item-title">Glossary</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/newsroom.html">
+<div class="nav-item-title">Newsroom</div>
+</a>
+</li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+<div class="col col-xs-12 col-sm-4">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="navList aem-GridColumn aem-GridColumn--default--12">
+<div class="component-nav-list">
+<span class="header-item no-header"> </span>
+<ul class="nav-list">
+<li>
+<a href="https://www.synopsys.com/success-stories.html">
+<div class="nav-item-title">Success Stories</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/articles.html">
+<div class="nav-item-title">Technical Articles</div>
+</a>
+</li>
+<li>
+<a href="https://training.synopsys.com/learn" rel="noreferer noopener" target="_blank">
+<div class="nav-item-title">
+																	Training
+																	<i class="fa-regular fa-arrow-up-right-from-square external-link-icon"></i>
+</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/webinars.html">
+<div class="nav-item-title">Webinars</div>
+</a>
+</li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+<div class="col col-xs-12 col-sm-4 light-grey-bg align-items-center">
+<div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+<div class="navList aem-GridColumn aem-GridColumn--default--12">
+<div class="component-nav-list" data-submenu-mobile="SNUG">
+<a class="header-item" data-submenu-mobile="SNUG" href="https://www.synopsys.com/community/snug.html"> SNUG </a>
+<ul class="nav-list" data-submenu-mobile="SNUG">
+<li>
+<a href="https://www.synopsys.com/community/snug/snug-silicon-valley.html">
+<div class="nav-item-title">Silicon Valley</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/community/snug/snug-silicon-valley/call-for-content.html">
+<div class="nav-item-title">Call for Content</div>
+</a>
+</li>
+<li>
+<a href="https://www.synopsys.com/community/snug/snug-proceedings.html">
+<div class="nav-item-title">Proceedings</div>
+</a>
+</li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="site-content">
+<div class="container">
+<section class="component-breadcrumb">
+
+</section>
+</div>
+<div class="container"> <section class="component-page-title"> <h1 class="page-title" style="font-size:24pt">Synopsys IP Technical Bulletin Article</h1> </section> </div>
+<div class="background-component vert-pad-bottom-md">
+<div class="container">
+<section class="component-column row">
+<div class="col-xs-12 col-sm-9">
+<div class="background-component vert-pad-top-xs vert-pad-bottom-sm">
+<div class="container">
+<section class="component-textcomp text-align-left">
+<!-- <div class='component-text'> <h2 class='title'> <span class='text-size-normal' style='color: #5A2A82;'>Section or Paper Sub Title</span> </h2> </div> -->
+<div class="component-text">
+
+<p>
+<h1 class="secTitle" style="margin-top:20px;">How to Connect Your DesignWare USB 2.0 nanoPHY to Your DesignWare USB 2.0 OTG Controller</h1>
+<blockquote><p>By Doug Aida, Technical Writer</p></blockquote>
+<!---title=How to Connect Your DesignWare USB 2.0 nanoPHY to Your DesignWare USB 2.0 OTG Controller--->
+<!---byline=By Doug Aida, Technical Writer--->
+<!---author=aida--->
+<!---issue=Q3-08--->
+<!---catagory=article--->
+<!---modified=2008/12/08--->
+
+This application note describes the connectivity and power-on reset sequence between the Synopsys
+DesignWare USB 2.0 nanoPHY and the DesignWare USB 2.0 Hi-Speed (HS) On-The-Go (OTG) Controller Subsystem.
+
+<p></p><b>1. Supported Speed Modes</b><br/>
+The DesignWare USB 2.0 nanoPHY and USB 2.0 HS OTG Subsystem support all the speed modes required by the USB 2.0 specification.
+Together, they support high speed, full speed, and low speed in Host mode and high speed and full speed in Device mode. 
+
+<p></p><b>2. Interfacing the DesignWare USB 2.0 nanoPHY With the DesignWare USB 2.0 HS OTG Subsystem</b><br/>
+This section describes the connectivity that applies when the USB 2.0 HS OTG Subsystem is configured to use the UTMI+ interface.
+If the USB 2.0 HS OTG Subsystem is configured to support the UTMI+ (Level 3, non-OTG) specification, see Section 2.1, 
+below titled, USB 2.0 HS OTG Subsystem Configured to Support the UTMI+ (Level 3, Non-OTG) Specification.
+When the USB 2.0 HS OTG Subsystem is configured as a non-HNP-, non-SRP-capable OTG controller,
+the associated application can operate as a non-OTG host or device.  If the USB 2.0 HS OTG Subsystem is configured
+to support the UTMI+ (Level 3, OTG) specification, see Section 2.2, of this application note, titled, 
+USB 2.0 HS OTG Subsystem Configured to Support the UTMI+ (Level 3, OTG) Specification.
+<p></p>
+Only signals that are relevant to the UTMI/UTMI+ specification or that require special consideration are shown.
+For information about these signals, refer to the signal descriptions in each product's databook.
+
+<p></p><b>2.1. USB 2.0 HS OTG Subsystem Configured to Support the UTMI+ (Level 3, Non-OTG) Specification</b><br/>
+Figure 1 shows a high-level block diagram of the USB 2.0 nanoPHY and USB 2.0
+HS OTG Subsystem when configured to support the UTMI+ (Level, 3, non-OTG) specification. 
+
+<p align="center"><img src="assets/nanophy_figure1.jpg" style="padding-bottom:10px"/><br/>
+Figure 1. USB 2.0 nanoPHY and USB 2.0 HS OTG Subsystem: High Level Block Diagram
+</p>
+<p></p>
+Figure 2 below shows the required signal connections for this configuration. 
+<p></p>
+When operating as a non-OTG device (that is, not as a dual-role device), the USB 2.0 nanoPHY OTG block's inputs and outputs are ignored.
+Powering down the OTG block is optional; however, not doing so results in additional power consumption, because the OTG block remains powered up.
+To power down the OTG block, set the USB 2.0 nanoPHY top-level strapping pin, OTGDISABLE, to 1'b1. 
+
+<p align="center"><img src="assets/nanophy_figure2.jpg" style="padding-bottom:10px"/><br/>
+Figure 2. Signal Connections Between the USB 2.0 nanoPHY and USB 2.0 HS OTG Subsystem (Configured to Support the UTMI+ (Level 3, Non-OTG) Specification)
+</p>
+<p></p><b>2.2. USB 2.0 HS OTG Subsystem Configured to Support the UTMI+ (Level 3, OTG) Specification</b><br/>
+Figure 3 below shows a high-level block diagram of the USB 2.0 nanoPHY and
+USB 2.0 HS OTG Subsystem when configured to support the UTMI+ (Level, 3, OTG) specification. 
+
+<p align="center"><img src="assets/nanophy_figure3.jpg" style="padding-bottom:10px"/><br/>
+Figure 3. USB 2.0 nanoPHY and USB 2.0 HS OTG Subsystem: High-Level Block Diagram
+</p>
+
+Figure 4 below shows the required signal connections for this configuration.
+
+<p align="center"><img src="assets/nanophy_figure4.jpg" style="padding-bottom:10px"/><br/>
+Figure 4. Signal Connections Between the USB 2.0 nanoPHY and USB 2.0 HS OTG Subsystem (Configured to Support the UTMI+ (Level 3, OTG) Specification)
+</p>
+<p></p><b>3. Power-On Reset Sequence for the USB 2.0 nanoPHY and the USB 2.0 HS OTG Subsystem</b><br/>
+Figure 5 shows the timing for the required power-on reset sequence when the USB 2.0 nanoPHY is attached to the USB 2.0 HS OTG Subsystem.
+As indicated in Figure 1-1, the USB 2.0 nanoPHY's power-on reset must be released first.
+When PHYCLOCK is available, the USB 2.0 HS OTG Subsystem's reset can be released.
+Table 1 describes the timing values for the power-on reset sequence. 
+
+<p align="center"><img src="assets/nanophy_figure5.jpg" style="padding-bottom:10px"/><br/>
+Figure 5. Power-On Reset Sequence for the USB 2.0 nanoPHY and USB 2.0 HS OTG Subsystem
+</p>
+<p></p>
+<table border="0" cellpadding="0" cellspacing="0" width="600">
+<tr><td colspan="3"><hr/></td></tr>
+<tr>
+<td valign="bottom"><b>Timing Parameter   </b></td>
+<td valign="bottom"><b>Description</b></td>
+<td valign="bottom"><b>Value</b></td>
+</tr>
+<tr><td colspan="3"><hr/></td></tr>
+<tr>
+<td valign="top">T0</td>
+<td nowrap="" valign="top">Power-on reset (POR) has been asserted. The USB<br/>2.0 HS OTG Subsystem reset is also asserted.<p></p></td>
+<td valign="top">0 (reference)</td>
+</tr><tr>
+<td valign="top">T1</td>
+<td valign="top">T1 indicates when POR can be released.<p></p></td>
+<td valign="top">T0 + 10μs ≤ T1</td>
+</tr><tr>
+<td valign="top">T2</td>
+<td valign="top">T2 indicates when PHYCLOCK is available at the macro output.</td>
+<td valign="top">This time depends on the USB 2.0 nanoPHY reference clock source. For information about USB 2.0 nanoPHY power-on reset operation, refer to the USB 2.0 nanoPHY databook.<p></p></td>
+</tr><tr>
+<td valign="top">T3</td>
+<td valign="top">T3 indicates when the USB 2.0 HS OTG Subsystem reset can be released.</td>
+<td valign="top">T3 &gt; T2<br/><b>Note:</b> For information about system clocks and reset in the USB 2.0 HS OTG Subsystem refer to <i>DesignWare Cores USB 2.0 Hi-Speed On-The-Go (OTG) Databook,
+        "System Clocks and Reset" section.</i>
+</td>
+</tr>
+<tr><td colspan="3"><hr/></td></tr>
+</table>
+Table 1. Power-On Reset Sequence for the USB 2.0 nanoPHY and USB 2.0 HS OTG Subsystem
+<p></p>
+This concludes the application note on How to Connect Your DesignWare USB 2.0 nanoPHY to Your DesignWare USB 2.0 OTG Controller.
+<p></p>
+For more information on these products, please visit <a href="/IP/InterfaceIP/USB">www.synopsys.com/IP/InterfaceIP/USB</a>
+</p></div></section></div></div></div><div class="col-xs-12 col-sm-3"><br/>
+<section class="component-railCard">
+<div class="flag" style="background-color: #80539c; margin-top:25px;">
+<div><span class="text">Search Tools</span></div>
+<div class="triangle" style="background: linear-gradient(to right bottom, #80539c 50%, transparent 50%);"></div>
+</div>
+<div class="component-text">
+<form action="/dw/ipsearch.php" class="responsive" method="post" style="margin:20px 0 10px 0">
+<input name="source_page" type="hidden" value="dwtb.php"/>
+<div class="input-group">
+<span class="input-group-addon" style="border-radius:9px 0 0 9px;">🔍</span>
+<input class="form-control" name="p" placeholder="Search for IP..." style="border-radius:0 9px 9px 0;" type="text"/>
+</div>
+<input name="as_sfid" type="hidden" value="AAAAAAUE2ZRhdOjtadyZ62zCxfPrbqJsnEL_rWc-lJnKFLHSaI1E3MHoOyMDyy8WLewrZQHZf1qqXqqJTODJVPFhdjZb8Hpv8lx-srVH7xijPDFViveEP_G-ImQCY5x0nxrXq-9KqqMLs0GZLr4yecV57c93Up66pkp42fedxuytKOlB4w=="/><input name="as_fid" type="hidden" value="49b481e9f6de7f3d8cee6864ae3ad23ecdc3233e"/></form>
+<div class="background-component">
+<div class="container">
+<section class="component-calltoaction">
+<div class="wrapper clearfix fullWidth">
+<div class="buttons align-center">
+<a class="btn btn-nav btn-default btn-width btn-purple" href="https://www.synopsys.com/dw/emllselector.php" role="button"><span class="inner-text">Foundation IP Selector</span></a>
+<a class="btn btn-nav btn-default btn-width btn-purple" href="https://www.synopsys.com/dw/nvmipselector.php" role="button"><span class="inner-text">Non-Volatile Memory IP Selector</span></a>
+</div>
+</div>
+</section>
+</div>
+</div>
+</div>
+</section>
+<section class="component-pageList"><div class="row"><div class="col-xs-12"><h5>More IP Resources</h5><ul class="pageLinks" id="nav-products"><div class="one-column"><li><a href="https://www.synopsys.com/search.html#tab=All&amp;sortCriteria=date%20descending%2Cdate%20ascending&amp;f-contenttype-facet=News%20Release&amp;cf-product-facet=Silicon%20IP">News</a></li><li><a href="https://www.synopsys.com/designware-ip/videos.html">Videos</a></li><li><a href="https://www.synopsys.com/search.html#tab=All&amp;sortCriteria=date%20descending%2Cdate%20ascending&amp;f-contenttype-facet=Article&amp;cf-product-facet=Silicon%20IP">Articles</a></li><li><a href="https://www.synopsys.com/search.html#tab=All&amp;sortCriteria=date%20descending%2Cdate%20ascending&amp;f-contenttype-facet=Success%20Story&amp;cf-product-facet=Silicon%20IP">Customer Successes</a></li><li><a href="https://www.synopsys.com/search.html#tab=All&amp;sortCriteria=date%20descending%2Cdate%20ascending&amp;f-contenttype-facet=White%20Paper&amp;cf-product-facet=Silicon%20IP">White Papers</a></li><li><a href="https://www.synopsys.com/search.html#tab=All&amp;sortCriteria=date%20descending%2Cdate%20ascending&amp;f-contenttype-facet=Webinar&amp;cf-product-facet=Silicon%20IP">Webinars</a></li><li><a href="https://www.synopsys.com/search.html#tab=All&amp;sortCriteria=date%20descending%2Cdate%20ascending&amp;f-contenttype-facet=Blog&amp;cf-product-facet=Silicon%20IP">Blogs</a></li><li><a href="/designware-ip/technical-bulletin.html">Synopsys IP Technical Bulletin</a></li><li><a href="/designware-ip/ip-reuse-tool.html">IP Reuse Tools</a></li><li><a href="/dw/oempartners.php">IP OEM Partner Program</a></li><li><a href="/dw/mydesignware.php">myDesignWare Subscriptions</a></li><li><a href="/dw/dwtb.php?a=dwtb_archives">Technical Bulletin Archives</a></li></div></ul></div></div></section>
+</div></section></div></div></div>
+<!-- .. -->
+<!-- Loading Font Awesome library script using font awesome kit CDN URL with Auto-Subsetting feature enabled -->
+</div><!-- <script src="https://static.cloud.coveo.com/searchui/v2.10085/js/CoveoJsSearch.Lazy.min.js"></script>
+
+<script src="https://static.cloud.coveo.com/searchui/v2.10085/js/cultures/en.js"></script>
+<script src="/apps/includes/files/coveo-search-enhanced-pipeline-context.min.js"></script> -->
+
+
+</body></html>

@@ -1,0 +1,23 @@
+commit b02f2423c38d3a41bdbd7f81eeeafac4d2e120f3
+Author:     sukn <sukn@foxmail.com>
+AuthorDate: Sat Mar 21 14:42:10 2026 +0800
+Commit:     sukn <sukn@foxmail.com>
+CommitDate: Sat Mar 21 14:42:10 2026 +0800
+
+    修改usb rx阈值和大海最新的库
+
+commit 46b4f9a9b096ea689f4620bbe4737db01c1588b2
+Author:     sukn <sukn@example.com>
+AuthorDate: Thu Oct 2 11:30:46 2025 +0800
+Commit:     sukn <sukn@example.com>
+CommitDate: Thu Oct 2 11:30:46 2025 +0800
+
+    添加DISCONNET 触发阈值  地线干扰
+
+commit 45e74a212d44b24a3220e0a674069354ca694d0f
+Author:     sukn <sukn@example.com>
+AuthorDate: Thu Aug 14 15:59:53 2025 +0800
+Commit:     sukn <sukn@example.com>
+CommitDate: Thu Aug 14 15:59:53 2025 +0800
+
+    初始化版本

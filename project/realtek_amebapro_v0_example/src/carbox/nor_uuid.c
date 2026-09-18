@@ -685,6 +685,26 @@ void carbox_nor_identity_cache_init(void)
     __atomic_store_n(&nor_cache_initialized, 1U, __ATOMIC_RELEASE);
 }
 
+void carbox_nor_identity_cache_profile_report(uint32_t sequence)
+{
+    unsigned initialized = __atomic_load_n(&nor_cache_initialized,
+                                           __ATOMIC_ACQUIRE);
+    int uuid_ret = initialized ? nor_cached_uuid_ret :
+                                 CARBOX_NOR_UUID_NOT_READY;
+    int otp_ret = initialized ? nor_cached_otp_ret :
+                                CARPLAY_NOR_OTP_NOT_READY;
+
+    /* This observes the immutable early-boot cache only. Do not replace these
+     * values with the public copy-out APIs: the profile must remain allocation-
+     * free and must never reissue a flash transaction. */
+    NOR_UUID_LOG("[PCPROF][%lu][NORCACHE] initialized=%u "
+                 "uuid_ret=%d uuid_ok=%u otp_ret=%d otp_ok=%u "
+                 "source=boot-cache flash_access=0\r\n",
+                 (unsigned long)sequence, initialized, uuid_ret,
+                 uuid_ret == (int)CARBOX_NOR_UUID_SIZE, otp_ret,
+                 otp_ret == (int)CARPLAY_NOR_OTP_SIZE);
+}
+
 int carbox_nor_read_uuid(uint8_t *uuid, size_t capacity)
 {
     if (!uuid || capacity < CARBOX_NOR_UUID_SIZE)

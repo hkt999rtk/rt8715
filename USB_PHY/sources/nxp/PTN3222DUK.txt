@@ -1,0 +1,2669 @@
+Title: NXP PTN3222DUK eUSB2 to USB 2.0 redriver datasheet
+Source: https://www.nxp.com/docs/en/data-sheet/PTN3222DUK.pdf
+Retrieved: 2026-09-18T09:44:55.411352+00:00
+Note: Automatically extracted searchable text. Original document is authoritative for tables and diagrams.
+
+
+--- PDF page 1 ---
+PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Rev. 1.1 — 1 December 2023 Product data sheet
+1   General description
+PTN3222 is a 1-port eUSB2 to USB2 redriver IC that performs translation between eUSB2 and USB2 signaling
+schemes. It is meant to be used in systems that have eUSB2 interface on one side and USB2 interface on the
+other side. It supports host repeater, device repeater or dual role repeater function.
+PTN3222 implements Repeater mode (eUSB2 to USB2 redriver) and it supports Link Power management
+features. PTN3222 is targeted to be USB2 compliant and eUSB2 conformant. It supports all three speeds/data
+rates: Low Speed (1.5 Mbps), Full Speed (12 Mbps) and High Speed (480 Mbps).
+PTN3222 provides a target I2C register interface to initialize the required functionality and features as per the
+platform application need. The I2C target address is selectable using a quaternary input pin (that selects one of
+the four addresses).
+It is powered by two power supplies (VDD3V3, VDD1V8) and is available in a WLCSP12 package (1.55 mm x
+1.18 mm x 0.455 mm body, 0.35 mm pitch).
+2   Features and benefits
+• 1-port eUSB2 to USB2 redriver functionality
+• Conforms to USB2 specification along with relevant ECNs
+• Conforms to eUSB2 specification v1.1
+• Supports host only repeater, device only repeater and dual mode repeater role
+• Supports all USB2.0 data rates
+– Low speed operation (1.5 Mbps)
+– Full speed operation (12 Mbps)
+– High speed operation (480 Mbps)
+• Supports RAP accesses for a select set of register accesses
+• Integrated and selectable pullup and pulldown resistors on both eUSB2 and USB2 ends
+• Signal Integrity (SI) configurability
+– eUSB2 – Tx de-emphasis, Rx equalization, Rx squelch threshold, Tx output swing
+– USB2 – HS disconnect detection threshold, Rx squelch threshold, Rx termination, Rx equalization, Tx de-
+emphasis, Tx slew rate, Tx output swing
+• Supports BC1.2 power provider CDP configuration capability in host mode
+• Low current consumption
+– Supports eUSB2 and USB2 power management
+– Implements Deep standby mode for lowest power consumption
+• Robustness features
+– USB2 data pins tolerate 5.5 V (DC) for 24 hours
+– USB2 data pins withstand short to GND for 24 hours
+– USB2 data pins withstand collision on DP/DN pins due to faulty USB devices
+• GPIOs and high speed data pins are backpower safe
+• I2C target interface supports standard mode, fast mode and fast mode plus
+• Power supplies - VDD3V3, VDD1V8
+
+--- PDF page 2 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+• ESD HBM 2 kV CDM 500 V
+• Operating ambient temperature range -40 °C to +85 °C
+• Available in WLCSP12 package
+3   Applications
+• eUSB2 to USB2 repeater function in platforms (e.g. hosts, devices, hubs, routers, protocol bridges, etc.) with
+Standard A/ Standard B/ Micro-B/USB Type-C connector scenarios
+– Host only repeater
+– Device only repeater
+– Dual role repeater (as determined dynamically in the application)
+4   Ordering information
+PackageType number
+Name Description Version
+PTN3222DUK WLCSP12 WLCSP12, wafer level chip scale package, 12 terminals, 0.35 mm pitch, 1.55 mm
+x 1.18 mm x 0.455 mm body (backside coating included)
+SOT2063-1
+Table 1. Ordering information
+4.1  Ordering options
+Type number Orderable part number Package Packing method Minimum
+order
+quantity
+Temperature
+PTN3222DUK PTN3222DUKZ WLCSP12 Reel dry pack, SMD, 13" Q1
+standard product orientation
+8000 Tamb = -40 °C to 85 °C
+Table 2. Ordering options
+4.2  Top side marking
+Line number Character Content Remarks
+1 Pin 1 dot Pin 1 indicationLine A
+2-3 Product life cycle Product status:
+• "2D": Production silicon
+Line B 1-3 Production information Lot ID
+1-2 Production information Lot IDLine C
+3 Production information Wafer number (0-9, A-R
+excluding I,O, Q)
+Table 3. Top side marking
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+2 / 48
+
+--- PDF page 3 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+5   Functional diagram
+aaa-043244
+USB2
+HSTX
+DP
+DN
+eDP
+eDN
+USB2eUSB2
+I2C TARGET
+INTERFACE AND 
+DEVICE CONTROL
+LDO
+VDD3V3
+FRO
+USB2
+HSRX
+USB2
+squelch
+USB2
+FSLSRX
+USB2
+FSLSTX
+CALIBRATION
+AND BIASING
+USB2
+FSLSRX
+USB2
+FSLSTX
+eUSB2
+HSTX
+eUSB2
+HSRX
+eUSB2
+squelch
+eUSB2
+SE TX
+eUSB2
+SE RX
+eUSB2
+SE TX
+eUSB2
+SE RX
+USB2
+hsdiscon
+eUSB2
+SE1detect
+HS
+SWITCH/
+MUX
+SE1
+GATE
+STATE MACHINE
+RAP AND LOGIC
+PULLDOWNS PULLUPS/
+DOWNS
+POWER 
+MANAGEMENT 
+TERMINATION TERMINATION
+HS SOF EOP
+DETECT
+ADDR
+SCL
+SDA
+VDD1V8
+DGND
+AGND
+RESET
+CONTROL
+RST_N
+Figure 1. Functional block diagram
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+3 / 48
+
+--- PDF page 4 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+6   Pinning information
+6.1  Pinning
+aaa-043262
+SDA SCL
+RST_
+N
+1
+AGND
+DNeDN
+A
+C
+B
+eDP ADDR DP
+32
+DGND VDD1
+V8
+VDD3
+V3D
+Pin A1
+Index area
+Figure 2. PTN3222 WLCSP pinning (transparent top view)
+6.2  Pin description
+WLCSP Pin Symbol Direction Pad power
+domain
+Type Description
+D1 DGND OUT Power Digital ground. This pin is connected to low noise ground plane
+and avoids long PCB traces
+D2 VDD1V8 IN Power 1.8 V power supply. 0.47 µF and 33 pF decoupling capacitors are
+placed on this pin on the PCB
+D3 VDD3V3 IN Power 3.3 V power supply. 0.47 µF and 33 pF decoupling capacitors are
+placed on this pin on the PCB
+C1 eDP IO VDD1V8 Analog input/output Positive terminal of eUSB2 analog transceiver interface
+C2 ADDR IN VDD1V8 Analog input Quaternary pin for I2C target address selection (sampled once
+after POR and when power supplies are stable and valid). The
+external pullup resistor shall be placed close enough to the
+decoupling capacitors of VDD1V8
+C3 DP IO VDD1V8,
+VDD3V3
+Analog input/output Positive terminal of USB2 analog transceiver interface
+DP pin has an internal 2 MΩ pulldown resistor enabled under all
+situations
+B1 eDN IO VDD1V8 Analog input/output Negative terminal of eUSB2 analog transceiver interface
+B2 RST_N IN VDD1V8 Digital input This is an Active Low input pin. When RST_N is LOW, PTN3222's
+DP and DN pins are put to Hi-Z condition and redriver is placed in
+Deep standby state. When RST_N is HIGH, the redriver is put into
+repeater mode
+B3 DN IO VDD1V8,
+VDD3V3
+Analog input/output Negative terminal of USB2 analog transceiver interface
+DN pin has an internal 2 MΩ pulldown resistor enabled under all
+situations
+A1 AGND OUT Power Analog low noise ground. This pin should connect to PCB ground
+plane, avoid long PCB traces and not be routed near noisy circuits
+A2 SDA IO VDD1V8 Digital input/output I2C data input/output. There is no internal pull up resistor, and an
+external pull up resistor to I2C pullup voltage must be used on the
+PCB
+A3 SCL I VDD1V8 Digital input I2C clock input. There is no internal pull up resistor, and an
+external pull up resistor to I2C pullup voltage must be used on the
+PCB
+Table 4. Pin description
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+4 / 48
+
+--- PDF page 5 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+7   Functional description
+PTN3222 consists of the following major functions:
+• eUSB2 repeater
+• BC1.2 support
+• I2C interface
+• Reset schemes
+7.1  Reset
+PTN3222 supports the following reset schemes:
+• POR
+• Software reset
+When in reset, PTN3222’s SCL and SDA IO pins are in high impedance state to prevent the I2C bus from being
+altered or corrupted in any way.
+The RST_N pin is used to put USB DP/DN IO circuitry is put into Hi-Z condition and USB2 pins are pulled down
+with 2 MΩ resistors. The redriver is also placed in Deep standby condition. The I2C configuration registers are
+retained except for Link control, Device status and RAP signature registers. As long as the system asserts this
+pin low, the IC is held in this state. When RST_N is HIGH, then the redriver is put into repeater mode.
+7.2  Operating modes
+PTN3222 has several operating modes: a specific operating mode is selected depending on repeater
+configuration, link and connection status. Table 5 below gives a high level overview of the major building blocks
+that are kept powered in different modes.
+Power Mode I2C interface FS/LS front ends HS Front ends
+OFF OFF OFF OFF
+Deep standby ON OFF OFF
+Connect Detect (Detached condition) ON ON (SE detector only) OFF
+L1 sleep ON ON (SE detector only) HS OFF; only SE detector is
+ON
+L2 suspend ON ON (SE detector only) HS OFF; only SE detector is
+ON
+Active LS/FS ON ON OFF
+Active HS ON OFF ON
+Table 5. Status of design blocks in different power modes
+7.3  eUSB2 repeater
+This subsystem includes eUSB2 analog front end circuitry, repeater state machine, USB2 analog front end
+circuitry and the associated power management circuits. The USB2 DP/DN pin have internal 2 MΩ pulldown
+resistors enabled under all situations.
+PTN3222 is designed to function as a host repeater or a peripheral repeater. Figure 3 illustrates the role
+transition and associated arcs that enable role change.
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+5 / 48
+
+--- PDF page 6 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+aaa-043272
+POR or
+HW reset
+DEFAULT
+PERIPHERALHOST host mode
+ESE1 ESE1
+peripheral
+mode
+Figure 3. PTN3222 role transition
+Figure 4 illustrates the eUSB2 Host repeater usage in a typical Host platform application.
+On one side, the repeater interfaces with USB2 peripheral (that is either plugged in directly or via cable/channel
+topology) and on the system side, it interfaces with host controller w/eUSB2 PHY.
+aaa-043273
+HOST
+CONTROLLER eDSPr
+eDP
+eDN
+eUSPh UDSP
+eUSB2 port host repeater
+DP
+DN
+Figure 4. PTN3222 as eUSB2 Host repeater
+Figure 5 illustrates the eUSB2 Device repeater usage in a typical peripheral environment.
+aaa-043274
+PERIPHERAL
+CONTROLLEReDSPpUUSP
+eDP
+eDN
+eUSPr
+peripheral 
+repeater eUSB2 port
+DP
+DN
+Figure 5. PTN3222 as eUSB2 Peripheral repeater
+PTN3222 implements aggressive power management to optimize on overall power consumption under the
+various operating modes. It supports USB Link Power Management and supports L1 and L2 power states. In
+addition, it implements specific features required by [4].
+PTN3222 supports RAP – allowing customer facing registers only. The type of access is controlled via an I2C
+register. There is no built-in arbitration support available if and when same register is being accessed through
+RAP commands and I2C interface. The system application is expected not to issue simultaneous accesses,
+avoid register overwrites leading to incorrect behavior and response from PTN3222.
+PTN3222 accepts RAP messages at any time even though host is expected to issue RAP messages only
+during initialization. In case, if the host would use RAP messages to read status register(s) or update any
+control register(s), PTN3222 does not inhibit or put limits on RAP messages as long as it is in the mode wherein
+customer I2C registers are accessible.
+PTN3222 supports Auto resume and asynchronous wake features as specified in [4]. Auto resume timeout of 20
+ms (typ) has been implemented.
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+6 / 48
+
+--- PDF page 7 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+7.3.1  Over-Voltage Protection on USB2 DP/DN pins
+PTN3222 implements Over Voltage Protection (OVP) circuitry, which activates whenever an OV condition
+occurs on USB2 DP/DN pins, PTN3222 operates autonomously without host software intervention. The
+following describes a possible sequence of steps that may occur due to OV event:
+1. PTN3222 checks DP/DN pin(s) for over voltage condition that is higher than VOVP,Th (Low to High Threshold
+case) and it shuts down the USB2 analog IO as long as the event persists
+2. PTN3222 enables USB2 analog IO path once the pin voltage falls below VOVP,Th (High to Low Threshold
+case)
+3. The SoC host and eUSB2 redriver would lose communication with the USB2 entity since the analog path
+has been disabled
+4. So, the SoC host may try the following options to reestablish the link
+a. issue CM.Reset in an attempt to issue a USB Bus Reset or,
+b. issue Port reset to the local redriver and also toggle VBUS to re-establish the connection and restart the
+data transport.
+Note that option (a) may not be successful depending on the nature of the fault but is the fastest and least
+aggressive error recovery method. Use of Port Reset and toggling of VBUS are guaranteed to work, but comes
+with a downside of longer time duration to reestablish the link.
+7.4  BC1.2 support
+PTN3222 has a built-in support for enabling CDP (Charging Downstream Port) feature that allows a mobile
+device to detect and charge at higher current from the host platform. For the BC1.2 support, this IC implements
+a controlled voltage source that can be enabled on USB2 DN pin via an I2C register bit. The host processor can
+enable this feature via I2C during USB disconnect condition and the PTN3222 can autonomously disable this on
+a USB connect event and reset this I2C configuration bit.
+This feature is expected to be applied when in host repeater mode only. However, the PTN3222 does not inhibit
+enabling of this feature in device repeater mode.
+7.5  I2C operation
+PTN3222 is an I2C target only device, and it responds to I2C commands in any operating mode as long as
+VDD3V3/VDD1V8 supplies are available. PTN3222 does not support clock stretching but it tolerates other
+I2C targets performing clock stretching under the legal conditions defined by [1]. Also, it does not support I2C
+General call address (and therefore does not issue an acknowledgement too), I2C Software reset command
+nor 10-bit addressing. It acknowledges all 128 register offset addresses though there are certain undefined/
+reserved locations as indicated in the register map.
+Each I2C operation involving writing to or reading from one or more consecutive registers is referred to as a
+transaction. Consecutive registers are defined as a series of incrementing register addresses, regardless of
+whether a given address has a definition in the register map.
+A transaction may be a part of a series of transactions addressed to multiple different targets or to the same
+target repeatedly with different register address offsets, with each transaction separated by repeated-START
+conditions. PTN3222 does not inhibit other types of transactions as prescribed in I2C specification.
+Register address aliasing is not supported in PTN3222. When read or write transactions with multiple
+consecutive registers are performed, the register address rolls over to 0x00 once the maximum register offset of
+0xFF is reached.
+When an undefined or invalid register address is being addressed for read or write operation, PTN3222
+acknowledges the I2C transaction, but returns 0xFF for a read operation, or takes no action for a write
+operation.
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+7 / 48
+
+--- PDF page 8 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+7.5.1  I2C target address
+PTN3222‘s 7-bit I2C target address is given in Table 6. Bits 3 and 4 can take one of the four possible values
+based on the quaternary address selection pin (ADDR).
+ADDRADDR pin configuration Bit 7 Bit 6 Bit 5
+Bit 4 Bit 3
+Bit 2 Bit 1 Bit 0
+Connected to 1.8 V supply directly 1 0 0 0 0 1 1 R/W
+Connected to 1.8 V supply via 56 kΩ
+(+/-10 %) pull up
+1 0 0 0 1 1 1 R/W
+Connected to 1.8 V supply via 200 kΩ
+(+/-10 %) pull up
+1 0 0 1 0 1 1 R/W
+Connected to GND directly 1 0 0 1 1 1 1 R/W
+Table 6. PTN3222 target address definition
+7.5.2  Example of writing one or more registers
+PTN3222 recognizes the following procedure as a request to write to one or more registers:
+1. I2C controller asserts START condition or repeated-START condition
+2. Controller addresses PTN3222 target interface with R/W bit set as “Write”
+3. Target acknowledges the request by asserting an ACK
+4. Controller writes the desired starting register address
+5. Target acknowledges the register address with ACK, even if register address is not part of the defined
+register map
+6. Controller writes the data for that register address and the target updates the register value once all 8 bits of
+data have been written
+7. Target acknowledges the data with an ACK
+8. If the controller wishes to write to the next consecutive register address, it supplies another data byte, which
+the target ACKs. The controller can continue writing data bytes for consecutive registers. If the controller
+writes to more consecutive registers than what exists in the register map, the target discards the extra data
+bytes, but ACKs for each such write
+When the controller has finished writing the desired register(s), it issues either a STOP condition or a repeated-
+START condition.
+Figure 6 provides an illustrative example where the controller chooses to write to three consecutive registers
+starting with register “R”.
+aaa-043275
+W AS or
+Sr
+target device address
+R6 R5 R4 R3 R2 R1 R0R7 D6 D5 D4 D3 D2 D1 D0D7 D6 D5 D4 D3 D2 D1 D0D7 D6 D5 D4 D3 D2 D1 D0D7
+target register address
+Acontroller
+target
+A
+data(R)
+A5 A4 A3 A2 A1 A0A6 A
+data(R+1)
+A P or
+Sr
+data(R+2)
+Figure 6.  Writing one or more consecutive registers
+7.5.3  Example of reading one or more registers
+The target recognizes the following procedure as a request to read one or more registers:
+1. Controller asserts START condition or repeated-START condition
+2. Controller addresses PTN3222’s target address with R/W bit set as “Write”
+3. Target acknowledges the request by asserting ACK
+4. Controller writes the desired starting register address
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+8 / 48
+
+--- PDF page 9 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+5. Target acknowledges the register address with ACK, even if the register address is not part of the defined
+register map
+6. Controller issues a repeated-START condition
+7. Controller addresses PTN3222’s target address with R/W bit set as “Read”
+8. In the following clock pulses, the target clocks out the value of the requested register
+9. If controller wishes to read the next consecutive register, it issues an ACK and then provides another set of
+clock pulses, whereby the target supplies the value of the next register. As long as the controller continues
+to issue ACK and supply additional clock pulses, the target continues to supply the value of consecutive
+registers. If the controller attempts to read consecutive registers that do not exist in the defined register
+space, the target can return undefined data value of 0xFF.
+10. When the controller does not wish to read additional consecutive registers, it supplies a NACK in response
+to the final register value it wishes to read and then issues a STOP or repeated-START condition.
+Figure 7 provides an illustrative example where the controller chooses to read from two consecutive registers
+starting with register “R”.
+aaa-043276
+W AS or
+Sr
+target device address
+R6 R5 R4 R3 R2 R1 R0R7 A6 A5 A4 A3 A2 A1 A0Sr
+D6 D5 D4 D3 D2 D1 D0D7 D6 D5 D4 D3 D2 D1 D0D7
+target register address
+Acontroller
+target A
+target device address
+A5 A4 A3 A2 A1 A0A6 R A data(R) N P or
+Sr
+data(R+1)
+Figure 7. Reading one or more consecutive registers
+8   System application
+8.1  Use cases
+PTN3222 is targeted to be used in various USB interface application cases. It interfaces to a host or device
+controller with eUSB2 PHY interface and on the other side, it interfaces directly to a connector/cable topology or
+another interface IC. Different connector configurations are possible: custom, USB Standard A/Standard B, USB
+Micro-B, USB Type-C, etc. For all use cases, it is not necessary for the host to initialize the I2C registers after
+POR or reset event. On the contrary, PTN3222 functions without any I2C configuration by relying on registers
+getting initialized after POR event.
+A few use case illustrations are shown in Figure 8 through Figure 11; these figures do not capture all
+components (supply decoupling capacitors, ESD, CMF, etc.) in the channel topology.
+1. Direct interface to connector
+This connectivity scheme is a straightforward topology and it may be relevant for generic IOT and certain
+computing applications. In certain applications, I2C interface may not be connected and the repeater is
+expected to start operating after POR based on POR/default register settings.
+ 
+aaa-050547
+APPLICATION
+PROCESSOR PTN3222
+eUSB2
+PHY
+USB2eUSB2 USB2
+Connector can be
+Std A/ Std B/ 
+Micro-B/USB-C, etc.
+I2C
+VDD3V3
+RST_N VDD1V8
+10 kΩ
+VDD1V8
+Figure 8. Use case 1 – Direct interfacing
+ 
+2. Interface via USB protection IC
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+9 / 48
+
+--- PDF page 10 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+This connectivity scheme is relevant for applications where there is a risk/chance of high voltage appearing
+on the USB data pins (e.g. USB-C). In certain applications, I2C interface may not be connected and the
+repeater is expected to start operating after POR based on POR/default register settings. Care must be
+taken to select suitable protection IC that has certain USB2 signal attenuation/Rdson. Also, the default
+power-up scenario must be analyzed.
+ 
+aaa-050548
+APPLICATION
+PROCESSOR PTN3222 USB2 OVP
+PROTECTION IC
+eUSB2
+PHY
+USB2eUSB2 USB2
+Connector can be 
+custom or USB-CSwitch path has finite 
+RdsON and capacitance
+RST_N VDD1V8I2C
+VDD1V8 VDD3V3
+USB2
+10 kΩ
+Figure 9. Use case 2 – Interfacing via Protection IC
+ 
+3. Interface with parallel connection to PMIC
+This interfacing scheme is relevant for mobile applications (smartphone, tablets, etc.), where there is a
+high chance of system integrator using an interface PMIC to support various platform specific functions.
+Since there are two ICs connected to USB DP/DN data pins, the RST_N pin allows the system to put
+PTN3222’s DP/DN IO circuitry to Hi-Z condition and connect 2 MΩ pulldown resistors on DP/DN pins so that
+the interface PMIC can use the DP/DN pins for other purpose(s).
+In certain applications, I2C interface may not be connected and the repeater is expected to start operating
+after POR based on POR/default register settings
+ 
+aaa-045873
+APPLICATION
+PROCESSOR PTN3222
+eUSB2
+INTERFACE
+PMIC
+BC1.2
+PHY
+USB2eUSB2
+Connector can be 
+custom or USBRST_NI2C
+VDD1V8 VDD3V3
+USB2
+1 kΩ
+1 kΩ
+Figure 10. Use case 3 – Interface with parallel connection to PMIC
+ 
+4. Interface to connector via passive signal switch
+This connectivity scheme provides the option to switch various debug and communication signals on to the
+same connector. In certain applications, I2C interface may not be connected and the repeater is expected
+to start operating after POR based on POR/default register settings. The passive signal switch must be
+selected to ensure low signal attenuation and also the power-up scenario must be carefully analyzed. The
+RST_N pin shall be pulled up with 10 kΩ resistor externally either in the SoC or on the PCB.
+ 
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+10 / 48
+
+--- PDF page 11 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+aaa-043285
+APPLICATION
+PROCESSOR PTN3222
+eUSB2
+PASSIVE
+SWITCH
+PHY
+USB2eUSB2 USB2
+Connector can be
+custom or USB
+I2C
+VDD1V8 VDD3V3
+USB2
+UART/JTAG
+DIG AUDIO
+RST_N VDD1V8
+10 kΩ
+Figure 11. Use case 4 – Interfacing via passive switch
+ 
+8.2  Power supply requirement
+PTN3222 requires two power supplies (VDD3V3 and VDD1V8) to operate. It does not function until both
+supplies have ramped up and reached valid operating range. There is no specific power on or off sequencing
+requirement. In addition, the two supplies can follow different ramp-up and ramp down rates. The supply ramp
+limits are specified in Section 11.
+PTN3222 does not suffer from backpower issue (VDD node getting powered via a non-power pin).
+The power supply decoupling capacitors shall be soldered close to power pins.
+8.3  Ground requirement
+PTN3222 has two ground pins, AGND and DGND.
+Both pins provide connection to GND plane with low ground noise in the application PCB.
+8.4  ESD requirements
+PTN3222 supports 2 kV HBM and 500 V CDM on all pins. To achieve system level ESD protection (e.g.
+IEC61000-4-2 Level 4 8 kV contact discharge, 15 kV air discharge) on DP/DN pins, dedicated and matched
+ESD diodes shall be used near the connector. Matching of diodes is important to minimize DP/DN skew.
+8.5  Application support
+NXP can deliver PTN3222 customer support documentation and IBIS-AMI model for system level signal
+integrity simulation. The documentation includes Application note [6] and layout guidelines [7]. Please contact
+NXP support teams for further details.
+9   Register set
+The device is controlled and monitored by registers accessible via the I2C bus. All registers can be accessed
+in standard mode or fast mode using single or sequential reads or writes. Register bit field types are defined in
+Table 7.
+Access Type Description
+RW Bit field can be read from and written to
+RO Bit field value can only be read
+Table 7. Register type definitions
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+11 / 48
+
+--- PDF page 12 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Access Type Description
+WO Bit field value is write only. Reading value has no meaning, and results in no action being taken
+RAZ Bit field contents are read as zero. Writes do not have any effect
+R/W1, W0 Ignore Bit field value is readable, and writing ‘b1 to each bit in the bit field sets value to ‘b1. Writing ‘b0
+to a this bit field results in no action being taken
+Table 7. Register type definitions...continued
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+12 / 48
+
+--- PDF page 13 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+9.1  Register overview
+Table 8 lists all the registers used for PTN3222. Default POR values of registers are also shown in this table.
+RESET Information of individual bitsAddress Register Name Access
+POR Software
+Reset (or
+RST_N
+Default
+Value
+(Hex) 7 6 5 4 3 2 1 0
+0x00 RESERVED RAZ 00
+0x01 RESET
+CONTROL
+RW • 00 Software
+Reset
+0x02 LINK
+CONTROL 1
+RW • • 00 Speed control Role control Operational mode
+0x03 LINK
+CONTROL 2
+RW • • 00 Force
+ESE1
+0x04 eUSB2 RX
+CONTROL
+RW • • 20 eUSB2 HS Rx squelch
+detection threshold
+eUSB2 HS Rx equalization
+0x05 eUSB2 TX
+CONTROL
+RW • • 10 eUSB2 HS Tx output
+swing
+eUSB2 HS Tx De-
+emphasis
+0x06 USB2 RX
+CONTROL
+RW • • 40 USB2 Rx squelch detection threshold USB2 HS Rx equalization
+0x07 USB2 TX
+CONTROL 1
+RW • • 22 USB2 HS Tx De-
+emphasis bit duration
+USB2 HS Tx De-emphasis
+0x08 USB2 TX
+CONTROL 2
+RW • • 63 USB2 FS
+rise/fall
+time
+USB2 HS rise/fall time USB2 HS Tx output swing
+0x09 USB2 HS TER
+MINATION
+RW • • 02 USB2 HS termination control
+0x0A USB2 HS DIS
+CONNECT THR
+ESHOLD
+RW • • 00 USB2 HS disconnect
+detection threshold
+0x0B -
+0x0C
+RESERVED RO XX
+0x0D RAP_Signature RW • • 00 RAP_Signature
+0x0E VDX_
+CONTROL
+RW • • 00 VDx_
+enable
+0x0F DEVICE
+STATUS
+RO • • Speed of operation
+status
+Repeater status
+0x10 LINK STATUS RO • • Device and Link status
+0x11 -
+0x12
+RESERVED RAZ XX
+0x13 REVISION_ID RO A2 BASE = b'1010 METAL_= b'0010
+0x14 CHIP_ID_0 RO 22 CHIP_ID[7:0]=0x22
+0x15 CHIP_ID_1 RO 32 CHIP_ID[15:8]=0x32
+0x16 CHIP_ID_2 RO 01 b'0000 b'01
+RESERVED RO XX Reserved register space
+Table 8. Register overview
+9.2  I2C registers and descriptions
+9.2.1  Functional registers
+The offset addresses with defined bit definitions are meant for functional registers, and can be accessed by
+the I2C controller at any time after POR. For normal operation, these registers are sufficient to setup the IC to
+known working conditions. Customers are advised not to write reserved values into the register bit fields. Read
+from the reserved bit field(s) need not match with what’s written. Functional behavior is not guaranteed if such
+an operation is performed.
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+13 / 48
+
+--- PDF page 14 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Register offset Register Name Register Description
+0x00 RESERVED
+Bit Bit Name R/W Reset Description
+7:0 RSVD RAZ b'00000000 Reserved
+Table 9. Register 0x00 – Reserved
+Register offset Register Name Register Description
+0x01 Reset Control This register is meant to initiate reset of the chip via I2C write
+Bit Bit Name R/W Reset Description
+7:1 RSVD RAZ b'0000000 Reserved
+0 Software Reset R/W b'0 This is a Self-clearing bit. The host writes ‘1’ to this bit to initiate
+software reset and this bit automatically clears to ‘0’.
+All R/W registers are reset to POR settings.
+Writing ‘0’ does not have any effect. Reads return ‘0’
+Table 10. Register 0x01 – RESET CONTROL
+Register offset Register Name Register Description
+0x02 Link Control 1 This register is meant to force the repeater role and speed of
+operation to fixed settings
+Bit Bit Name R/W Reset Description
+7:6 Speed control RW b'00 The bitfield determines the POR setting of USB2 speed:
+00– Manage the speed via Auto negotiation
+01– LS/FS only
+10-11- Reserved
+5:4 Role control RW b'00 Determines the redriver role
+00 – Dual role
+Support both host and device eUSB2 Port Configuration
+negotiation. This is the expected normal operating setting
+managed via Host eUSB2 exchanges.
+01 - Force Host role
+When bits are ‘01’, it forces the repeater into USB Host role
+irrespective of any configuration command getting received via
+eUSB2. But the repeater would acknowledge the configuration
+message from the host.
+10- Force Device role
+When the bits are ‘10’, it forces the repeater into USB
+Device/Peripheral role irrespective of any configuration
+command getting received via eUSB2. But the repeater would
+acknowledge the configuration message from the host.
+11- Reserved
+Forced host/device role setting is used in conjunction only with
+setting ‘2’ of Link Control 2[2:0] bits
+3 RSVD RAZ b'0 Reserved
+Table 11. Register 0x02 – LINK CONTROL 1
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+14 / 48
+
+--- PDF page 15 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Register offset Register Name Register Description
+2:0 Operational Mode RW b'000 The bits set the operational mode of the repeater
+0=Auto negotiation on the link (mode determined via control
+messages and link negotiation)
+1= Deep standby mode (eUSB2 pins are pulled down, USB2
+pins are held in weak pulldown condition and I2C register
+contents are preserved)
+2 - Connect.Detect state. Used for force the repeater into its
+Connect.Detect state (refer to eUSB specification). - This is
+acted upon only at the time the write occurs to this register.
+If an overriding condition is present, such as RST_N=0, then
+writing to this register with this setting is ignored, even when
+the overriding condition goes away
+Note that in this case Role Control field (in register 0x02)
+must have only a single bit set. Those bits are used to tell the
+repeater which role to jump into - This command places the
+repeater into the appropriate Connect.Detect state (based on
+specified role in Role Control). After the state transition occurs,
+the repeater automatically reacts from there as appropriate to
+the eUSB/USB2 bus conditions.
+3 - Compliance Mode (HS L0 condition). This is equivalent
+to the reception of the Control Message CM.Test. It allows
+the system to force the repeater into HS.L0 state. The role
+is defined by the Role Control bits. Note that in this case,
+Role Control setting must have only a single bit set. If both or
+neither bit is set, then this command is ignored
+4 to 7 - Reserved
+Table 11. Register 0x02 – LINK CONTROL 1...continued
+Register offset Register Name Register Description
+0x03 Link Control 2 This register programs specific feature of the repeater
+Bit Bit Name R/W Reset Description
+7:1 RSVD RAZ b'0000000 Reserved
+0 Force ESE1 RW b'0 Bit to force Extended SE1 signaling
+0 => No action
+1 => Self Clearing bit. When written to 1, Repeater generates
+extended SE1 onto the eUSB pins.
+Normally, only the Host Repeater performs this action upon a HS
+disconnect detection. But this feature allows the system to force
+an extended SE1 as needed via I2C interface
+Table 12. Register 0x03 – LINK CONTROL 2
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+15 / 48
+
+--- PDF page 16 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Register offset Register Name Register Description
+0x04 eUSB2 Rx Control This register programs the eUSB2 Rx equalization and squelch
+detection threshold settings
+Bit Bit Name R/W Reset Description
+7:6 RSVD RAZ b'00 Reserved
+5:4 eUSB2 HS Rx Squelch
+detection threshold
+RW b'10 The bits determine the squelch detector (Low to High transition)
+threshold level for HS signaling on eUSB2 pins
+00 = 50 mV
+01 = 65 mV
+10 = 85 mV
+11 = 95 mV
+All settings are within +/-25 mV of nominal value mentioned above
+Squelch detector implements hysteresis of 10 mV to improve noise
+immunity.
+3 RSVD RAZ b'0 Reserved
+2:0 eUSB2 HS Rx
+equalization
+RW b'000 The bits determine the nominal eUSB2 receive equalization gain
+(@ 240 MHz) with respect to DC gain. All settings are within
++/-1 dB of nominal value mentioned below
+000 = 0 dB
+001 = 1 dB
+010 = 2 dB
+011 = 3 dB
+100 = 4 dB
+101 to 111 = Reserved
+Table 13. Register 0x04 – eUSB2 RX CONTROL
+Register offset Register Name Register Description
+0x05 eUSB2 Tx Control This register configures the Transmit side settings – output signal
+swing and de-emphasis level on eUSB2 side
+Bit Bit Name R/W Reset Description
+7:6 RSVD RAZ b'00 Reserved
+5:4 eUSB2 HS Tx output
+swing
+RW b'01 The bits set the output signal swing for HS signaling on eUSB2 Tx
+side (when the interface is terminated)
+00 = 180 mV
+01 = 200 mV
+10 = 220 mV
+11 = 240 mV
+All settings are within +/-40 mV of nominal value mentioned above
+3:2 RSVD RAZ b'00 Reserved
+1:0 eUSB2 HS Tx De-
+emphasis
+RW b'00 The bits determine the Tx de-emphasis (nominal) level for HS
+signaling on eUSB2 pins. The de-emphasis duration is between
+0.75 to 1 HS bit time.
+00 = 0 dB
+01 = 1 dB
+10 = 2 dB
+Table 14. Register 0x05 – eUSB2 TX CONTROL
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+16 / 48
+
+--- PDF page 17 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Register offset Register Name Register Description
+11 = 3 dB
+All settings other than ‘00’ are within +/-1 dB of nominal value
+mentioned below
+Table 14. Register 0x05 – eUSB2 TX CONTROL...continued
+Register offset Register Name Register Description
+0x06 USB2 Rx Control The register programs the Rx equalization and squelch detection
+threshold levels on USB2 pins (applicable for HS signaling only)
+Bit Bit Name R/W Reset Description
+7 RSVD RAZ b'0 Reserved
+6:4 USB2 HS Rx squelch
+detection threshold
+RW b'100 The 3 bits determine the squelch detector (low to high transition)
+threshold level for HS signaling at USB2 pins
+000 = Reserved; not for use
+001 = 65 mV
+010 = 85 mV
+011 = 95 mV
+100 = 110 mV
+101 = 125 mV
+110 = 140 mV
+111 = 155 mV
+All settings are within +/-25 mV of nominal value mentioned above
+Squelch detector implements hysteresis of 10 mV to improve noise
+immunity.
+3 RSVD RAZ b'0 Reserved
+2:0 USB2 HS Rx
+equalization
+RW b'000 The 3 bits determine the nominal USB2 receive equalization gain
+(@ 240 MHz) with respect to DC gain. All settings are within +/-1
+dB of nominal value mentioned below
+000 = 0 dB
+001 = 1 dB
+010 = 2 dB
+011 = 3 dB
+100 = 4 dB
+101 to 111 = Reserved
+Table 15. Register 0x06 – USB2 RX CONTROL
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+17 / 48
+
+--- PDF page 18 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Register offset Register Name Register Description
+0x07 USB2 Tx Control 1 This register configures the Transmit side settings – output signal
+swing and de-emphasis level on USB2 side
+Bit Bit Name R/W Reset Description
+7:6 RSVD RAZ b'00 Reserved
+5:4 USB2 HS Tx De-
+emphasis bit duration
+RW b'10 The bits set the de-emphasis bit time (UI) for HS signaling on USB2
+Tx side
+00 = 0
+01 = 0.5UI
+10 = 0.8UI
+11 = Reserved
+All settings are within +/-0.2UI of nominal value mentioned above
+3 RSVD RAZ b'0 Reserved
+2:0 USB2 HS Tx De-
+emphasis
+RW b'010 The bits determine the Tx de-emphasis (nominal) level for HS
+signaling on USB2 pins
+000 = 0 dB
+001 = 1 dB
+010 = 2 dB
+011 = 3 dB
+100 = 4 dB
+101 = 5 dB
+110 = 6 dB
+All settings other than ‘000’ are within +/-1 dB of nominal value
+mentioned above
+Table 16. Register 0x07 – USB2 TX CONTROL 1
+PTN3222 implements de-emphasis feature for channel loss compensation of high frequency content of both
+eUSB2 and USB2 signals.
+Figure 12 illustrates the difference between pre-emphasis and de-emphasis functions.
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+18 / 48
+
+--- PDF page 19 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Figure 12. Difference between pre-emphasis and de-emphasis functions
+With de-emphasis, when a steady pattern of 0s or 1s is being redriven, the transmit signal swing is reduced
+as per de-emphasis level and for an alternating pattern of 0s and 1s, the full signal swing is transmitted as per
+transmit signal swing level.
+On the other hand, with pre-emphasis function, the full signal amplitude is retained when a steady pattern of 0s
+or 1s is being redriven and for an alternating pattern of 0s and 1s, the transmit signal swing is boosted as per
+pre-emphasis level.
+The de-emphasis settings map to specific output current drive level as illustrated in Table 17. The current drive
+level is with reference to 17.78 mA current considering 45 Ω terminations at both ends of the connection and
+400 mV output swing level.
+USB2 Tx De-emphasis = 0.8UI (typical)
+Tx De-emphasis
+setting = 0
+Tx De-emphasis
+setting = 1
+Tx De-emphasis
+setting = 2
+Tx De-emphasis
+setting = 3
+Tx De-emphasis
+setting = 4
+Tx De-emphasis
+setting = 5
+Tx De-emphasis
+setting = 6
+USB2 Tx output
+swing Non-
+transition Voltage
+(mV) Transition
+level
+(mV)
+Non-
+Transition
+level
+(mV)
+Transition
+level
+(mV)
+Non-
+Transition
+level
+(mV)
+Transition
+level
+(mV)
+Non-
+Transition
+level
+(mV)
+Transition
+level
+(mV)
+Non-
+Transition
+level
+(mV)
+Transition
+level
+(mV)
+Non-
+Transition
+level
+(mV)
+Transition
+level
+(mV)
+Non-
+Transition
+level
+(mV)
+Transition
+level
+(mV)
+Non-
+Transition
+level
+(mV)
+Setting= 0 350 352 352 347 304 347 270 347 237 347 212 347 194 340 169
+Setting= 1 400 399 399 394 344 394 309 390 267 390 239 390 219 385 190
+Setting= 2 450 451 451 447 388 447 352 442 305 442 279 442 244 442 220
+Setting= 3 500 498 498 492 434 492 390 487 337 487 305 487 269 487 244
+Setting= 4 550 551 551 546 473 544 427 544 375 544 337 538 301 538 269
+Setting= 5 600 600 600 595 520 595 469 595 416 584 366 584 330 580 295
+Setting= 6 650 656 656 649 566 645 509 645 454 634 398 634 355 618 310
+Setting= 7 700 703 703 702 613 692 537 680 474 680 423 675 372 675 344
+Table 17. De-emphasis level to USB2 Tx output swing level
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+19 / 48
+
+--- PDF page 20 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Register offset Register Name Register Description
+0x08 USB2 Tx Control 2 This register configures the Transmit side settings – Tx output
+driver slew rate and output signal swing on USB2 side
+Bit Bit Name R/W Reset Description
+7 RSVD RAZ b'0 Reserved
+6 USB2 FS rise/fall time RW b'1 This bit determines the FS Tx driver rise/fall time on USB2 pins
+0 = 8 to 20 ns
+1 = 4 to 10 ns
+Load conditions are as defined in USB standard
+5:4 USB2 HS rise/fall time RW b'10 The 2 bits determine the Tx driver slew rate for HS signaling on
+USB2 pins.
+00 = 500 to 900 ps
+01 = 400 to 800 ps
+10 = 300 to 700 ps
+11 = Reserved
+Load conditions are as defined in USB standard
+3 RSVD RAZ 0 Reserved
+2:0 Tx output signal
+swing
+RW b'011 The 3 bits determine the Tx output signal swing level for HS
+signaling on USB2 pins (when the interface is terminated)
+000 = 350 mV
+001 = 400 mV
+010 = 450 mV
+011 = 500 mV
+100 = 550 mV
+101 = 600 mV
+110 = 650 mV
+111 = 700 mV
+All settings are within +/-10% of nominal value mentioned above
+Table 18. Register 0x08 – USB2 TX CONTROL 2
+Register offset Register Name Register Description
+0x09 USB2 HS Termination control This register sets the HS termination values on USB2 pins
+Bit Bit Name R/W Reset Description
+7:3 RSVD RAZ b'00000 Reserved
+2:0 USB2 HS Termination
+control
+RW b'010 The bits determine the HS termination on USB2 pins (differential
+impedance is specified here)
+000 = 100 Ω differential
+001 = 95 Ω differential
+010 = 90 Ω differential
+011 = 85 Ω differential
+100 = 80 Ω differential
+101 to 111 = Reserved
+All settings are within +/-10% of nominal value mentioned above
+Table 19. Register 0x09 – USB2 HS TERMINATION
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+20 / 48
+
+--- PDF page 21 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Register offset Register Name Register Description
+0x0A USB2 HS disconnect
+detection threshold
+This register sets the HS disconnect threshold level on USB2 pins
+Bit Bit Name R/W Reset Description
+7:2 RSVD RAZ b'000000 Reserved
+1:0 HS Disconnect
+threshold level
+RW b'00 The bits determine the HS Disconnect detector threshold level on
+USB2 pins
+00 = 575 mV
+01 = 675 mV
+10 = 775 mV
+11 = 875 mV
+All settings are within ±50 mV of nominal value mentioned above
+The detector implements hysteresis of 30 mV to improve noise
+immunity.
+Table 20. Register 0x0A – USB2 HS DISCONNECT THRESHOLD
+Register offset Register Name Register Description
+0x0D RAP Signature eUSB RAP Signature - Controls/limits RAP Command Access to
+the registers of the redriver.
+Bit Bit Name R/W Reset Description
+7:0 RAP_Signature RW b'00000000 0x00 - No RAP Access to PTN3222 I2C Registers
+0x37 - RAP allowed read only access to Status, REVISION_ID, and
+Chip ID registers
+0x92 - RAP allowed read only access to I2C customer registers
+0x21 - RAP allowed write/read access to I2C customer registers
+All others - No RAP Access to registers
+Table 21. Register 0x0D – RAP Signature
+Register offset Register Name Register Description
+0x0E VDX_CONTROL PTN3222 can be used to indicate that the host system is a USB BC
+1.2 CDP (Charging Downstream Port) to an USB peripheral. This
+involves activating a current source on USB DN pin (refer to USB
+BC 1.2 spec VDM_SRC definition).
+Bit Bit Name R/W Reset Description
+7:1 RSVD RAZ b'00000000 Reserved
+0 VDX_Ctrl RW b'0 VDX Control - Host Side Repeater Function
+0 => Disable VDX_SRC
+1 => Enable VDX_SRC
+The host shall enable VDX_SRC within 200 ms of a disconnect
+and PTN3222 VDX_SRC circuitry is automatically disabled upon
+detection of the next connection.
+Table 22. Register 0x0E – VDX_CONTROL
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+21 / 48
+
+--- PDF page 22 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Register offset Register Name Register Description
+0x0F Device Status The register indicates the current state of repeater functionality.
+This register can only be read and writes don’t have any effect
+Bit Bit Name R/W Reset Description
+7:4 RSVD RAZ Reserved
+3:2 Speed of operation RO This bit shows the current state of repeater speed of operation
+00 = LS
+01 = FS
+10 = HS
+1:0 Repeater role RO This bit shows the current role played by the repeater
+00 = No role determined yet
+01 = Device side repeater
+10 = Host side repeater
+Table 23. Register 0x0F – DEVICE STATUS
+Register offset Register Name Register Description
+0x10 Link Status This status register reflects the current state of the repeater device
+and the link. This register can only be read and writes don’t have
+any effect
+Bit Bit Name R/W Reset Description
+7:3 RSVD RAZ Reserved
+2:0 Device Link status RO The status bits reflect the device and link state
+000 = Deep standby
+001 = Connect detect
+010 = L1
+011 = L2
+101 = Active HS (L0)
+110 = Active HS (L0) forced due to USB2 compliance mode
+111 = This setting represents transitioning condition between
+different states (e.g. Suspend to Resume to L0)
+Table 24. Register 0x10 – LINK STATUS
+Register offset Register Name Register Description
+0x13 REVISION_ID The REVISION ID register provides the silicon revision number. The
+Rev ID is a read only register whose value never changes.
+Bit Bit Name R/W Reset Description
+7:4 BASE_STEP RO b'1010 Base layer version
+A0 stands for 1st version
+3:0 METAL_STEP RO b'0010 Metal layer version
+0 stands for A0 version, '01' for A1 version and '10' for A2 version
+Table 25. Register 0x13 – REVISION_ID
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+22 / 48
+
+--- PDF page 23 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Register offset Register Name Register Description
+0x15 CHIP_ID_0 This ID register provides lower 8 bits of the 16-bit chip part number
+(3222). The ID register is a read-only register whose value never
+changes
+Bit Bit Name R/W Reset Description
+7:0 CHIP_ID_0 RO 0x22 Lower 8-bit CHIP ID (0x22)
+Table 26. Register 0x14 – CHIP_ID_0
+Register offset Register Name Register Description
+0x15 CHIP_ID_1 The ID register provides the upper 8 bits of the 16-bit chip part
+number (3222). The ID register is a read-only register whose value
+never changes
+Bit Bit Name R/W Reset Description
+7:0 CHIP_ID_1 RO 0x32 Higher 8-bit CHIP ID (0x32)
+Table 27. Register 0x15 – CHIP_ID_1
+Register Name Register Description
+0x16 CHIP_ID_2 The ID register provides the Configuration image information 4 bits
+and CHIP type (2 bits). The ID register is a read-only register whose
+value never changes
+Bit Bit Name R/W Reset Description
+7:4 Configuration RO b'0000 Fixed configuration
+3:2 RSVD RAZ Reserved
+1:0 CHIP Type RO b'01 CHIP type.
+01 = Qualcomm configuration
+Table 28. Register 0x16 – CHIP_ID_2
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+23 / 48
+
+--- PDF page 24 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+10   Limiting values
+Stresses beyond those listed under absolute maximum ratings may cause permanent damage to the device.
+These are stress ratings only and functional operation of the device at these or any conditions beyond those
+indicated under recommended operating conditions is not implied. Exposure to absolute-maximum-rated
+conditions for extended periods may affect device reliability. Within these ratings, damage to the part must not
+occur, and all characteristics must still be met after the part is returned to recommended operating conditions.
+Typical (Typ) values are based on typical PVT (nominal process, VDD3V = 3 V, VDD1V8 = 1.8 V, and 25 °C)
+and Min/Max values are based on all valid PVT ranges.
+In accordance with the Absolute Maximum Rating System (IEC 60134); all voltage values are with respect to network ground terminal.
+Symbol Parameter Condition Spec guar
+by
+Min Typ Max Unit Unique Identifier
+VDD1V8 1V8 Supply voltage Design -0.5 2.4 V LTC-VOL-PRIO1-001
+VDD3V3 3V3 Supply voltage Design -0.5 4 V LTC -VOL-PRIO1-002
+SCL, SDA Design -0.5 2.4 V LTC -VOL-PRIO1-003
+RST_N Design -0.5 2.4 V LTC -VOL-PRIO1-004
+eDP, eDN Design -0.5 2.4 V LTC -VOL-PRIO1-005
+DP, DN Design -0.5 5.5 V LTC -VOL-PRIO1-006
+VI Input voltage
+ADDR Design -0.5 2.4 V LTC -VOL-PRIO1-007
+Tstg Storage
+temperature
+Design -60 +150 ° C LTC -TMP-PRIO1-008
+Human-Body Model [1] Design 2 kV LTC -VOL-PRIO1-008VESD Electrostatic
+discharge voltage Charged-Device Model [2] Design 500 V LTC -VOL-PRIO1-009
+ILATCHUP Latch-up current Design 100 mA LTC -CUR-PRIO1-012
+Table 29. Limiting values
+[1] Human Body Model: ANSI/EOS/ESD-S5.1-1994, standard for ESD sensitivity testing, Human Body Model – Component level; Electrostatic Discharge
+Association, Rome, NY, USA.
+[2] Charged Device Model: ANSI/EOS/ESD-S5.3-1-1999, standard for ESD sensitivity testing, Charged Device Model – Component level; Electrostatic
+Discharge Association, Rome, NY, USA.
+11   Recommended operating conditions
+Within these ratings, all characteristics in the following sections must be met unless noted otherwise. VPULLUP is used to refer to I2C pullup voltage in the following sections. VDD1V8 refers
+to internal voltage reference used by PTN3222 for determining the logic levels of SCL/SDA pins.
+Symbol Parameter Condition Spec
+guar by
+Min Typ Max Unit Unique Identifier
+VDD3V3 3V3 Supply voltage ATE 2.85 3 3.63 V ROC-VOL-PRIO1-001
+VDD1V8 1V8 Supply voltage ATE 1.62 1.8 1.98 V ROC-VOL-PRIO1-002
+tVDD_rampup Supply voltage ramp-up
+time
+Between 0V and VDD3V3min/VDD1
+V8min
+Bench 0.01 10 ms ROC-TIM-PRIO1-003
+VDD1V8 I2C interface pullup
+voltage
+1.8 V voltage reference used for I2C pins
+(same as VDD1V8 supply)
+ATE VDD1V8 ,min VDD1V8 VDD1V8 ,max V ROC-VOL-PRIO1-004
+SCL, SDA ATE -0.3 1.98 V ROC-VOL-PRIO1-006
+RST_N ATE -0.3 1.98 V ROC-VOL-PRIO1-007
+eDP, eDN ATE -0.3 1.32 V ROC-VOL-PRIO1-008
+DP, DN ATE -0.3 3.63 V ROC-VOL-PRIO1-009
+VI Input voltage
+ADDR ATE -0.3 1.98 V ROC-VOL-PRIO1-010
+Tamb Ambient temperature Operating in standing air environment –
+mobile/computing IOT market
+Bench -40 85 ° C ROC-TMP-PRIO1-011
+Table 30. Operating conditions
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+24 / 48
+
+--- PDF page 25 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Within these ratings, all characteristics in the following sections must be met unless noted otherwise. VPULLUP is used to refer to I2C pullup voltage in the following sections. VDD1V8 refers
+to internal voltage reference used by PTN3222 for determining the logic levels of SCL/SDA pins.
+Symbol Parameter Condition Spec
+guar by
+Min Typ Max Unit Unique Identifier
+Tj [1] Junction temperature Captured mainly to ensure simulation is
+carried out in this temp corner
+-40 125 ° C ROC-TMP-PRIO1-013
+Table 30. Operating conditions...continued
+[1] PTN3222 is simulated for functionality up to junction temperature of 125 °C, but it is not guaranteed to meet the power/current consumption specifications.
+Symbol Parameter Conditions Max Unit Unique identifier
+Rth(j-a), CSP Thermal resistance from junction to ambient [1] JESD51-9 70 °C/W THR-RES-PRIO1-001
+ΨJT, CSP Junction-to-Top of Package Thermal
+Characterization Parameter [2]
+JESD51-9, 2s2p [3] 0.25 °C/W THR-RES-PRIO1-002
+Table 31. Thermal resistance
+[1] Determined in accordance to JEDEC JESD51-2A natural convection environment. Thermal resistance data in this report is solely for a thermal
+performance comparison of one package to another in a standard specified environment. It is not meant to predict the performance of a package in an
+application-specific environment.
+[2] Thermal test board meets JEDEC specification for this package (JESD51-9)
+[3] Junction-to-Case thermal resistance determined using an isothermal cold plate. Case is defined as the bottom of the packages
+12   Characteristics
+12.1  Device characteristics
+Applicable across operating temperature and power supply ranges as mentioned under Recommended operating conditions unless otherwise noted. Typical values are specified at 25 °C
+unless otherwise noted.
+Symbol Parameter Condition Spec guar by Min Typ Max Unit Unique Identifier
+tStartup Device start-up time Time for device operation including I2C
+accesses once both supply voltages are within
+recommended operating levels
+Bench 1 ms DEV-TIM-PRIO1-001
+tSW_reset Time for software reset to
+complete
+Supply voltages are valid Bench 0.5 ms DEV-TIM-PRIO1-002
+tCfg Device parameter
+(re)configuration time
+Time for parameter (re)configuration values
+to take effect after I2C programming (or RAP
+initialization)
+Bench 0.5 ms DEV-TIM-PRIO1-003
+tDPSS_Exit Time duration that host
+has to wait before issuing
+further commands when
+PTN3222 is exiting deep
+standby
+Bench 275 μs DEV-TIM-PRIO1-033
+tPD Pin to pin differential
+propagation delay
+between eUSB2 and
+USB2 pins
+Parameter configured for maximum signal path
+latency for USB2 HS data
+Bench 3 ns DEV-TIM-PRIO1-004
+Deep standby ATE 7 μA DEV-CUR-PRIO1-005
+Connect Detect substate ATE 10 μA DEV-CUR-PRIO1-006
+L2 suspend ATE 10 μA DEV-CUR-PRIO1-007
+L1 sleep ATE 10 μA DEV-CUR-PRIO1-008
+Active LS/FS mode (w/10 pF load @ USB2 and
+2.5 pF load @ eUSB2
+ATE 6.5 mA DEV-CUR-PRIO1-009
+Active HS mode (eUSB to USB direction); no
+de-emphasis; only Rx EQ enabled on eUSB2 /
+USB2 pins; 90 Ω termination on USB2 pins and
+80 Ω on eUSB2 pins
+ATE 8 mA DEV-CUR-PRIO1-010
+Active HS mode (eUSB to USB direction) de-
+emphasis 3 dB on USB2; Rx EQ enabled on
+eUSB2 / USB2 pins; 85 Ω termination on USB2
+side and 80 Ω termination on eUSB2 side
+ATE 11 mA DEV-CUR-PRIO1-011
+Isupply,3V3 VDD3V3 Supply current
+Active HS mode (USB to eUSB direction); no
+de-emphasis; only Rx EQ enabled on eUSB2 /
+ATE 3 mA DEV-CUR-PRIO1-037
+Table 32. Device characteristics
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+25 / 48
+
+--- PDF page 26 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Applicable across operating temperature and power supply ranges as mentioned under Recommended operating conditions unless otherwise noted. Typical values are specified at 25 °C
+unless otherwise noted.
+Symbol Parameter Condition Spec guar by Min Typ Max Unit Unique Identifier
+USB2 pins; 90 Ω termination on USB2 pins and
+80 Ω on eUSB2 pins
+Active HS mode (USB to eUSB direction); de-
+emphasis 3 dB on USB2; Rx EQ enabled on
+eUSB2 /USB2 pins; 85 Ω termination on USB2
+side and 80 Ω termination on eUSB2 side
+ATE 4 mA DEV-CUR-PRIO1-038
+Deep standby ATE 50 μA DEV-CUR-PRIO1-012
+Connect Detect substate ATE 85 μA DEV-CUR-PRIO1-013
+L2 suspend ATE 85 μA DEV-CUR-PRIO1-014
+L1 sleep ATE 0.8 mA DEV-CUR-PRIO1-015
+Active LS/FS mode (w/10 pF load @ USB2 and
+2.5 pF load @ eUSB2
+ATE 3.7 mA DEV-CUR-PRIO1-016
+Active HS mode (eUSB to USB direction); no
+de-emphasis; only Rx EQ enabled on eUSB2 /
+USB2 pins; 90 Ω termination on USB2 side and
+80 Ω on eUSB2 side, 400 mV USB2 output
+swing
+ATE 47.5 mA DEV-CUR-PRIO1-017
+Active HS mode (eUSB to USB direction); de-
+emphasis 3 dB on USB2; Rx EQ enabled on
+eUSB2 / USB2 pins; 85 Ω termination on USB2
+pins and 80 Ω termination on eUSB2 pins
+ATE 55 mA DEV-CUR-PRIO1-018
+Active HS mode (USB to eUSB direction); no
+de-emphasis; only Rx EQ enabled on eUSB2 /
+USB2 pins; 90 Ω termination on USB2 side and
+80 Ω on eUSB2 side, 400 mV USB2 output
+swing
+ATE 28 mA DEV-CUR-PRIO1-039
+Isupply,1V8 VDD1V8 Supply current
+Active HS mode (USB to eUSB direction); de-
+emphasis 3 dB on USB2; Rx EQ enabled on
+eUSB2 / USB2 pins; 85 Ω termination on USB2
+pins and 80 Ω termination on eUSB2 pins
+ATE 40 mA DEV-CUR-PRIO1-040
+Current going into SCL pin when SCL is tied to
+VDD1V8 max
+ATE 1 μA DEV-CUR-PRIO1-019
+Current going into SDA pin when SDA is tied to
+VDD1V8 max
+ATE 1 μA DEV-CUR-PRIO1-020
+Ibackpower, 3V3 Back power current when
+VDD3V3 pin is shorted to
+GND
+Current into RST_N pin when RST_N is tied to
+VDD1V8 max
+ATE 1 μA DEV-CUR-PRIO1-021
+Current going into SCL pin when SCL is tied to
+VDD1V8 max
+ATE 1 μA DEV-CUR-PRIO1-022
+Current going into SDA pin when SDA is tied to
+VDD1V8 max
+ATE 1 μA DEV-CUR-PRIO1-023
+Ibackpower, 1V8 Back power current when
+VDD1V8 pin is shorted to
+GND
+Current into RST_N pin when RST_N is tied to
+VDD1V8 max
+ATE 1 μA DEV-CUR-PRIO1-024
+IINRUSH_3V3 Inrush current when
+VDD3V3 ramp up from
+0 V to final value
+Bench 1 mA DEV-CUR-PRIO1-031
+IINRUSH_1V8 Inrush current when
+VDD1V8 ramp up from
+0 V to final value
+Bench 1 mA DEV-CUR-PRIO1-032
+Table 32. Device characteristics...continued
+12.2  USB2 and eUSB2 characteristics
+Applicable across operating temperature and power supply ranges as Recommended operating conditions unless otherwise noted. Typical values are specified at 25 °C unless otherwise
+noted.
+Symbol Parameter Condition Spec guar
+by
+Min Typ Max Unit Unique Identifier
+VRX_CM_USB2 USB2 Rx common mode
+voltage
+ATE -100 500 mV USB-VOL-PRIO1-001
+VIH_LF_USB2 USB2 Low/Full Speed High-
+level input voltage
+ATE 2 V USB-VOL-PRIO1-002
+VIL_LF_USB2 USB2 Low/Full Speed Low-
+level input voltage
+ATE 0.8 V USB-VOL-PRIO1-003
+VIHZ_LF_USB2 USB2 Low/Full speed Hi-Z
+input level
+ATE 2.7 3.7 V USB-VOL-PRIO1-004
+Table 33. USB2 and eUSB2 characteristics
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+26 / 48
+
+--- PDF page 27 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Applicable across operating temperature and power supply ranges as Recommended operating conditions unless otherwise noted. Typical values are specified at 25 °C unless otherwise
+noted.
+Symbol Parameter Condition Spec guar
+by
+Min Typ Max Unit Unique Identifier
+VOL_LF_USB2 USB2 Low/Full speed Low-
+level output voltage
+ATE 0.3 V USB-VOL-PRIO1-005
+VOH_LF_USB2 USB2 Low/Full speed High-
+level output voltage
+ATE 2.8 3.7 V USB-VOL-PRIO1-006
+ZSO_LF_USB2 USB2 Transmit output
+series resistance
+ATE 40.5 49.5 Ω USB-RES-PRIO1-007
+Measured on DP/DN pin with no de-
+emphasis with 90 Ω (nominal) differential
+termination; I2C register offset address 0x08
+I2C setting = 0
+ATE 315 350 385 mV USB-VOL-PRIO1-008
+I2C setting = 1 Char 360 400 440 mV USB-VOL-PRIO1-009
+I2C setting = 2 Char 405 450 495 mV USB-VOL-PRIO1-010
+I2C setting = 3 ATE 450 500 550 mV USB-VOL-PRIO1-011
+I2C setting = 4 Char 495 550 610 mV USB-VOL-PRIO1-012
+I2C setting = 5 Char 540 600 660 mV USB-VOL-PRIO1-013
+I2C setting = 6 Char 585 650 715 mV USB-VOL-PRIO1-014
+VOP_TX_USB2 USB2 HS Tx output signal
+swing
+I2C setting = 7 ATE 630 700 770 mV USB-VOL-PRIO1-015
+Measurement on DP/DN pin @ 480 Mbps;
+with 90 Ω nominal differential termination;
+with 1 UI de-emphasis option; I2C register
+offset address 0x07
+I2C setting = 1 Char 0 1 2 dB USB-DB-PRIO1-017
+I2C setting = 2 ATE 1 2 3 dB USB-DB-PRIO1-018
+I2C setting = 3 Char 2 3 4 dB USB-DB-PRIO1-019
+I2C setting = 4 Char 3 4 5 dB USB-DB-PRIO1-020
+I2C setting = 5 ATE 4 5 6 dB USB-DB-PRIO1-021
+GDE_TX_USB2 USB2 HS Tx output signal
+de-emphasis
+I2C setting = 6 Char 5 6 7 dB USB-DB-PRIO1-022
+Measurement on DP/DN pin @ 480 Mbps;
+with 90 Ω nominal differential termination;
+(UI ~2.08ns); I2C register offset address
+0x07
+I2C setting = 1 Char 0.3 0.5 0.7 UI USB-TIM-PRIO1-024
+tDE_TX_USB2 USB2 HS Tx output signal
+de-emphasis bit duration
+I2C setting = 2 ATE 0.6 0.8 1 UI USB-TIM-PRIO1-025
+Measurement on DP/DN pin @ 480 Mbps
+(10 % to 90 % of final output level); with
+90 Ω nominal differential termination and
+10pF load capacitance; I2C register offset
+address 0x08;
+I2C setting = 0
+Bench 500 900 ps USB-TIM-PRIO1-026
+I2C setting = 1 Bench 400 800 ps USB-TIM-PRIO1-027
+tRise_TX_HS_USB2 USB2 HS Tx Rise/fall time
+I2C setting = 2 Bench 300 700 ps USB-TIM-PRIO1-028
+Measurement at 240 MHz with reference
+to DC to 1 MHz; I2C register offset address
+0x06
+I2C setting = 0
+Bench -1 0 1 dB USB-DB-PRIO1-029
+I2C setting = 1 Bench 0 1 2 dB USB-DB-PRIO1-030
+I2C setting = 2 Bench 1 2 3 dB USB-DB-PRIO1-031
+I2C setting = 3 Bench 2 3 4 dB USB-DB-PRIO1-032
+GEQ_RX_USB2 USB2 HS Rx input
+equalization
+I2C setting = 4 Bench 3 4 5 dB USB-DB-PRIO1-033
+Measured on DP/DN pin; I2C register offset
+address 0x09
+I2C setting = 4
+Char 72 80 88 Ω USB-RES-PRIO1-034
+I2C setting = 3 Char 75 85 95 Ω USB-RES-PRIO1-035
+I2C setting = 2 ATE 80 90 100 Ω USB-RES-PRIO1-036
+I2C setting = 1 Char 85 95 105 Ω USB-RES-PRIO1-037
+RRCV_DIF_USB2 USB2 HS Rx differential
+receiver termination
+I2C setting = 0 ATE 90 100 110 Ω USB-RES-PRIO1-038
+Table 33. USB2 and eUSB2 characteristics...continued
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+27 / 48
+
+--- PDF page 28 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Applicable across operating temperature and power supply ranges as Recommended operating conditions unless otherwise noted. Typical values are specified at 25 °C unless otherwise
+noted.
+Symbol Parameter Condition Spec guar
+by
+Min Typ Max Unit Unique Identifier
+Measured on DP/DN pin; with 90 Ω nominal
+differential termination; I2C register offset
+address 0x06
+I2C setting = 0
+ATE 25 50 75 mV USB-VOL-PRIO1-039
+I2C setting = 1 Char 40 65 90 mV USB-VOL-PRIO1-040
+I2C setting = 2 Char 60 85 110 mV USB-VOL-PRIO1-041
+I2C setting = 3 Char 70 95 120 mV USB-VOL-PRIO1-042
+I2C setting = 4 ATE 85 110 135 mV USB-VOL-PRIO1-043
+I2C setting = 5 ATE 100 125 150 mV USB-VOL-PRIO1-044
+I2C setting = 6 Char 115 140 165 mV USB-VOL-PRIO1-045
+VSQ_RX_USB2 USB2 HS Rx squelch
+detection threshold
+I2C setting = 7 Char 130 155 180 mV USB-VOL-PRIO1-046
+Low to High amplitude transition measured
+on DP/DN pin under disconnect condition;
+I2C register offset address 0x0A
+I2C setting = 0
+ATE 525 575 625 mV USB-VOL-PRIO1-047
+I2C setting = 1 Char 625 675 725 mV USB-VOL-PRIO1-048
+I2C setting = 2 Char 725 775 825 mV USB-VOL-PRIO1-049
+VDIS_HS_USB2 USB2 HS Rx disconnect
+detection detection
+threshold
+I2C setting = 3 ATE 825 875 925 mV USB-VOL-PRIO1-050
+Measured on DP/DN pin (10-90% of final
+voltage level); with 90 Ω nominal differential
+termination; I2C register offset address 0x08
+I2C setting = 0
+Bench 8 20 ns USB-TIM-PRIO1-051VRISE_TX_FS_USB2 USB2 FS Tx Rise/Fall time
+control
+I2C setting = 1 Bench 4 10 ns USB-TIM-PRIO1-052
+Total added jitter on USB2
+HS
+Measured on DP/DN pin with 90 Ω nominal
+differential termination with BER 1e-12
+reference; PRBS HS input data payload with
+USB2 bit stuffing; clean input signal level 75
+mV;
+Bench 25 40 ps USB-TIM-PRIO1-053
+tJITTER_eUSB2 Total added jitter on eUSB2
+HS
+Measured on eDP/eDN pin with 80 Ω
+nominal differential termination with BER
+1e-12 reference; PRBS HS input data
+payload with USB2 bit stuffing; clean input
+signal level 100 mV;
+Bench 25 40 ps USB-TIM-PRIO1-088
+VRX_CM_eUSB2 eUSB2 HS Rx DC common
+mode voltage range
+ATE 120 280 mV USB-VOL-PRIO1-054
+CRX_CM_eUSB2 eUSB2 HS center tapped
+capacitance
+Bench 15 50 pF USB-CAP-PRIO1-055
+VRX_DIF_SENS_ eUSB2 eUSB2 HS Rx sensitivity Bench 25 50 +/-mV USB-VOL-PRIO1-056
+RRCV_DIF_eUSB2 eUSB2 HS Rx differential
+receiver termination
+Measured on eDP/eDN pin; ATE 72 80 88 Ω USB-RES-PRIO1-057
+Measured on eDP/eDN pin with no de-
+emphasis with 80 Ω (nominal) differential
+termination; I2C register offset address 0x05
+I2C setting = 0
+Char 140 180 220 mV USB-VOL-PRIO1-058
+I2C setting = 1 ATE 160 200 240 mV USB-VOL-PRIO1-059
+I2C setting = 2 ATE 180 220 260 mV USB-VOL-PRIO1-060
+VOP_TX_eUSB2 eUSB2 HS Tx output signal
+swing
+I2C setting = 3 Char 200 240 280 mV USB-VOL-PRIO1-061
+Measurement at 240 MHz with reference
+to DC- 1 MHz; referenced to 200 mV
+(terminated) Tx signaling; I2C register offset
+address 0x05
+I2C setting = 1 Char 0 1 2 dB USB-DB-PRIO1-063
+I2C setting = 2 Char 1 2 3 dB USB-DB-PRIO1-064
+GTX_DE_eUSB2 eUSB2 HS Tx de-emphasis
+as measured on eDP/eDN
+pin
+I2C setting = 3 ATE 2 3 4 dB USB-DB-PRIO1-065
+Measurement at 240 MHz with reference to
+DC- 1 MHz; I2C register offset address 0x04
+I2C setting = 0
+Bench -1 0 1 dB USB-DB-PRIO1-066
+I2C setting = 1 Bench 0 1 2 dB USB-DB-PRIO1-067
+I2C setting = 2 Bench 1 2 3 dB USB-DB-PRIO1-068
+GRX_EQ_eUSB2 eUSB2 HS Rx equalization
+as measured on eDP/eDN
+pin
+I2C setting = 3 Bench 2 3 4 dB USB-DB-PRIO1-069
+Table 33. USB2 and eUSB2 characteristics...continued
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+28 / 48
+
+--- PDF page 29 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Applicable across operating temperature and power supply ranges as Recommended operating conditions unless otherwise noted. Typical values are specified at 25 °C unless otherwise
+noted.
+Symbol Parameter Condition Spec guar
+by
+Min Typ Max Unit Unique Identifier
+I2C setting = 4 Bench 3 4 5 dB USB-DB-PRIO1-070
+Measured on eDP/eDN pin; with 80 Ω
+nominal differential termination; I2C register
+offset address 0x04
+I2C setting = 0
+Char 25 50 75 mV USB-VOL-PRIO1-071
+I2C setting = 1 ATE 40 65 90 mV USB-VOL-PRIO1-072
+I2C setting = 2 ATE 60 85 110 mV USB-VOL-PRIO1-073
+VSQ_RX_eUSB2 eUSB2 HS Rx squelch
+threshold as measured on
+eDP/eDN pin
+I2C setting = 3 Char 70 95 120 mV USB-VOL-PRIO1-074
+VCM_RX_AC_eUSB2 eUSB2 HS RX AC common
+mode voltage
+CM noise band (50 MHz to 480 MHz) Bench 60 +/-m
+Vpeak
+USB-VOL-PRIO1-075
+VOL_LF_eUSB2 eUSB2 LS/FS Low-level
+output voltage
+(0.15 x internally derived 1.2 V reference
+from VDD1V8)
+ATE 0.18 V USB-VOL-PRIO1-076
+VOH_LF_eUSB2 eUSB2 LS/FS High-level
+output voltage
+(0.85 x internally derived 1.2 V reference
+from VDD1V8)
+ATE 1.02 V USB-VOL-PRIO1-077
+VIL_LF_eUSB2 eUSB2 LS/FS Low-level
+input voltage
+(0.35 x internally derived 1.2 V reference
+from VDD1V8)
+ATE -0.1 0.42 V USB-VOL-PRIO1-078
+VIH_LF_eUSB2 eUSB2 LS/FS High-level
+input voltage
+(0.65 x internally derived 1.2 V reference
+from VDD1V8)
+ATE 0.78 V USB-VOL-PRIO1-079
+VHysteresis_eUSB2 eUSB2 LS/FS Rx
+Hysteresis
+(0.04 x internally derived 1.2 V reference
+from VDD1V8min)
+Bench 32 130 mV USB-VOL-PRIO1-080
+ZTXSRC_LF_eUSB2 eUSB2 LS/FS Transmit
+output impedance
+ATE 28 60 Ω USB-RES-PRIO1-081
+VCM_TX_AC_USB2 USB2 HS TX AC common
+mode voltage (measured
+when 400mV USB2
+HS Tx signaling level is
+selected and with 90Ohm
+termination) at USB2 pins
+Measured spectral content from 800 MHz to
+2 GHz frequency band
+Bench 22 mVrms USB-VOL-PRIO1-082
+Freq = 720 MHz Bench -57 -49 dBV USB-DB-PRIO1-083
+Freq = 960 MHz Bench -41 -35 dBV USB-DB-PRIO1-084
+Freq = 1.2 GHz Bench -59 -51 dBV USB-DB-PRIO1-085
+VCM_TX_AC_RF_USB2 USB2 HS TX AC common
+mode voltage at specific
+harmonic frequency
+(measured when 400 mV
+USB2 HS Tx signaling level
+is selected and with 90 Ω
+termination) at USB2 pins;
+all dB level referenced
+to signal level at Nyquist
+frequency of 240 MHz
+Freq = 1.44 GHz Bench -43 -38 dBV USB-DB-PRIO1-086
+tresponse Response time to wake
+up and activate redriver
+data path for USB2 packet
+transmission
+Bench 4 UI USB-TIM-PRIO1-087
+Low to high transition ATE 4.2 4.4 4.9 V USB-VOL-PRIO1-089VOVP,Th VBUS Over voltage
+detector on DP and DN pins
+High to low transition ATE 3.9 4.2 4.9 V USB-VOL-PRIO1-090
+VCRS USB2 LS cross-over
+voltage
+ATE 1.3 - 2 V USB-VOL-PRIO1-103
+Table 33. USB2 and eUSB2 characteristics...continued
+12.3  I2C dynamic/static characteristics
+Applicable across operating temperature and power supply ranges as recommended operating conditions unless otherwise noted. Typical values are specified at 25 °C unless otherwise
+noted.
+Symbol Parameter Condition Spec guar by Min Typ Max Unit Unique Identifier
+fI2C I2C clock frequency Standard mode ATE 0 100 kHz STD-FRQ-PRIO1-001
+RPULLUP I2C interface pull up
+resistors on SCL/SDA
+lines
+System Requirement 0.567 2.2 2.83 kΩ STD-RES-PRIO1-002
+VIH High level input voltage Standard mode; 1.8 V ATE 0.7 x
+VDD1V8
+V STD-VOL-PRIO1-003
+VIL Low level input voltage Standard mode; 1.8 V ATE -0.3 0.3 x
+VDD1V8
+V STD-VOL-PRIO1-004
+Table 34. Standard mode I2C characteristics
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+29 / 48
+
+--- PDF page 30 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Applicable across operating temperature and power supply ranges as recommended operating conditions unless otherwise noted. Typical values are specified at 25 °C unless otherwise
+noted.
+Symbol Parameter Condition Spec guar by Min Typ Max Unit Unique Identifier
+Vhys Hysteresis of Schmitt
+trigger inputs
+Standard mode: 1.8 V Bench 0.05 x
+VDD1V8
+V STD-VOL-PRIO1-005
+VOL Low level output
+voltage
+Standard mode, 2mA sink current;
+VDD1V8 < 2 V
+ATE 0 0.2 x
+VDD1V8
+V STD-VOL-PRIO1-006
+IOL Low level output current Standard mode, VOL = 0.4 V; ATE 3 mA STD-CUR-PRIO1-007
+IIL Low level input current Standard mode, Pin voltage =
+0.1VPULLUP to 0.9VPULLUP, max
+ATE -10 10 uA STD-CUR-PRIO1-008
+CI Capacitance of I/O pins Standard mode Bench 10 pF STD-CAP-PRIO1-009
+tHD,STA Hold time (repeated-
+START) condition
+Standard mode ATE 4 us STD-TIM-PRIO1-010
+tLOW Low period of I2C clock Standard mode ATE 4.7 us STD-TIM-PRIO1-011
+tHIGH High period of I2C clock Standard mode ATE 4 us STD-TIM-PRIO1-012
+tSU,STA Setup time (REPEAT)
+START condition
+Standard mode ATE 4.7 us STD-TIM-PRIO1-013
+tHD, DAT Data hold time Standard mode ATE 0 us STD-TIM-PRIO1-014
+tSU, DAT Data setup time Standard mode ATE 250 ns STD-TIM-PRIO1-015
+tSU, STO Setup time for STOP
+condition
+Standard mode ATE 4 us STD-TIM-PRIO1-016
+tBUF Bus free time between
+STOP and START
+condition
+Standard mode ATE 4.7 us STD-TIM-PRIO1-017
+tr Rise time of SCL/SDA
+signals
+Standard mode Bench 20 1000 ns STD-TIM-PRIO1-018
+tf Fall time of SCL/SDA
+signals
+Standard mode Bench 20 x
+(VDD1V8 /5.5)
+300 ns STD-TIM-PRIO1-019
+tVD,DAT Data valid time Standard mode ATE 3.45 us STD-TIM-PRIO1-020
+tVD,ACK Data valid acknowledge
+time
+Standard mode ATE 3.45 us STD-TIM-PRIO1-021
+tSP Pulse width of
+spikes that must be
+suppressed by input
+filter
+Standard mode ATE 0 50 ns STD-TIM-PRIO1-022
+VnL Noise margin at the
+LOW level
+Standard mode, for each connected
+device (including hysteresis)
+Bench 0.1 x
+VDD1V8
+V STD-VOL-PRIO1-023
+VnH Noise margin at the
+HIGH level
+Standard mode, for each connected
+device (including hysteresis)
+Bench 0.2 x
+VDD1V8
+V STD-VOL-PRIO1-024
+Cb Capacitive load for
+each bus line
+Standard mode, system requirement System 400 pF STD-CAP-PRIO1-025
+Table 34. Standard mode I2C characteristics...continued
+Applicable across operating temperature and power supply ranges as mentioned in Recommended operating conditions unless otherwise noted. Typical values are specified at 25 °C
+unless otherwise noted.
+Symbol Parameter Condition Spec guar by Min Typ Max Unit Unique Identifier
+fI2C I2C clock frequency Fast mode ATE 0 400 kHz FST-FRQ-PRIO1-001
+RPULLUP I2C interface pull up
+resistors on SCL/SDA
+lines
+System Requirement 0.567 2.2 2.83 kΩ FST-RES-PRIO1-002
+VIH High level input voltage Fast mode; 1.8 V ATE 0.7 x
+VDD1V8
+V FST-VOL-PRIO1-003
+VIL Low level input voltage Fast mode; 1.8 V ATE -0.3 0.3 x
+VDD1V8
+V FST-VOL-PRIO1-004
+Vhys Hysteresis of Schmitt
+trigger inputs
+Fast mode; 1.8 V Bench 0.05 x
+VDD1V8
+V FST-VOL-PRIO1-005
+VOL Low level output
+voltage
+Fast mode, 2mA sink current;
+VDD1V8 < 2 V
+ATE 0 0.2 x
+VDD1V8
+V FST-VOL-PRIO1-006
+IOL Low level output current Fast mode, VOL = 0.4 V; ATE 3 mA FST-CUR-PRIO1-007
+IIL Low level input current Fast mode, Pin voltage = 0.1VPULLUP
+to 0.9VPULLUP, max
+ATE -10 10 uA FST-CUR-PRIO1-008
+Table 35. Fast mode I2C characteristics
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+30 / 48
+
+--- PDF page 31 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Applicable across operating temperature and power supply ranges as mentioned in Recommended operating conditions unless otherwise noted. Typical values are specified at 25 °C
+unless otherwise noted.
+Symbol Parameter Condition Spec guar by Min Typ Max Unit Unique Identifier
+CI Capacitance of I/O pins Fast mode Bench 10 pF FST-CAP-PRIO1-009
+tHD,STA Hold time (repeated-
+START) condition
+Fast mode ATE 0.6 us FST-TIM-PRIO1-010
+tLOW Low period of I2C clock Fast mode ATE 1.3 us FST-TIM-PRIO1-011
+tHIGH High period of I2C clock Fast mode ATE 0.6 us FST-TIM-PRIO1-012
+tSU,STA Setup time (REPEAT)
+START condition
+Fast mode ATE 0.6 us FST-TIM-PRIO1-013
+tHD, DAT Data hold time Fast mode ATE 0 us FST-TIM-PRIO1-014
+tSU, DAT Data setup time Fast mode ATE 100 ns FST-TIM-PRIO1-015
+tSU, STO Setup time for STOP
+condition
+Fast mode ATE 0.6 us FST-TIM-PRIO1-016
+tBUF Bus free time between
+STOP and START
+condition
+Fast mode ATE 1.3 us FST-TIM-PRIO1-017
+tr Rise time of SCL/SDA
+signals
+Fast mode Bench 20 300 ns FST-TIM-PRIO1-018
+tf Fall time of SCL/SDA
+signals
+Fast mode Bench 20 x
+(VDD1V8 /5.5)
+300 ns FST-TIM-PRIO1-019
+tVD,DAT Data valid time Fast mode ATE 0.9 us FST-TIM-PRIO1-020
+tVD,ACK Data valid acknowledge
+time
+Fast mode ATE 0.9 us FST-TIM-PRIO1-021
+tSP Pulse width of
+spikes that must be
+suppressed by input
+filter
+Fast mode ATE 0 50 ns FST-TIM-PRIO1-022
+VnL Noise margin at the
+LOW level
+Fast mode, for each connected device
+(including hysteresis)
+Bench 0.1 x
+VDD1V8
+V FST-VOL-PRIO1-023
+VnH Noise margin at the
+HIGH level
+Fast mode, for each connected device
+(including hysteresis)
+Bench 0.2 x
+VDD1V8
+V FST-VOL-PRIO1-024
+Cb Capacitive load for
+each bus line
+Fast mode, system requirement System 400 pF FST-CAP-PRIO1-025
+Table 35. Fast mode I2C characteristics...continued
+002aac938
+tf
+70 %
+30 %SDA
+tf
+70 %
+30 %
+S
+tr
+70 %
+30 %
+70 %
+30 %
+tHD;DAT
+SCL
+1 / fSCL
+1st clock cycle
+70 %
+30 %
+70 %
+30 %
+tr
+tVD;DAT
+cont.
+cont.
+SDA
+SCL
+tSU;STA tHD;STA
+Sr
+tSP tSU;STO
+tBUF
+P S
+tHIGH
+9th clocktHD;STA tLOW
+70 %
+30 %
+tVD;ACK
+9th clock
+tSU;DAT
+VIL = 0.3VDD; VIH = 0.7VDD
+Figure 13. Definition of timing for Fast/Standard mode devices on the I2C bus
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+31 / 48
+
+--- PDF page 32 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Applicable across operating temperature and power supply ranges as recommended operating conditions unless otherwise noted. Typical values are specified
+at 25 °C unless otherwise noted.
+Symbol Parameter Condition Spec guar by Min Typ Max Unit Unique Identifier
+fI2C I2C clock frequency Fast mode plus ATE 0 1000 kHz FMPLUS-FRQ-PRIO1-001
+RPULLUP I2C interface pull up
+resistors on SCL/
+SDA lines
+System Requirement 0.567 2.2 2.83 kΩ FMPLUS-RES-PRIO1-002
+VIH High level input
+voltage
+Fast mode plus; 1.8 V ATE 0.7 x
+VDD1V8
+V FMPLUS-VOL-PRIO1-003
+VIL Low level input
+voltage
+Fast mode plus; 1.8 V ATE -0.3 0.3 x
+VDD1V8
+V FMPLUS-VOL-PRIO1-004
+Vhys Hysteresis of
+Schmitt trigger
+inputs
+Fast mode plus; 1.8 V Bench 0.05 x
+VDD1V8
+V FMPLUS-VOL-PRIO1-005
+VOL Low level output
+voltage
+2mA sink current; VDD1V8
+< 2 V
+ATE 0 0.2 x
+VDD1V8
+V FMPLUS-VOL-PRIO1-006
+IOL Low level output
+current
+VOL = 0.4 V; Fast mode
+plus
+ATE 20 mA FMPLUS-CUR-PRIO1-007
+IIL Low level input
+current
+Pin voltage = 0.1VPULLUP to
+0.9VPULLUP, max
+ATE -10 10 uA FMPLUS-CUR-PRIO1-008
+CI Capacitance of I/O
+pins
+Bench 10 pF FMPLUS-CAP-PRIO1-009
+tHD,STA Hold time (repeated-
+START) condition
+Fast mode plus ATE 0.26 us FMPLUS-TIM-PRIO1-010
+tLOW Low period of I2C
+clock
+Fast mode plus ATE 0.5 us FMPLUS-TIM-PRIO1-011
+tHIGH High period of I2C
+clock
+Fast mode plus ATE 0.26 us FMPLUS-TIM-PRIO1-012
+tSU,STA Setup time
+(REPEAT) START
+condition
+Fast mode plus ATE 0.26 us FMPLUS-TIM-PRIO1-013
+tHD, DAT Data hold time ATE 0 us FMPLUS-TIM-PRIO1-014
+tSU, DAT Data setup time Fast mode plus ATE 50 ns FMPLUS-TIM-PRIO1-015
+tSU, STO Setup time for
+STOP condition
+Fast mode plus ATE 0.26 us FMPLUS-TIM-PRIO1-016
+tBUF Bus free time
+between STOP and
+START condition
+Fast mode plus ATE 0.5 us FMPLUS-TIM-PRIO1-017
+tr Rise time of SCL/
+SDA signals
+Fast mode plus Bench 0 120 ns FMPLUS-TIM-PRIO1-018
+tf Fall time of SCL/
+SDA signals
+Fast mode plus Bench 20 x(VDD1
+V8
+/5.5)
+120 ns FMPLUS-TIM-PRIO1-019
+tVD,DAT Data valid time Fast mode plus ATE 0.45 us FMPLUS-TIM-PRIO1-020
+tVD,ACK Data valid
+acknowledge time
+Fast mode plus ATE 0.45 us FMPLUS-TIM-PRIO1-021
+tSP Pulse width of
+spikes that must be
+suppressed by input
+filter
+ATE 0 50 ns FMPLUS-TIM-PRIO1-022
+VnL Noise margin at the
+LOW level
+Fast mode plus, for
+each connected device
+(including hysteresis)
+Bench 0.1 x
+VDD1V8
+V FMPLUS-VOL-PRIO1-023
+VnH Noise margin at the
+HIGH level
+Fast mode plus, for
+each connected device
+(including hysteresis)
+Bench 0.2 x
+VDD1V8
+V FMPLUS-VOL-PRIO1-024
+Cb Capacitive load for
+each bus line
+System Requirement 400 pF FMPLUS-CAP-PRIO1-025
+Table 36. Fast mode plus I2C characteristics
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+32 / 48
+
+--- PDF page 33 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+12.4  ADDR pin characteristics
+Symbol Parameter Condition Spec guar by Min Typ Max Unit Unique Identifier
+VIH1 High level input voltage Pin connected to
+VDD1V8
+ATE 0.9 x
+VDD1V8
+VDD1V8+0.
+3
+V QAT-VOL-PRIO1-001
+VIH2 High level input voltage Rext = 56 kΩ (10 %
+resistor) pullup to
+VDD1V8
+ATE 0.575 x
+VDD1V8
+0.725 x
+VDD1V8
+V QAT-VOL-PRIO1-009
+VIM High level input voltage Rext = 200 kΩ (10 %
+resistor) pullup to
+VDD1V8
+ATE 0.275 x
+VDD1V8
+0.425 x
+VDD1V8
+V QAT-VOL-PRIO1-010
+VIL Low level input voltage Pin connected to
+GND
+ATE 0.1 x
+VDD1V8
+V QAT-VOL-PRIO1-002
+Ibckcur Back current on pin when there is no
+power
+VDD1V8=0
+(no power supply to
+RST_N Input pad)
+ATE 1 μA QAT-CUR-PRIO1-003
+IIL Pin Leakage current Pin connected directly
+to GND
+ATE 5 μA QAT-CUR-PRIO1-004
+Cpin Pin capacitance Bench 10 pF QAT-CAP-PRIO1-007
+Rpd Internal pulldown resistor ATE 86 105 122 kΩ QAT-RES-PRIO1-008
+Table 37. ADDR characteristics
+12.5  RST_N pin characteristics
+Symbol Parameter Condition Spec guar by Min Typ Max Unit Unique Identifier
+VIH High level input voltage 1.8 V IO operation ATE 1.2 V BIN-VOL-PRIO1-001
+VIL Low level input voltage 1.8 V IO operation ATE 0.3 V BIN-VOL-PRIO1-002
+Ibckcur Back current on pin when there
+is no power
+VDD1V8=0
+(no power supply to
+RST_N Input pad)
+ATE 1 uA BIN-CUR-PRIO1-003
+IIL Pin Leakage current Pin connected
+directly to GND
+ATE 5 uA BIN-CUR-PRIO1-004
+tRST_N_SP Minimum De-glitch duration Bench 200 ns BIN-TIM-PRIO1-005
+Cpin Pin capacitance Bench 10 pF BIN-CAP-PRIO1-006
+Table 38. RST_N characteristics
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+33 / 48
+
+--- PDF page 34 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+13   Package outline
+13.1  SOT2063-1 (WLCSP12)
+Figure 14. Package outline SOT2063-1 (WLCSP12) (1/5)
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+34 / 48
+
+--- PDF page 35 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Figure 15. Package outline SOT2063-1 (WLCSP12) (2/5)
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+35 / 48
+
+--- PDF page 36 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Figure 16. Package outline SOT2063-1 (WLCSP12) (3/5)
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+36 / 48
+
+--- PDF page 37 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Figure 17. Package outline SOT2063-1 (WLCSP12) (4/5)
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+37 / 48
+
+--- PDF page 38 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Figure 18. Package outline SOT2063-1 (WLCSP12) (5/5)
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+38 / 48
+
+--- PDF page 39 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+13.2  UBM stack-up information
+aaa-045722
+BD: 210 µm
+BH: 130 µm
+PBO: 7.5 µm
+160 µm
+175 µm
+UBM: 200 µm
+Figure 19. UBM stack-up
+Parameter Description (typical)
+Package size 1.55mm x 1.18mm x 0.455mm
+Ball matrix 4 x 3
+Ball pitch 350um
+Ball diameter (after reflow) 210um
+Ball height (after reflow) 130um
+Table 39. UBM stack-up parameters
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+39 / 48
+
+--- PDF page 40 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+14   Packing information
+14.1  SOT2063-1 WLCSP12, wafer level chip scale package, 12 terminals, 0.35 mm
+pitch, 1.55 mm x 1.18 mm x 0.455 mm body (backside coating included)
+14.1.1  Dimensions and quantities
+Reel dimensions
+d x w (mm) [1]
+SPQ/PQ (pcs) Reels per box
+330 x 8 8000 1
+Table 40. Dimension and quantities
+[1] d = reel diameter; w = tape width
+14.1.2  Product orientation
+aaa-017857
+ball 1
+Ball 1 is in quadrant 1.
+Figure 20. Product orientation in carrier tape
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+40 / 48
+
+--- PDF page 41 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+14.1.3  Carrier tape dimensions
+NOTES:
+1. All dimensions are in millimeters2. Tolerance - .X = +/-0.25.XX = 0.10Unless otherwise specified3. ESD range: 104to <1011ohms4. 10 pitched cumulative tolerance of sprocket holes +/-0.2mm5. Camber in compliance to EIA 4816. Material - Polycarbonate (PC)
+Figure 21. Carrier tape dimensions
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+41 / 48
+
+--- PDF page 42 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+15   Abbreviations
+Acronym Description
+AFE Analog Front End
+CDM Charged Device Model
+HBM Human Body Model
+TX Transmitter
+RX Receiver
+eUSB Embedded USB
+LS Low Speed mode of USB2 specification (1.5 Mbps)
+FS Full Speed mode of USB2 specification (12 Mbps)
+HS High Speed mode of USB2 specification (480 Mbps)
+SE0 Single Ended Zero
+SE1 Single Ended One
+DSP Downstream port
+USP Upstream port
+SE Single Ended
+SI Signal Integrity
+EQ Equalization
+LPM Link Power Management
+ESE1 Extended SE1
+SCM Start of Control Message
+CM Control Message
+RAP Register Access Protocol
+DRD Dual Role Device
+SOP Start of Packet
+EOP End of Packet
+Table 41. Abbreviations
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+42 / 48
+
+--- PDF page 43 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+16   References
+[1] UM10204 — I2C-bus specification and user manual, NXP Semiconductors
+[2] USB-IF organization
+document repository for
+eUSB2 specification
+— Embedded USB2 Physical Layer Supplement to USB Revision 2.0 specification, Revision
+1.1, November 3, 2018
+[3] USB-IF organization
+document repository for
+USB2 specification
+— Universal Serial Bus Specification, Rev 2.0, April 27, 2000 and approved ECNs as per
+USB2.0 document package release (usb_20_20190524.zip)
+[4] Platform partner
+specification
+— Platform partner specification
+[5] USB BC1.2 specification — USB Battery Charging (BC1.2) specification from USB-IF
+[6] AN13637 — PTN3222BUK Application note for handling abnormal pulses at the end of EOP, 2022
+[7] AN13462 — PTN3222 Layout guidelines, 2022
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+43 / 48
+
+--- PDF page 44 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+17   Revision history
+Document ID Release Date Description
+PTN3222DUK v1.1 1 December 2023 • Figure 8, Figure 9, and Figure 10: Corrected "eUSB2" to "USB2"
+in right hand side connector
+• Changed "PTN3222" to "PTN3222DUK" in document header;
+removed underscore in document ID
+PTN3222_DUK v1.0 17 August 2022 • Initial version
+Revision history
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+44 / 48
+
+--- PDF page 45 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Legal information
+Data sheet status
+Document status[1][2] Product status[3] Definition
+Objective [short] data sheet Development This document contains data from the objective specification for product
+development.
+Preliminary [short] data sheet Qualification This document contains data from the preliminary specification.
+Product [short] data sheet Production This document contains the product specification.
+[1] Please consult the most recently issued document before initiating or completing a design.
+[2] The term 'short data sheet' is explained in section "Definitions".
+[3] The product status of device(s) described in this document may have changed since this document was published and may differ in case of multiple
+devices. The latest product status information is available on the Internet at URL https://www.nxp.com.
+Definitions
+Draft — A draft status on a document indicates that the content is still
+under internal review and subject to formal approval, which may result
+in modifications or additions. NXP Semiconductors does not give any
+representations or warranties as to the accuracy or completeness of
+information included in a draft version of a document and shall have no
+liability for the consequences of use of such information.
+Short data sheet — A short data sheet is an extract from a full data sheet
+with the same product type number(s) and title. A short data sheet is
+intended for quick reference only and should not be relied upon to contain
+detailed and full information. For detailed and full information see the
+relevant full data sheet, which is available on request via the local NXP
+Semiconductors sales office. In case of any inconsistency or conflict with the
+short data sheet, the full data sheet shall prevail.
+Product specification — The information and data provided in a Product
+data sheet shall define the specification of the product as agreed between
+NXP Semiconductors and its customer, unless NXP Semiconductors and
+customer have explicitly agreed otherwise in writing. In no event however,
+shall an agreement be valid in which the NXP Semiconductors product
+is deemed to offer functions and qualities beyond those described in the
+Product data sheet.
+Disclaimers
+Limited warranty and liability — Information in this document is believed
+to be accurate and reliable. However, NXP Semiconductors does not give
+any representations or warranties, expressed or implied, as to the accuracy
+or completeness of such information and shall have no liability for the
+consequences of use of such information. NXP Semiconductors takes no
+responsibility for the content in this document if provided by an information
+source outside of NXP Semiconductors.
+In no event shall NXP Semiconductors be liable for any indirect, incidental,
+punitive, special or consequential damages (including - without limitation -
+lost profits, lost savings, business interruption, costs related to the removal
+or replacement of any products or rework charges) whether or not such
+damages are based on tort (including negligence), warranty, breach of
+contract or any other legal theory.
+Notwithstanding any damages that customer might incur for any reason
+whatsoever, NXP Semiconductors’ aggregate and cumulative liability
+towards customer for the products described herein shall be limited in
+accordance with the Terms and conditions of commercial sale of NXP
+Semiconductors.
+Right to make changes — NXP Semiconductors reserves the right to
+make changes to information published in this document, including without
+limitation specifications and product descriptions, at any time and without
+notice. This document supersedes and replaces all information supplied prior
+to the publication hereof.
+Suitability for use — NXP Semiconductors products are not designed,
+authorized or warranted to be suitable for use in life support, life-critical or
+safety-critical systems or equipment, nor in applications where failure or
+malfunction of an NXP Semiconductors product can reasonably be expected
+to result in personal injury, death or severe property or environmental
+damage. NXP Semiconductors and its suppliers accept no liability for
+inclusion and/or use of NXP Semiconductors products in such equipment or
+applications and therefore such inclusion and/or use is at the customer’s own
+risk.
+Applications — Applications that are described herein for any of these
+products are for illustrative purposes only. NXP Semiconductors makes no
+representation or warranty that such applications will be suitable for the
+specified use without further testing or modification.
+Customers are responsible for the design and operation of their
+applications and products using NXP Semiconductors products, and NXP
+Semiconductors accepts no liability for any assistance with applications or
+customer product design. It is customer’s sole responsibility to determine
+whether the NXP Semiconductors product is suitable and fit for the
+customer’s applications and products planned, as well as for the planned
+application and use of customer’s third party customer(s). Customers should
+provide appropriate design and operating safeguards to minimize the risks
+associated with their applications and products.
+NXP Semiconductors does not accept any liability related to any default,
+damage, costs or problem which is based on any weakness or default
+in the customer’s applications or products, or the application or use by
+customer’s third party customer(s). Customer is responsible for doing all
+necessary testing for the customer’s applications and products using NXP
+Semiconductors products in order to avoid a default of the applications
+and the products or of the application or use by customer’s third party
+customer(s). NXP does not accept any liability in this respect.
+Limiting values — Stress above one or more limiting values (as defined in
+the Absolute Maximum Ratings System of IEC 60134) will cause permanent
+damage to the device. Limiting values are stress ratings only and (proper)
+operation of the device at these or any other conditions above those
+given in the Recommended operating conditions section (if present) or the
+Characteristics sections of this document is not warranted. Constant or
+repeated exposure to limiting values will permanently and irreversibly affect
+the quality and reliability of the device.
+Terms and conditions of commercial sale — NXP Semiconductors
+products are sold subject to the general terms and conditions of commercial
+sale, as published at https://www.nxp.com/profile/terms, unless otherwise
+agreed in a valid written individual agreement. In case an individual
+agreement is concluded only the terms and conditions of the respective
+agreement shall apply. NXP Semiconductors hereby expressly objects to
+applying the customer’s general terms and conditions with regard to the
+purchase of NXP Semiconductors products by customer.
+No offer to sell or license — Nothing in this document may be interpreted
+or construed as an offer to sell products that is open for acceptance or
+the grant, conveyance or implication of any license under any copyrights,
+patents or other industrial or intellectual property rights.
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+45 / 48
+
+--- PDF page 46 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Quick reference data — The Quick reference data is an extract of the
+product data given in the Limiting values and Characteristics sections of this
+document, and as such is not complete, exhaustive or legally binding.
+Export control — This document as well as the item(s) described herein
+may be subject to export control regulations. Export might require a prior
+authorization from competent authorities.
+Suitability for use in non-automotive qualified products — Unless
+this document expressly states that this specific NXP Semiconductors
+product is automotive qualified, the product is not suitable for automotive
+use. It is neither qualified nor tested in accordance with automotive testing
+or application requirements. NXP Semiconductors accepts no liability for
+inclusion and/or use of non-automotive qualified products in automotive
+equipment or applications.
+In the event that customer uses the product for design-in and use in
+automotive applications to automotive specifications and standards,
+customer (a) shall use the product without NXP Semiconductors’ warranty
+of the product for such automotive applications, use and specifications, and
+(b) whenever customer uses the product for automotive applications beyond
+NXP Semiconductors’ specifications such use shall be solely at customer’s
+own risk, and (c) customer fully indemnifies NXP Semiconductors for any
+liability, damages or failed product claims resulting from customer design and
+use of the product for automotive applications beyond NXP Semiconductors’
+standard warranty and NXP Semiconductors’ product specifications.
+Translations — A non-English (translated) version of a document, including
+the legal information in that document, is for reference only. The English
+version shall prevail in case of any discrepancy between the translated and
+English versions.
+Security — Customer understands that all NXP products may be subject to
+unidentified vulnerabilities or may support established security standards or
+specifications with known limitations. Customer is responsible for the design
+and operation of its applications and products throughout their lifecycles
+to reduce the effect of these vulnerabilities on customer’s applications
+and products. Customer’s responsibility also extends to other open and/or
+proprietary technologies supported by NXP products for use in customer’s
+applications. NXP accepts no liability for any vulnerability. Customer should
+regularly check security updates from NXP and follow up appropriately.
+Customer shall select products with security features that best meet rules,
+regulations, and standards of the intended application and make the
+ultimate design decisions regarding its products and is solely responsible
+for compliance with all legal, regulatory, and security related requirements
+concerning its products, regardless of any information or support that may be
+provided by NXP.
+NXP has a Product Security Incident Response Team (PSIRT) (reachable
+at PSIRT@nxp.com) that manages the investigation, reporting, and solution
+release to security vulnerabilities of NXP products.
+NXP B.V. — NXP B.V. is not an operating company and it does not distribute
+or sell products.
+Trademarks
+Notice: All referenced brands, product names, service names, and
+trademarks are the property of their respective owners.
+NXP — wordmark and logo are trademarks of NXP B.V.
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+46 / 48
+
+--- PDF page 47 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Tables
+Tab. 1. Ordering information ..........................................2
+Tab. 2. Ordering options ................................................2
+Tab. 3. Top side marking ...............................................2
+Tab. 4. Pin description ...................................................4
+Tab. 5. Status of design blocks in different power
+modes ................................................................5
+Tab. 6. PTN3222 target address definition ....................8
+Tab. 7. Register type definitions ..................................11
+Tab. 8. Register overview ............................................13
+Tab. 9. Register 0x00 – Reserved .............................. 14
+Tab. 10. Register 0x01 – RESET CONTROL ................14
+Tab. 11. Register 0x02 – LINK CONTROL 1 ................ 14
+Tab. 12. Register 0x03 – LINK CONTROL 2 ................ 15
+Tab. 13. Register 0x04 – eUSB2 RX CONTROL .......... 16
+Tab. 14. Register 0x05 – eUSB2 TX CONTROL ...........16
+Tab. 15. Register 0x06 – USB2 RX CONTROL ............ 17
+Tab. 16. Register 0x07 – USB2 TX CONTROL 1 ..........18
+Tab. 17. De-emphasis level to USB2 Tx output
+swing level .......................................................19
+Tab. 18. Register 0x08 – USB2 TX CONTROL 2 ..........20
+Tab. 19. Register 0x09 – USB2 HS TERMINATION ......20
+Tab. 20. Register 0x0A – USB2 HS DISCONNECT
+THRESHOLD .................................................. 21
+Tab. 21. Register 0x0D – RAP Signature ......................21
+Tab. 22. Register 0x0E – VDX_CONTROL ...................21
+Tab. 23. Register 0x0F – DEVICE STATUS ..................22
+Tab. 24. Register 0x10 – LINK STATUS ....................... 22
+Tab. 25. Register 0x13 – REVISION_ID ....................... 22
+Tab. 26. Register 0x14 – CHIP_ID_0 ............................23
+Tab. 27. Register 0x15 – CHIP_ID_1 ............................23
+Tab. 28. Register 0x16 – CHIP_ID_2 ............................23
+Tab. 29. Limiting values ................................................ 24
+Tab. 30. Operating conditions ....................................... 24
+Tab. 31. Thermal resistance ..........................................25
+Tab. 32. Device characteristics ..................................... 25
+Tab. 33. USB2 and eUSB2 characteristics ....................26
+Tab. 34. Standard mode I2C characteristics ................. 29
+Tab. 35. Fast mode I2C characteristics .........................30
+Tab. 36. Fast mode plus I2C characteristics ................. 32
+Tab. 37. ADDR characteristics ...................................... 33
+Tab. 38. RST_N characteristics .....................................33
+Tab. 39. UBM stack-up parameters .............................. 39
+Tab. 40. Dimension and quantities ................................40
+Tab. 41. Abbreviations ...................................................42
+Figures
+Fig. 1. Functional block diagram .................................. 3
+Fig. 2. PTN3222 WLCSP pinning (transparent top
+view) .................................................................. 4
+Fig. 3. PTN3222 role transition .................................... 6
+Fig. 4. PTN3222 as eUSB2 Host repeater ................... 6
+Fig. 5. PTN3222 as eUSB2 Peripheral repeater .......... 6
+Fig. 6. Writing one or more consecutive registers ........ 8
+Fig. 7. Reading one or more consecutive registers ...... 9
+Fig. 8. Use case 1 – Direct interfacing .........................9
+Fig. 9. Use case 2 – Interfacing via Protection IC ...... 10
+Fig. 10. Use case 3 – Interface with parallel
+connection to PMIC .........................................10
+Fig. 11. Use case 4 – Interfacing via passive switch .... 11
+Fig. 12. Difference between pre-emphasis and de-
+emphasis functions ..........................................19
+Fig. 13. Definition of timing for Fast/Standard mode
+devices on the I2C bus ................................... 31
+Fig. 14. Package outline SOT2063-1 (WLCSP12)
+(1/5) ................................................................. 34
+Fig. 15. Package outline SOT2063-1 (WLCSP12)
+(2/5) ................................................................. 35
+Fig. 16. Package outline SOT2063-1 (WLCSP12)
+(3/5) ................................................................. 36
+Fig. 17. Package outline SOT2063-1 (WLCSP12)
+(4/5) ................................................................. 37
+Fig. 18. Package outline SOT2063-1 (WLCSP12)
+(5/5) ................................................................. 38
+Fig. 19. UBM stack-up ..................................................39
+Fig. 20. Product orientation in carrier tape ................... 40
+Fig. 21. Carrier tape dimensions ..................................41
+PTN3222DUK All information provided in this document is subject to legal disclaimers. © 2023 NXP B.V. All rights reserved.
+Product data sheet Rev. 1.1 — 1 December 2023
+47 / 48
+
+--- PDF page 48 ---
+NXP Semiconductors PTN3222DUK
+1-port eUSB2 to USB2 redriver
+Contents
+1 General description .........................................1
+2 Features and benefits ..................................... 1
+3 Applications ..................................................... 2
+4 Ordering information .......................................2
+4.1 Ordering options ................................................ 2
+4.2 Top side marking ............................................... 2
+5 Functional diagram ..........................................3
+6 Pinning information .........................................4
+6.1 Pinning ...............................................................4
+6.2 Pin description ................................................... 4
+7 Functional description .................................... 5
+7.1 Reset ..................................................................5
+7.2 Operating modes ............................................... 5
+7.3 eUSB2 repeater .................................................5
+7.3.1 Over-Voltage Protection on USB2 DP/DN
+pins .................................................................... 7
+7.4 BC1.2 support ....................................................7
+7.5 I2C operation .....................................................7
+7.5.1 I2C target address .............................................8
+7.5.2 Example of writing one or more registers .......... 8
+7.5.3 Example of reading one or more registers .........8
+8 System application ..........................................9
+8.1 Use cases ..........................................................9
+8.2 Power supply requirement ...............................11
+8.3 Ground requirement .........................................11
+8.4 ESD requirements ........................................... 11
+8.5 Application support .......................................... 11
+9 Register set .................................................... 11
+9.1 Register overview ............................................ 13
+9.2 I2C registers and descriptions ......................... 13
+9.2.1 Functional registers ......................................... 13
+10 Limiting values ...............................................24
+11 Recommended operating conditions ...........24
+12 Characteristics ...............................................25
+12.1 Device characteristics ......................................25
+12.2 USB2 and eUSB2 characteristics ....................26
+12.3 I2C dynamic/static characteristics ....................29
+12.4 ADDR pin characteristics .................................33
+12.5 RST_N pin characteristics ............................... 33
+13 Package outline ............................................. 34
+13.1 SOT2063-1 (WLCSP12) .................................. 34
+13.2 UBM stack-up information ............................... 39
+14 Packing information ...................................... 40
+14.1 SOT2063-1 WLCSP12, wafer level chip
+scale package, 12 terminals, 0.35 mm
+pitch, 1.55 mm x 1.18 mm x 0.455 mm
+body (backside coating included) .................... 40
+14.1.1 Dimensions and quantities .............................. 40
+14.1.2 Product orientation ...........................................40
+14.1.3 Carrier tape dimensions .................................. 41
+15 Abbreviations ................................................. 42
+16 References ......................................................43
+17 Revision history .............................................44
+Legal information ...........................................45
+Please be aware that important notices concerning this document and the product(s)
+described herein, have been included in section 'Legal information'.
+© 2023 NXP B.V. All rights reserved.
+For more information, please visit: https://www.nxp.com
+Date of release: 1 December 2023
+Document identifier: PTN3222DUK

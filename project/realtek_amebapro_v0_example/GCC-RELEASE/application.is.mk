@@ -986,7 +986,7 @@ $(NCM_TX_PROFILE_STAMP):
 	@touch $@
 ../../../component/common/network/lwip/lwip_v2.1.2/port/realtek/freertos/ethernetif.o: $(NCM_TX_PROFILE_STAMP)
 ../src/carbox/ncm/ncm_tx.o: $(NCM_TX_PROFILE_STAMP)
-# Keep the boot-time PLL/SPIC result visible in the recurring 10-second report.
+# Keep the recurring 10-second reporter disabled for the 400 MHz test build.
 PC_PROFILER ?= 0
 # Keep the 10-second reporter task as the common clock for focused subsystem
 # reports, but suppress its own CPU/task table after scheduler diagnosis.
@@ -1568,7 +1568,7 @@ CARBOX_CRYPTO_IRQ_TIMEOUT_MS ?= 20
 # Supported release profiles:
 #   300: retain the ROM-established PLL_SYS/CPU 300 MHz path
 #   400: apply the qualified PLL_SYS/CPU 400 MHz preset during early boot
-SYSTEM_CLOCK_PROFILE ?= 300
+SYSTEM_CLOCK_PROFILE ?= 400
 ifeq ($(SYSTEM_CLOCK_PROFILE),300)
 SYS_PLL_OVERCLOCK ?= 0
 SYS_PLL_TARGET_HZ ?= 300000000

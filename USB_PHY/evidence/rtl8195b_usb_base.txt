@@ -1,0 +1,3 @@
+Source: /home/kevin/work/rt8715/component/soc/realtek/8195b/cmsis/rtl8195b-hp/include/rtl8195bhp.h
+
+10685: #define USB_BASE                    0x400C0000UL

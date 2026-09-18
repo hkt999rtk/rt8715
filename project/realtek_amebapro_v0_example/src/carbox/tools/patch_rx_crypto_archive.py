@@ -12,7 +12,7 @@ import tempfile
 
 GUARDS = {
     'AirPlayReceiverSessionScreen.o': '9b051d06928cfb1c7e861ebfca52fd4e902cf0542353c64430c88cf6db1d2126',
-    'AirPlayReceiverSession.o': 'e2284f7e576cd9ebe053ce25c40a07b6933a6a6ac339caabe06705148fe1aef6',
+    'AirPlayReceiverSession.o': '6b614f65d2027fd965321de11ae3ee04d263c43b4b676950088e51336bd154f1',
     'ScreenUtilsStub.o': '64dd1ef290c6bfc9024611adacf01cd3d4e72389dbc1de62afe1f567f22e7a67',
     'AppleCarPlay_AppStub.o': 'beab94a28bcda7b8ad9303086cc38e8c3d74f48fe1b1d23ba5b8d2c27ac00650',
     'AirPlayScreen.o': '8c1a6d380cd90ab4630ad1c77d232e92eafdd2e0a4b3db0c46de472f3fecd400',
