@@ -1562,7 +1562,7 @@ TCPIP_RX_BATCH_PROFILE ?= 0
 # burst, as inserting every packet at the mailbox front would do.
 TCPIP_NCM_RX_PRIORITY ?= 1
 CARBOX_CRYPTO_OWNER_BOOST_PRIORITY ?= 11
-CARBOX_CRYPTO_IRQ_TIMEOUT_MS ?= 20
+CARBOX_CRYPTO_IRQ_TIMEOUT_MS ?= 10
 # Public clock selection.  Use only SYSTEM_CLOCK_PROFILE on normal builds;
 # SYS_PLL_OVERCLOCK and SYS_PLL_TARGET_HZ are derived implementation details.
 # Supported release profiles:
