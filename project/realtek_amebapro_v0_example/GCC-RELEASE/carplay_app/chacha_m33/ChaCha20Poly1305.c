@@ -1789,6 +1789,7 @@ typedef struct {
   uint32_t length_mismatches;
   uint32_t active;
   void *state;
+  void *probe_state;
   uint8_t *ciphertext;
   size_t ciphertext_len;
   size_t ciphertext_capacity;
@@ -1813,6 +1814,7 @@ typedef struct {
   uint8_t software_plus_one_ok;
   uint8_t software_minus_one_ok;
   uint8_t capture_ok;
+  uint8_t probe_pending;
   uint8_t resync_pending;
   uint8_t resync_await_next;
 } chacha_post_timeout_diag_t;
@@ -1829,6 +1831,29 @@ static uint32_t chacha_post_timeout_time_ms(void) {
 #endif
 }
 
+static void chacha_post_timeout_arm_rx_resync(void *state) {
+  chacha_post_timeout_diag_t *diag = &g_chacha_post_timeout_diag;
+  carbox_crypto_irq_snapshot_t irq;
+
+  /* Do not replace a probe whose ciphertext is already being collected.  A
+   * pending, not-yet-started probe may follow the latest failed RX state. */
+  if (diag->active) return;
+  carbox_crypto_irq_controller_snapshot(&irq);
+  diag->seen_timeout_count = irq.timeout_count;
+  diag->attempts++;
+  diag->probe_state = state;
+  diag->probe_pending = 1u;
+  diag->armed_timeout_count = irq.timeout_count;
+  diag->armed_timeout_generation = irq.last_timeout_generation;
+  diag->armed_reset_count = irq.reset_count;
+  printf(
+    "[CHACHARECOVER][RX] armed after failed same-nonce retry "
+    "timeout_count=%lu generation=%lu\n",
+    (unsigned long)irq.timeout_count,
+    (unsigned long)irq.last_timeout_generation
+  );
+}
+
 static void chacha_nonce_step(uint8_t nonce[8], int increment) {
   unsigned i;
 
@@ -1842,22 +1867,17 @@ static void chacha_nonce_step(uint8_t nonce[8], int increment) {
 static void chacha_post_timeout_capture(
   void *state, const uint8_t *ciphertext, size_t len
 ) {
-  carbox_crypto_irq_snapshot_t irq;
   uint8_t *capture;
   size_t new_len;
 
-  carbox_crypto_irq_controller_snapshot(&irq);
   if (!g_chacha_post_timeout_diag.active &&
-      irq.timeout_count > g_chacha_post_timeout_diag.seen_timeout_count) {
-    g_chacha_post_timeout_diag.seen_timeout_count = irq.timeout_count;
-    g_chacha_post_timeout_diag.attempts++;
+      g_chacha_post_timeout_diag.probe_pending &&
+      g_chacha_post_timeout_diag.probe_state == state) {
     g_chacha_post_timeout_diag.active = 1u;
     g_chacha_post_timeout_diag.state = state;
+    g_chacha_post_timeout_diag.probe_state = NULL;
+    g_chacha_post_timeout_diag.probe_pending = 0u;
     g_chacha_post_timeout_diag.ciphertext_len = 0u;
-    g_chacha_post_timeout_diag.armed_timeout_count = irq.timeout_count;
-    g_chacha_post_timeout_diag.armed_timeout_generation =
-      irq.last_timeout_generation;
-    g_chacha_post_timeout_diag.armed_reset_count = irq.reset_count;
   }
   if (!g_chacha_post_timeout_diag.active ||
       g_chacha_post_timeout_diag.state != state || len == 0u) return;
@@ -1897,6 +1917,7 @@ static void chacha_post_timeout_finish(
   uint8_t nonce_plus[8];
   uint8_t nonce_minus[8];
   uint8_t software_tag[16];
+  int32_t resync_error = -1;
 
   if (!diag->active || diag->state != state) return;
   carbox_crypto_irq_controller_snapshot(&irq);
@@ -1907,7 +1928,8 @@ static void chacha_post_timeout_finish(
   diag->hardware_error = *out_error;
   diag->hardware_submitted = hardware_submitted ? 1u : 0u;
   diag->capture_ok =
-    diag->ciphertext != NULL && diag->ciphertext_len == data_len;
+    diag->ciphertext != NULL && diag->ciphertext_len == data_len &&
+    plaintext != NULL && (aad_len == 0u || aad != NULL);
   diag->software_same_ok = 0u;
   diag->software_plus_one_ok = 0u;
   diag->software_minus_one_ok = 0u;
@@ -1935,8 +1957,42 @@ static void chacha_post_timeout_finish(
     );
     diag->software_minus_one_ok =
       chacha20_poly1305_tag_equal(software_tag, supplied_tag) ? 1u : 0u;
-    /* Observation only: recovery replays the SAME record and nonce. Never
-     * accept a failed authentication by silently trying another nonce. */
+    printf(
+      "[CHACHARECOVER][RX] probe same/plus1/minus1=%u/%u/%u "
+      "len=%lu error=%ld\n",
+      (unsigned)diag->software_same_ok,
+      (unsigned)diag->software_plus_one_ok,
+      (unsigned)diag->software_minus_one_ok,
+      (unsigned long)data_len, (long)*out_error
+    );
+    /* The previous record was rejected after both hardware and same-nonce
+     * software verification failed.  If the peer advanced its record nonce,
+     * only nonce+1 authenticates this next record.  Authenticate again before
+     * writing plaintext, then ask the outer ABI wrapper to advance the
+     * caller's persistent nonce by the skipped record. */
+    if (*out_error != 0 && !diag->software_same_ok &&
+        diag->software_plus_one_ok && !diag->software_minus_one_ok) {
+      resync_error = chacha20_poly1305_decrypt_all_64x64_software(
+        key, nonce_plus, aad, aad_len, diag->ciphertext, data_len,
+        plaintext, supplied_tag
+      );
+      if (resync_error == 0) {
+        *out_error = 0;
+        diag->resync_detected++;
+        diag->resync_current_ok++;
+        diag->resync_state = state;
+        diag->resync_pending = 1u;
+        printf(
+          "[CHACHARECOVER][RX] current record recovered with nonce+1; "
+          "persistent resync pending\n"
+        );
+      } else {
+        printf(
+          "[CHACHARECOVER][RX] nonce+1 tag matched but software decrypt "
+          "failed err=%ld\n", (long)resync_error
+        );
+      }
+    }
     chacha_secure_clear(nonce_plus, sizeof(nonce_plus));
     chacha_secure_clear(nonce_minus, sizeof(nonce_minus));
     chacha_secure_clear(software_tag, sizeof(software_tag));
@@ -1968,7 +2024,7 @@ void chacha20_poly1305_rx_nonce_resync_applied(int applied) {
     diag->resync_applied++;
     diag->resync_await_next = 1u;
     printf(
-      "[CHACHARECOVER] nonce+1 persistent resync applied; "
+      "[CHACHARECOVER][RX] nonce+1 persistent resync applied; "
       "current record recovered, awaiting next verify\n"
     );
   } else {
@@ -1983,11 +2039,11 @@ void chacha20_poly1305_rx_nonce_resync_observe(int32_t verify_error) {
   diag->resync_await_next = 0u;
   if (verify_error == 0) {
     diag->resync_next_ok++;
-    printf("[CHACHARECOVER] post-resync next verify=ok\n");
+    printf("[CHACHARECOVER][RX] post-resync next verify=ok\n");
   } else {
     diag->resync_next_failed++;
     printf(
-      "[CHACHARECOVER] post-resync next verify=failed err=%ld\n",
+      "[CHACHARECOVER][RX] post-resync next verify=failed err=%ld\n",
       (long)verify_error
     );
   }
@@ -3203,6 +3259,7 @@ size_t chacha20_poly1305_verify(
   chacha_export_key_nonce(state, key, nonce);
 #if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
   int diagnostic_hardware_submitted = 0;
+  int arm_rx_resync = 0;
   total_len = (size_t)state->data_len;
   written = state->chacha_leftover;
   if ((uint8_t *)dst != state->rtl_output_next) eligible = 0;
@@ -3244,8 +3301,10 @@ size_t chacha20_poly1305_verify(
       (void)chacha_deferred_finish_decrypt_software(
         state, output_base, total_len, tag, out_error);
       chacha_stats_record_software(total_len, 1);
-      if (recovered)
+      if (recovered) {
         chacha_recovery_software_done(1u, recovery_id, total_len, *out_error);
+        arm_rx_resync = *out_error != 0;
+      }
     } else {
       if (status != CHACHA_RTL_SKIP_THRESHOLD) {
         ++g_chacha_hw_fallbacks;
@@ -3282,6 +3341,10 @@ size_t chacha20_poly1305_verify(
     state, key, nonce, aad, aad_len, total_len, tag, output_base, out_error,
     diagnostic_hardware_submitted
   );
+  /* Arm only after the current record's diagnostic has completed.  This
+   * makes the probe consume the following record from the same RX state. */
+  if (arm_rx_resync && *out_error != 0)
+    chacha_post_timeout_arm_rx_resync(state);
   memset(state, 0, sizeof(*state));
 #else
   total_len = (size_t)(state->data_len + state->chacha_leftover);

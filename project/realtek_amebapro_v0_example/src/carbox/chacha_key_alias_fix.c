@@ -469,7 +469,9 @@ size_t __wrap_chacha20_poly1305_verify(
       /* Do not claim authentication success unless the persistent record
        * nonce can also be repaired for the following frame. */
       *out_error = -1;
-      printf("[CHACHARECOVER] nonce+1 verified but persistent target missing\n");
+      printf(
+        "[CHACHARECOVER][RX] nonce+1 verified but persistent target missing\n"
+      );
     }
   }
 #if CONFIG_SCREEN_FPS_PROFILE

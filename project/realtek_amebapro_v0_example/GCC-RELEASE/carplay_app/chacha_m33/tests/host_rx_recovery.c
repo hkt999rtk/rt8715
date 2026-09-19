@@ -56,19 +56,24 @@ int ScreenStreamProcessData(void *stream, const void *p, size_t n, uintptr_t r3,
     if (!consume_early && !queue_error) queued = (void *)p;
     return queue_error ? -1 : 0;
 }
-static void vector_aad(uint8_t *cipher, uint8_t *plain, size_t n, const void *ad, size_t alen) {
+static void vector_aad_nonce(uint8_t *cipher, uint8_t *plain, size_t n,
+                             const void *ad, size_t alen,
+                             const uint8_t wire_nonce[8]) {
     uint8_t iv[12]={0};
     int out,tail;
     EVP_CIPHER_CTX *ctx=EVP_CIPHER_CTX_new();
     assert(ctx);
     for(size_t i=0;i<n;++i) plain[i]=(uint8_t)(i*37+11);
-    memcpy(iv+4,nonce,8);
+    memcpy(iv+4,wire_nonce,8);
     assert(EVP_EncryptInit_ex(ctx,EVP_chacha20_poly1305(),NULL,key,iv)==1);
     assert(EVP_EncryptUpdate(ctx,NULL,&out,ad,(int)alen)==1);
     assert(EVP_EncryptUpdate(ctx,cipher,&out,plain,(int)n)==1);
     assert(EVP_EncryptFinal_ex(ctx,cipher+out,&tail)==1);
     assert(EVP_CIPHER_CTX_ctrl(ctx,EVP_CTRL_AEAD_GET_TAG,16,cipher+n)==1);
     EVP_CIPHER_CTX_free(ctx);
+}
+static void vector_aad(uint8_t *cipher, uint8_t *plain, size_t n, const void *ad, size_t alen) {
+    vector_aad_nonce(cipher,plain,n,ad,alen,nonce);
 }
 static void vector(uint8_t *cipher, uint8_t *plain, size_t n, size_t alen) {
     vector_aad(cipher,plain,n,aad,alen);
@@ -226,6 +231,62 @@ static void alias_case(void) {
         ++nonce[0]; /* caller increments once, after successful verify */
     }
 }
+static void increment_nonce(uint8_t value[8]) {
+    for(unsigned i=0;i<8;++i) if(++value[i]) break;
+}
+static void alias_nonce_resync_case(void) {
+    enum { payload_len = 1101 };
+    uint8_t cipher[payload_len+16], output[payload_len+16];
+    uint8_t plain[payload_len], wire_nonce[8];
+    chacha20_poly1305_state state;
+    uint8_t *persistent_key=(uint8_t *)&state+264;
+    uint8_t *persistent_nonce=(uint8_t *)&state+200;
+    int32_t error;
+    size_t written;
+
+    memcpy(wire_nonce,nonce,sizeof(wire_nonce));
+    memcpy(persistent_key,key,32);memcpy(persistent_nonce,wire_nonce,8);
+
+    /* Record N is damaged and its hardware operation also fails.  The
+     * same-nonce software retry must reject it and arm the next-record probe. */
+    vector_aad_nonce(cipher,plain,payload_len,aad,8,wire_nonce);
+    cipher[17]^=1;
+    fault(3);
+    chacha20_poly1305_init_64x64(&state,persistent_key,persistent_nonce);
+    chacha20_poly1305_add_aad(&state,aad,8);
+    written=chacha20_poly1305_decrypt(&state,cipher,payload_len,output);
+    chacha20_poly1305_verify(&state,output+written,
+                             cipher+payload_len,&error);
+    assert(error && !memcmp(persistent_nonce,wire_nonce,8));
+
+    /* The sender consumed N and transmits the next valid record with N+1.
+     * The receiver still has N, so the authenticated nonce+1 probe must
+     * recover plaintext and advance the persistent nonce once. */
+    increment_nonce(wire_nonce);
+    vector_aad_nonce(cipher,plain,payload_len,aad,8,wire_nonce);
+    fault(0);
+    chacha20_poly1305_init_64x64(&state,persistent_key,persistent_nonce);
+    chacha20_poly1305_add_aad(&state,aad,8);
+    written=chacha20_poly1305_decrypt(&state,cipher,payload_len,output);
+    chacha20_poly1305_verify(&state,output+written,
+                             cipher+payload_len,&error);
+    assert(!error && !memcmp(output,plain,payload_len));
+    assert(!memcmp(persistent_nonce,wire_nonce,8));
+
+    /* Model the vendor success path, then prove the next record verifies
+     * normally and closes the post-resync evidence chain. */
+    increment_nonce(persistent_nonce);
+    increment_nonce(wire_nonce);
+    assert(!memcmp(persistent_nonce,wire_nonce,8));
+    vector_aad_nonce(cipher,plain,payload_len,aad,8,wire_nonce);
+    fault(0);
+    chacha20_poly1305_init_64x64(&state,persistent_key,persistent_nonce);
+    chacha20_poly1305_add_aad(&state,aad,8);
+    written=chacha20_poly1305_decrypt(&state,cipher,payload_len,output);
+    chacha20_poly1305_verify(&state,output+written,
+                             cipher+payload_len,&error);
+    assert(!error && !memcmp(output,plain,payload_len));
+}
 int main(void) {
     for(unsigned i=0;i<sizeof(aad);++i) aad[i]=(uint8_t)(i*13+7);
     size_t lengths[]={0,1,63,1023,1024,1025,1436,4096,4413,5265,65391,65409,65536,65537};
@@ -245,6 +306,7 @@ int main(void) {
     audio_case(1101,8,8,0,0);
     direct_case(200,8,0,0,1,0);
     alias_case();
+    alias_nonce_resync_case();
     direct_case(5265,128,0,6,0,0);
     direct_case(4096,128,0,5,0,0);direct_case(4096,128,0,5,1,0);
     screen_case(0,0,1,1,0);screen_case(3,0,0,1,0);screen_case(3,0,0,0,1);
