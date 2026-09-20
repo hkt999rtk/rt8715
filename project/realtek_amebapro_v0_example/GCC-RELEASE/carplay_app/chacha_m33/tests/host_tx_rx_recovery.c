@@ -14,6 +14,7 @@ void mock_rtl_fail_chacha_after_write_on(unsigned);
 void mock_rtl_fail_poly1305_on(unsigned);
 void mock_rtl_fail_combined_after_write(unsigned);
 void mock_rtl_recovery_disabled(unsigned);
+void mock_rtl_corrupt_on_error(void *);
 unsigned mock_rtl_transaction_active(void);
 unsigned mock_rtl_chacha_operations(void);
 unsigned mock_rtl_combined_encrypts(void);
@@ -139,6 +140,50 @@ static void run(unsigned rx, size_t n, unsigned layout, unsigned fault, unsigned
   direct_enabled = 0;
   free(plain); free(cipher); free(out);
 }
+/* Corrupt only the reused SW state during the simulated HW failure, after
+ * key/nonce export. The original ciphertext and AAD remain valid. This is a
+ * fault model, not a claim about the customer's actual timeout cause. */
+static void state_recovery(size_t n, unsigned direct, unsigned damage, unsigned bad) {
+  unsigned char key[32] = {1}, nonce[8] = {2}, aad[128], tag[16];
+  unsigned char *plain = malloc(n), *cipher = malloc(n), *out = malloc(n + 32);
+  chacha20_poly1305_state s;
+  size_t written;
+  int32_t error = -1;
+  assert(plain && cipher && out);
+  for (size_t i = 0; i < n; ++i) plain[i] = (unsigned char)(i * 37 + 11);
+  memset(aad, 0x59, sizeof(aad));
+  reference(key, nonce, aad, plain, n, cipher, tag);
+  if (bad) tag[3] ^= 0x80;
+  memset(out, 0xa5, n + 32);
+  memcpy(out + n, tag, 16);
+  mock_rtl_reset_stats();
+  chacha20_poly1305_init_64x64(&s, key, nonce);
+  chacha20_poly1305_add_aad(&s, aad, 17);
+  chacha20_poly1305_add_aad(&s, aad + 17, 111);
+  written = direct ? chacha20_poly1305_decrypt_rx(&s, cipher, n, out, 0, 1)
+                   : chacha20_poly1305_decrypt(&s, cipher, n, out);
+  switch (damage) {
+    case 1: mock_rtl_corrupt_on_error(&s.poly_h[0]); break;
+    case 2: mock_rtl_corrupt_on_error(&s.chacha_counter); break;
+    case 3: mock_rtl_corrupt_on_error(&s.aad_len); break;
+    case 4: mock_rtl_corrupt_on_error(&s.chacha_key[0]); break;
+    case 5: mock_rtl_corrupt_on_error(&s.poly_leftover); break;
+    default: break;
+  }
+  if (n % 16u == 0u) mock_rtl_fail_combined_after_write(1);
+  else mock_rtl_fail_chacha_after_write_on(n > 65536u ? 1 : 2);
+  printf("CASE rx=1 len=%zu layout=%u fault=6 damage=%u bad=%u\n",
+         n, direct, damage, bad);
+  written += chacha20_poly1305_verify(&s, out + written, out + n, &error);
+  assert(written == n && (error == 0) == !bad);
+  if (!bad) assert(!memcmp(out, plain, n));
+  else for (size_t i = 0; i < n; ++i) assert(out[i] == 0);
+  assert(!memcmp(out + n, tag, 16));
+  for (size_t i = n + 16; i < n + 32; ++i) assert(out[i] == 0xa5);
+  assert(!mock_rtl_transaction_active());
+  free(plain); free(cipher); free(out);
+}
+
 int main(void) {
   for (unsigned rx = 0; rx < 2; ++rx) {
     for (unsigned layout = 0; layout < 2; ++layout) {
@@ -158,6 +203,16 @@ int main(void) {
   run(0, 4849, 2, 0, 0);
   run(0, 131073, 2, 1, 0); /* direct chunked TX */
   run(0, 131073, 2, 0, 0);
+  for (unsigned direct = 0; direct < 2; ++direct) {
+    const size_t lengths[] = {2042, 6132, 8673, 1795, 8597, 9197,
+                              2005, 2756, 5613, 4096, 65537};
+    for (size_t i = 0; i < sizeof(lengths)/sizeof(lengths[0]); ++i) {
+      for (unsigned damage = 0; damage <= 5; ++damage) {
+        state_recovery(lengths[i], direct, damage, 0);
+        state_recovery(lengths[i], direct, damage, 1);
+      }
+    }
+  }
   puts("TX/RX recovery, partial DMA, bad tag, allocation, streaming, direct TX: PASS");
   return 0;
 }

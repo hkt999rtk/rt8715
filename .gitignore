@@ -88,6 +88,7 @@ project/realtek_amebapro_v0_example/GCC-RELEASE/**
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/ChaCha20Poly1305.c
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/ChaCha20Poly1305.h
+!project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/RX_FRESH_RECOVERY.md
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/ChaCha20Poly1305_rtl8195b.c
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/ChaCha20Poly1305_rtl8195b.h
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/Makefile

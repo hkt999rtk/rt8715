@@ -6,9 +6,15 @@
 #include <string.h>
 
 static unsigned g_mock_recovery_disabled, g_mock_fail_combined_after_write;
+static uint8_t *g_mock_corrupt_on_error;
+void mock_rtl_corrupt_on_error(void *ptr) { g_mock_corrupt_on_error = ptr; }
 void mock_rtl_recovery_disabled(unsigned n) { g_mock_recovery_disabled=n; }
 void mock_rtl_fail_combined_after_write(unsigned n) { g_mock_fail_combined_after_write=n; }
 static int mock_operation_error(void) {
+  if (g_mock_corrupt_on_error) {
+    *g_mock_corrupt_on_error ^= 0x80u;
+    g_mock_corrupt_on_error = NULL;
+  }
   return g_mock_recovery_disabled ? CHACHA_RTL_ERROR_OPERATION_DISABLED : CHACHA_RTL_ERROR_OPERATION;
 }
 static unsigned int g_mock_decrypt_successes;
@@ -41,6 +47,7 @@ void mock_rtl_fail_chacha_after_write_on(unsigned int call_index) {
 }
 
 void mock_rtl_reset_stats(void) {
+  g_mock_corrupt_on_error = NULL;
   g_mock_recovery_disabled=0;g_mock_fail_combined_after_write=0;
   g_mock_decrypt_successes = 0;
   g_mock_decrypt_failures = 0;

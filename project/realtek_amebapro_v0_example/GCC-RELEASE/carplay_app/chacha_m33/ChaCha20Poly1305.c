@@ -2155,6 +2155,81 @@ static size_t chacha_deferred_finish_decrypt_software(
   );
   return written;
 }
+
+/* Exceptional RX path only: the caller retains disjoint ciphertext/output,
+ * exported key/nonce and the private AAD snapshot until this returns. Never
+ * trust a possibly advanced streaming accumulator as the only recovery path.
+ * Authenticate with a fresh state before publishing plaintext. The old path
+ * is retained as a diagnostic comparison, including counter-only corruption
+ * which can produce a valid tag but incorrect plaintext.
+ *
+ * No allocations or normal-record payload hashes/copies are added here.
+ * noinline keeps the additional state/scratch off the successful HW path.
+ */
+static __attribute__((noinline)) void chacha_rx_retry_fresh(
+  chacha20_poly1305_state *state,
+  const uint8_t key[32], const uint8_t nonce[8],
+  const void *aad, size_t aad_len, const uint8_t *ciphertext, size_t len,
+  uint8_t *output, const uint8_t tag[16], int32_t *error,
+  unsigned recovery_id, const char *path
+) {
+  chacha20_poly1305_state fresh;
+  uint8_t calculated[16], block[64];
+  int32_t reused_error = -1;
+  int fresh_ok, plain_match = -1;
+  int counter_ok = state->chacha_counter == 1u;
+  int aad_len_ok = state->aad_len == (uint64_t)aad_len;
+  unsigned aad_padded = state->aad_padded;
+  unsigned poly_leftover = (unsigned)state->poly_leftover;
+  int reuse_ran = state->poly_leftover < sizeof(state->poly_buffer) &&
+                  state->aad_padded <= 1u;
+
+  chacha20_poly1305_init_64x64_software(&fresh, key, nonce);
+  chacha20_poly1305_add_aad_software(&fresh, aad, aad_len);
+  chacha20_poly1305_pad_aad(&fresh);
+  poly1305_update_state(&fresh, ciphertext, len);
+  fresh.data_len = (uint64_t)len;
+  chacha20_poly1305_finish_tag(&fresh, calculated);
+  fresh_ok = chacha20_poly1305_tag_equal(calculated, tag);
+
+  /* The legacy path needs ciphertext staged in output. Direct RX previously
+   * consumed src separately; both use the same untouched AAD accumulator. */
+  if (reuse_ran) {
+    chacha_copy_bytes(output, ciphertext, len);
+    (void)chacha_deferred_finish_decrypt_software(
+      state, output, len, tag, &reused_error);
+  }
+
+  if (fresh_ok) {
+    size_t offset = 0u;
+    plain_match = reused_error == 0 ? 1 : -1;
+    while (offset < len) {
+      size_t count = len - offset;
+      if (count > sizeof(block)) count = sizeof(block);
+      chacha20_poly1305_xor(&fresh, block, ciphertext + offset, count);
+      if (plain_match == 1 && memcmp(output + offset, block, count) != 0)
+        plain_match = 0;
+      chacha_copy_bytes(output + offset, block, count);
+      offset += count;
+    }
+    *error = 0;
+  } else {
+    /* Includes the contradictory reused-pass/fresh-fail case. Fail closed;
+     * never publish unauthenticated output or force a nonce adjustment. */
+    chacha_secure_clear(output, len);
+    *error = -1;
+  }
+  printf("[CHACHASWREC][RX] id=%u path=%s len=%lu aad_len=%lu "
+         "reuse_ran=%u reuse_tag_ok=%u fresh_tag_ok=%u plain_match=%d "
+         "counter_ok=%u aad_len_ok=%u aad_padded=%u poly_leftover=%u "
+         "selected=%s error=%ld\n",
+         recovery_id, path, (unsigned long)len, (unsigned long)aad_len,
+         reuse_ran, reused_error == 0, fresh_ok, plain_match, counter_ok, aad_len_ok,
+         aad_padded, poly_leftover, fresh_ok ? "fresh" : "reject", (long)*error);
+  chacha_secure_clear(&fresh, sizeof(fresh));
+  chacha_secure_clear(calculated, sizeof(calculated));
+  chacha_secure_clear(block, sizeof(block));
+}
 #endif
 #endif
 
@@ -3140,6 +3215,7 @@ static size_t chacha_rx_verify(
   const uint8_t *src = s->rtl_input_base;
   uint8_t *out = s->rtl_output_base;
   size_t len = (size_t)(s->rtl_input_next - src);
+  size_t aad_len = s->rtl_aad_len;
   unsigned kind = (s->rtl_direction - CHACHA_RX_DIRECT_BASE) / 2u;
   int status = CHACHA_RTL_SKIP_LAYOUT, backend = CHACHA_HW_BACKEND_NONE;
   int retried = 0;
@@ -3158,11 +3234,11 @@ static size_t chacha_rx_verify(
   }
 #if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
   if ((s->rtl_direction & 1u) && s->rtl_eligible) {
-    status = chacha_hardware_precheck(len, s->rtl_aad_len);
+    status = chacha_hardware_precheck(len, aad_len);
     if (status == CHACHA_RTL_OK) {
       chacha_export_key_nonce(s, key, nonce);
-      status = chacha_hardware_decrypt_auto(key, nonce, s->rtl_aad,
-        s->rtl_aad_len, src, len, out, calculated, &backend);
+      status = chacha_hardware_decrypt_auto(key, nonce, aad_snapshot,
+        aad_len, src, len, out, calculated, &backend);
     }
   }
   if (status == CHACHA_RTL_OK) {
@@ -3175,17 +3251,23 @@ static size_t chacha_rx_verify(
   /* Every backend error returns only after DMA is quiescent, or before DMA
    * submission. Unquiesced failures never return (fatal containment). */
   retried = chacha_recovery_failed(
-    1u, recovery_id, status, backend, len, s->rtl_aad_len);
+    1u, recovery_id, status, backend, len, aad_len);
 #else
   (void)backend;
   (void)recovery_id;
   (void)kind;
+  (void)aad_len;
 #endif
-  {
+  if (retried) {
+#if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
+    chacha_rx_retry_fresh(s, key, nonce, aad_snapshot, aad_len,
+      src, len, out, saved_tag, error, recovery_id, "direct");
+#endif
+  } else {
     size_t written = chacha20_poly1305_decrypt_software(s, src, len, out);
     (void)chacha20_poly1305_verify_software(s, out + written, saved_tag, error);
-    chacha_stats_record_software(len, retried);
   }
+  chacha_stats_record_software(len, retried);
 #if CARBOX_CHACHA_MODE == CARBOX_CHACHA_MODE_HARDWARE_ONLY
   if (retried) {
     chacha_recovery_software_done(1u, recovery_id, len, *error);
@@ -3297,9 +3379,9 @@ size_t chacha20_poly1305_verify(
     } else if (hardware_submitted) {
       int recovered = chacha_recovery_failed(
         1u, recovery_id, status, backend, total_len, aad_len);
-      chacha_copy_bytes(output_base, retry_input, total_len);
-      (void)chacha_deferred_finish_decrypt_software(
-        state, output_base, total_len, tag, out_error);
+      chacha_rx_retry_fresh(state, key, nonce, aad, aad_len,
+        retry_input, total_len, output_base, tag, out_error,
+        recovery_id, "staged");
       chacha_stats_record_software(total_len, 1);
       if (recovered) {
         chacha_recovery_software_done(1u, recovery_id, total_len, *out_error);
