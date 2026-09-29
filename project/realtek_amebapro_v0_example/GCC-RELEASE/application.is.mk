@@ -797,6 +797,9 @@ SRC_C += ../src/carbox/libusb_ref_compat/libusb_ref_compat_delay.c
 SRC_C += ../src/carbox/libusb_ref_compat/libusb_ref_compat_os.c
 SRC_C += ../src/carbox/libusb_ref_compat/usb_ref_smart_compat.c
 SRC_C += ../src/carbox/libusb_ref_compat/usbsmart_otp_compat.c
+ifeq ($(CARBOX_USB_LIB),1)
+SRC_C += ../src/carbox/usb_phy_driver_wrap.c
+endif
 SRC_C += ../src/carbox/libusb_ref_compat/carplay_smart_api_stubs.c
 SRC_C += ../../../component/soc/realtek/8195b/misc/driver/efuse_logical_api.c
 SRC_C += ../src/carbox/vfs_compat/carbox_vfs_compat.c
@@ -904,6 +907,8 @@ OBJ_LIST += $(addprefix $(OBJ_DIR)/,$(patsubst %.cpp,%.o,$(notdir $(SRC_CPP))))
 GCCFLAGS =
 GCCFLAGS += -march=armv8-m.main+dsp -mthumb -mcmse -mfloat-abi=softfp -mfpu=fpv5-sp-d16 -g -gdwarf-3 -Os -c -MMD --save-temps
 GCCFLAGS += -nostartfiles -nodefaultlibs -nostdlib -fstack-usage -fdata-sections -ffunction-sections -fno-common
+CARBOX_USB_RX_BOOST_LEVEL ?= -1
+GCCFLAGS += -DCARBOX_USB_RX_BOOST_LEVEL=$(CARBOX_USB_RX_BOOST_LEVEL)
 
 # Define Macro
 GCCFLAGS += -D__thumb2__ -DCONFIG_PLATFORM_8195B -DCONFIG_PLATFORM_8195BHP -D__FPU_PRESENT -D__ARM_ARCH_7M__=0 -D__ARM_ARCH_7EM__=0 -D__ARM_ARCH_8M_MAIN__=1 -D__ARM_ARCH_8M_BASE__=0 
@@ -1877,6 +1882,9 @@ CPPFLAGS += -w
 CPPFLAGS += -Wall -Wpointer-arith -Wundef -Wno-write-strings -Wno-maybe-uninitialized
 
 LFLAGS = 
+ifeq ($(CARBOX_USB_LIB),1)
+LFLAGS += -Wl,--wrap=usb_hal_driver
+endif
 # Keep this callable diagnostic API even before an application caller is added.
 LFLAGS += -Wl,--undefined=carbox_nor_read_uuid
 LFLAGS += -Wl,--undefined=carplay_nor_read_otp

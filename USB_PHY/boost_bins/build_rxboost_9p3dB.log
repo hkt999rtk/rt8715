@@ -1,0 +1,41 @@
+Using external toolchain:  /home/kevin/work/toolchains/arm-none-eabi-gcc-6.4.1-realtek/asdk/linux/newlib/bin/arm-none-eabi-gcc
+awk: cmd. line:1: warning: regexp escape sequence `\#' is not a known regexp operator
+awk: cmd. line:1: warning: regexp escape sequence `\#' is not a known regexp operator
+awk: cmd. line:1: warning: regexp escape sequence `\#' is not a known regexp operator
+awk: cmd. line:1: warning: regexp escape sequence `\#' is not a known regexp operator
+===========================================================
+Prebuild
+===========================================================
+===========================================================
+Build application_is
+  CC   ../src/carbox/usb_phy_driver_wrap.c
+  ELF2BIN  prebuild GCC
+Clock profile: 400 MHz (PLL overclock=1, target=400000000 Hz)
+make -C third_party/fdk-aac -f Makefile.rtl8195b \
+	TOOLCHAIN_BIN=/home/kevin/work/toolchains/arm-none-eabi-gcc-6.4.1-realtek/asdk/linux/newlib/bin
+===========================================================
+make -C build-rtl8195b-o3 -j8
+make[3]: warning: -j8 forced in submake: resetting jobserver mode.
+Sensor binary auto selection
+make[3]: Nothing to be done for 'all'.
+cp build-rtl8195b-o3/.libs/libfdk-aac.a /home/kevin/work/rt8715/project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/lib_fdkaac_o3.a
+FDK AAC O3 archive: /home/kevin/work/rt8715/project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/lib_fdkaac_o3.a
+  WLAN  verified source-recovered zero-copy archive
+  CC   ../src/main.c
+  CC   ../src/carbox/fault_dump.c
+  CC   ../src/carbox/fault_dump.c
+  LD   linking...
+===========================================================
+Image manipulating
+===========================================================
+  ELF2BIN  keygen keycfg.json
+  ELF2BIN  convert amebapro_bootloader.json
+  ELF2BIN  convert amebapro_firmware_is.serial.json
+  VERIFY application_is/firmware_is.bin: 3584960 bytes (minimum 1048576)
+  CHKSUM
+  ELF2BIN  convert amebapro_bootloader.json
+  ELF2BIN  combine application_is/flash_is.bin (remap bootstrap: FW1 only)
+Pack application_is/fatfs.bin -> application_is/flash_is.bin @0x007C0000 (172032 bytes)
+Generated application_is/ota_fatfs.bin: header=32 payload=172032 checksum=0x00f9b332 fw_ver=2609292331
+Generated application_is/ota_app.bin: header=32 payload=3584964 checksum=0x1659b14d fw_ver=2609292331
+Generated application_is/ota_all.bin: fw=3584964 fatfs=172032 total=3757052 fw_ver=2609292331
