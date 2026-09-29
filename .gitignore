@@ -113,6 +113,7 @@ project/realtek_amebapro_v0_example/GCC-RELEASE/**
 
 # Convenience copies of generated full-flash images are local artifacts.
 /flash_is.bin
+/USB_PHY/boost_bins/
 
 # Host tests for preserved-ciphertext RX and the actual key-alias wrapper.
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/chacha_m33/tests/host_rx_recovery.c

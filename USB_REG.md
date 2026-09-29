@@ -72,17 +72,18 @@ read-modify-write `0x40000108`，只改 mask `0x6`，隨即讀回，再執行原
 電源／clock 與 PHY baseline 初始化，最後再讀回一次。讀回 bit 不符合
 目標值時回傳錯誤，不會把失敗當成功。它**不會寫入永久 eFuse**。
 
-| 測試值 | 標稱增益 | flash image | SHA-256 |
-| ---: | ---: | --- | --- |
-| `00` | 0 dB | [flash_is_rxboost_0dB.bin](USB_PHY/boost_bins/flash_is_rxboost_0dB.bin) | `70367c0a16068449d6debfc7890bc8e8e8a9a86ba1b8f98be59ee146a3052238` |
-| `01` | 3.3 dB | [flash_is_rxboost_3p3dB.bin](USB_PHY/boost_bins/flash_is_rxboost_3p3dB.bin) | `e8a3bd85ea03041e53f9028f7231dfb7674dea95c2bfea870ec05c0b012ad336` |
-| `10` | 6.9 dB | [flash_is_rxboost_6p9dB.bin](USB_PHY/boost_bins/flash_is_rxboost_6p9dB.bin) | `489e42da7a4e272b9a3b57165b6f0bac624001b6238b4d9d5da0f4fc1e8d56eb` |
-| `11` | 9.3 dB | [flash_is_rxboost_9p3dB.bin](USB_PHY/boost_bins/flash_is_rxboost_9p3dB.bin) | `e8d15d46a51c1ca5b7a2b3304eb8dce361b0910388dbb53356ee9adb42c03cbc` |
+| 測試值 | 標稱增益 | 本機輸出檔名（`USB_PHY/boost_bins/`） |
+| ---: | ---: | --- |
+| `00` | 0 dB | `flash_is_rxboost_0dB.bin` |
+| `01` | 3.3 dB | `flash_is_rxboost_3p3dB.bin` |
+| `10` | 6.9 dB | `flash_is_rxboost_6p9dB.bin` |
+| `11` | 9.3 dB | `flash_is_rxboost_9p3dB.bin` |
 
 四份映像均由 [`build_boost_variants.sh`](USB_PHY/build_boost_variants.sh)
 按序使用外部 Realtek toolchain 編譯、封裝；每份 8,298,496 bytes，且映像內各自
-包含對應的 `[USB BOOST] candidate level=N` 字串。完整 hashes 另存於
-[`SHA256SUMS`](USB_PHY/boost_bins/SHA256SUMS)。沒有板上讀回或電氣量測，
+包含對應的 `[USB BOOST] candidate level=N` 字串。映像、建置 log 和
+`SHA256SUMS` 都是本機產物，由 `.gitignore` 排除；執行
+`USB_PHY/build_boost_variants.sh` 可重新產生。沒有板上讀回或電氣量測，
 所以檔名中的 dB 是待驗證的 **Smart 欄位標稱值**，不能當成已量到的
 PRO1 類比增益。
 
