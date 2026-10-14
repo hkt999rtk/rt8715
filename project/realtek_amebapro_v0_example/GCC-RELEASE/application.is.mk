@@ -740,15 +740,15 @@ CARBOX_RESOURCE_450_COMPAT ?= 1
 ifeq ($(CARBOX_RESOURCE_450_COMPAT),1)
 SRC_C += ../src/carbox/carplay_resource_450_compat.c
 endif
-# Keep the vendor keychain reload path until pairing and mode negotiation are
-# validated on device; enable explicitly for the cache-only A/B build.
+# Vendor SecItem entry points already skip _ReadKeychain while gKeychainItems
+# exists. The wrapper adds no cache hits on this archive; leave it disabled.
 CARBOX_PAIR_KEYCHAIN_CACHE ?= 0
 ifeq ($(CARBOX_PAIR_KEYCHAIN_CACHE),1)
 SRC_C += ../src/carbox/pair_keychain_cache.c
 endif
-# The vendor path runs Pair Setup even with a stored pair. Verify-first is
-# experimental until the receiver's mode negotiation is validated on device.
-CARBOX_PAIR_VERIFY_FASTPATH ?= 0
+# Try Pair Verify first for a stored peer, falling back to Pair Setup if the
+# peer rejects it. An explicit 0 restores the vendor path for A/B comparison.
+CARBOX_PAIR_VERIFY_FASTPATH ?= 1
 ifeq ($(CARBOX_PAIR_VERIFY_FASTPATH),1)
 SRC_C += ../src/carbox/pair_verify_fastpath.c
 endif
