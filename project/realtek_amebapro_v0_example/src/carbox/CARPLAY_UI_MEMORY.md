@@ -15,15 +15,18 @@
    padded layout 使用 6,003,712 bytes。沒有額外完整 RGB 或 I420 配置，也不使用 realloc 縮小。
    很小的影像若 RGB allocation 放不下 padding，會檢查配置另一小塊 padded buffer。
 4. 直接呼叫 core API：single thread、ref=1、B=0、subme=0、CQP=23、scenecut/mbtree/lookahead=0、
-   CAVLC。fps denominator 修正為 1；requested dimensions 保留，16 對齊由 SPS cropping 處理。
+   CABAC。fps denominator 設為 0，與原 UI 輸出的 SPS timing 格式一致；requested dimensions
+   保留，16 對齊由 SPS cropping 處理。
 5. `x264_frame_pop_unused` 配合受 archive SHA 約束的 allocator call sites，
    將 fenc 的 Y/U/V allocation 借用上述 padded buffer；picture copy 僅設定 metadata。
    **第一張仍有獨立 fdec，原 x264 intra reconstruction 需要它。**
-6. 第一張明確產生 IDR。解析實際 SPS/PPS，確認 progressive I420/CAVLC、POC type 0 等條件。
+6. 第一張明確產生 IDR。解析實際 SPS/PPS，確認 progressive I420/CABAC、POC type 0 等條件。
    NAL payload 必須連續且完全位於追蹤的 allocation；轉移該 allocation 的所有權，避免另複製 IDR。
-7. 立刻關閉 x264，釋放 fenc/fdec、原 RGB allocation 與 core 遺漏的 CQM allocation。
-   之後用有邊界檢查的獨立 writer 產生 20 張 P-skip，與 IDR 寫入原 UI 檔案。
-   不再呼叫 vendor `x264_encoder_skip_pframe`，也不保留 reference pixels。
+7. 在 encoder 尚在時呼叫原 vendor `x264_encoder_skip_pframe` 20 次，將 NAL 暫存於
+   40 KB 有界緩衝，隨即釋放各次 NAL。原函式的 NAL 輸出配置沒有預留足夠的
+   emulation-prevention 擴張；只對已核對的配置 call site 補足容量。
+   20 張產生後關閉 x264，釋放 fenc/fdec、原 RGB allocation 與 core 遺漏的 CQM allocation，
+   再將 IDR 與暫存的 P NAL 寫入原 UI 檔案。
 8. 最後釋放持有的 NAL allocation。檔案 open/write/close 結果均有 log。
 
 ### OOM / closed library 所有權
@@ -48,27 +51,28 @@ x264_malloc/free 定義設為 weak，讓 local 強符號能攔截同一個 `.o` 
 - 實際 ARM library：32×32、1920×1080、2560×1200、2560×1440。
   每個案例重複兩次，全部 allocation 釋放，尾端 guard 無越界。
 - FFmpeg 解碼：每個輸出 21 張、尺寸正確、21 張 decoded frame hash 一致。
+- 2560×1440 的 20 個 P NAL 與原 vendor CABAC skip helper 輸出逐 byte 相同。
 - 2560×1440 隨機雜訊圖：也通過解碼、guard、cleanup；bitstream 可超過舊 307,200-byte 限制。
 - 320×240 對全部 61 個配置點逐一注入 OOM，各重複兩次：安全退出、無配置殘留。
 - 韌體 linked disassembly 確認 CreateUi 呼叫 local bridge；fenc hooks 與 strong allocator 已生效。
 
 | 測試輸入 | QEMU 追蹤的 UI 峰值 bytes |
 |---|---:|
-| 1920×1080 黑白棋盤 | 11,392,845 |
-| 2560×1200 黑白棋盤 | 15,369,317 |
-| 2560×1440 黑白棋盤 | 17,816,957 |
-| 2560×1440 隨機 RGB565 雜訊 | 27,504,500 |
+| 1920×1080 黑白棋盤 | 12,487,177 |
+| 2560×1200 黑白棋盤 | 16,959,009 |
+| 2560×1440 黑白棋盤 | 19,716,249 |
+| 2560×1440 隨機 RGB565 雜訊 | 28,225,783 |
 
 這些數字包含 UI 像素與 core malloc requests，**不含其他韌體任務、heap metadata、
 allocator table、stack、測試 guard**。複雜內容會使 x264 bitstream buffer 成長；
-不能用 17.82 MB 當作所有圖片的上限。高熵圖片在板上可能仍 OOM，但會安全退出並記錄原因，
+不能用 19.72 MB 當作所有圖片的上限。高熵圖片在板上可能仍 OOM，但會安全退出並記錄原因，
 不會自動降解析度或降低 QP 品質。失敗時可能沒有新的 UI 檔案；既有檔案不會在編碼失敗前覆寫。
 
 ### 板上測試
 
 編譯開關沿用 `CARBOX_UI565_ZERO_COPY=1`（預設）；設為 0 可恢復 vendor UI/x264 路徑。
 請測試 2560×1440 的首次啟動與重連，確認 UI 畫面、色彩、skip 延續與後續 CarPlay 視訊。
-RGB565、CQP23/CAVLC 會改變壓縮輸出與畫質，實機需確認。
+RGB565、CQP23 會改變 IDR 壓縮輸出與畫質，實機需確認。
 預期 log：
 
 ```text
@@ -76,8 +80,8 @@ RGB565、CQP23/CAVLC 會改變壓縮輸出與畫質，實機需確認。
 [UI MEM] before_open heap0_free=... largest=... blocks=...
 [UI MEM] fenc shares RGB allocation, padded=6003712
 [UI MEM] after_IDR heap0_free=... largest=... blocks=...
-[UI MEM] IDR=...; encoder and pixels freed before skip20
-[UI MEM] saved ... bytes=... skip=260 status=OK
+[UI MEM] IDR=... skip20=2260; encoder and pixels freed
+[UI MEM] saved ... bytes=... skip=2260 status=OK
 [UI MEM] done heap0_free=... largest=... blocks=...
 ```
 

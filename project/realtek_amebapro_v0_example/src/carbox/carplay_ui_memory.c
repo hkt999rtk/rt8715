@@ -158,8 +158,8 @@ void carbox_ui_pad(uint8_t *image, const carbox_ui_layout *l, int w, int h)
     }
 }
 
-/* Parse the emitted SPS/PPS, accepting only the deliberately restricted
- * progressive I420/CAVLC stream supported by the standalone skip writer. */
+/* Parse the emitted SPS/PPS before handing the encoder's own skip NALs to
+ * the UI file. Reject unknown layouts and any departure from CABAC. */
 typedef struct { const uint8_t *p; size_t bits, pos; int bad; } reader;
 static unsigned getbits(reader *r, unsigned n)
 {
@@ -215,7 +215,8 @@ int carbox_ui_read_headers(carbox_ui_skip *s, const uint8_t *nal, size_t size)
         s->have_sps = 1;
     } else {
         s->pps_id = getue(&r);
-        if (!s->have_sps || getue(&r) != s->sps_id || getbits(&r, 1) ||
+        if (!s->have_sps || getue(&r) != s->sps_id ||
+            (s->cabac = getbits(&r, 1)) != 1 ||
             getbits(&r, 1) || getue(&r) || getue(&r) || getue(&r) ||
             getbits(&r, 1) || getbits(&r, 2)) return -1;
         getue(&r); getue(&r); getue(&r); /* signed QP/chroma offsets; not used */
@@ -225,40 +226,4 @@ int carbox_ui_read_headers(carbox_ui_skip *s, const uint8_t *nal, size_t size)
         s->have_pps = 1;
     }
     return 0;
-}
-typedef struct { uint8_t raw[64]; unsigned pos; int bad; } writer;
-static void putbits(writer *w, unsigned n, unsigned v)
-{
-    if (n > 32 || w->pos + n > sizeof(w->raw)*8) { w->bad = 1; return; }
-    while (n--) { w->raw[w->pos/8] |= ((v >> n)&1) << (7-w->pos%8); ++w->pos; }
-}
-static void putue(writer *w, unsigned v)
-{
-    unsigned n = 0, t = ++v;
-    while (t >>= 1) ++n;
-    putbits(w, n, 0); putbits(w, n+1, v);
-}
-size_t carbox_ui_skip_frame(const carbox_ui_skip *s, unsigned frame,
-                           uint8_t *dst, size_t capacity)
-{
-    writer w = {{0}, 0, 0}; size_t bytes, out = 5; unsigned zeros = 0;
-    if (!s->have_sps || !s->have_pps || !frame || frame > 20 || capacity < 5) return 0;
-    putue(&w, 0); putue(&w, 0); putue(&w, s->pps_id);
-    putbits(&w, s->frame_bits, frame); putbits(&w, s->poc_bits, frame*2);
-    putbits(&w, 3, 0); /* default refs, no list modification, sliding marking */
-    putue(&w, 0); putue(&w, 1); putue(&w, s->mb_count);
-    putbits(&w, 1, 1);
-    if (w.bad) return 0;
-    bytes = (w.pos+7)/8;
-    dst[0]=dst[1]=dst[2]=0; dst[3]=1; dst[4]=0x41;
-    for (size_t i=0; i<bytes; ++i) {
-        unsigned b = w.raw[i];
-        if (zeros == 2 && b <= 3) {
-            if (out == capacity) return 0;
-            dst[out++]=3; zeros=0;
-        }
-        if (out == capacity) return 0;
-        dst[out++]=b; zeros=b==0 ? zeros+1 : 0;
-    }
-    return out;
 }

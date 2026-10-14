@@ -25,6 +25,7 @@ extern void x264_param_default(void *);
 extern int x264_param_parse(void *, const char *, const char *);
 extern void *x264_encoder_open_76(void *);
 extern int x264_encoder_encode(void *, void **, int *, void *, void *);
+extern void *x264_encoder_skip_pframe(void *);
 extern void x264_encoder_close(void *);
 extern void *x264_frame_new(void *, int);
 extern void *__real_x264_frame_pop_unused(void *, int);
@@ -40,6 +41,8 @@ static struct {
     uint8_t *image, *output, *base[3];
     void *output_raw;
     size_t output_size;
+    uint8_t *skips;
+    size_t skips_size;
     carbox_ui_layout layout;
     int borrowing;
     unsigned borrowed;
@@ -74,6 +77,15 @@ void *carbox_ui_core_malloc(size_t n)
 {
     void *p;
     if (!owned()) return malloc(n);
+    /* The vendor skip helper requests RBSP length + 5 at this call site,
+     * but x264_nal_encode can add emulation-prevention bytes afterward.
+     * Reserve the worst-case expansion before handing it a destination. */
+    uintptr_t caller=(uintptr_t)__builtin_return_address(0) & ~(uintptr_t)1;
+    uintptr_t skip=(uintptr_t)x264_encoder_skip_pframe & ~(uintptr_t)1;
+    if (caller==skip+0x1b0) {
+        if (n>(SIZE_MAX-16)/2) fail("skip allocation overflow",n);
+        n=n*2+16;
+    }
     unsigned slot;
     for (slot=0; slot<512 && ui.blocks[slot].raw; ++slot) {}
     if (slot==512) fail("allocation table", n);
@@ -176,6 +188,7 @@ void carbox_ui_encode_surface(void *surface, int width, int height, int fps,
 {
     uint32_t param[148], pic[16]={0}, outpic[16]={0};
     carbox_ui_skip skip={0};
+    enum { SKIP_FRAMES = 20, MAX_SKIP_NAL = 2048 };
     uint32_t *s=surface;
     ENTER();
     if (ui.owner) { LEAVE(); CSurface_delete(surface); printf("[UI MEM] busy\r\n"); return; }
@@ -207,12 +220,12 @@ void carbox_ui_encode_surface(void *surface, int width, int height, int fps,
 #define P(offset,value) param[(offset)/4]=(value)
     P(0,0); P(4,1); P(16,width); P(20,height); P(24,1); P(32,0);
     P(48,5); P(52,1); P(56,1); P(60,1); P(64,6);
-    P(72,fps>0 && fps<=120 ? fps : 20); P(76,1); P(80,1); P(84,1024);
+    P(72,fps>0 && fps<=120 ? fps : 20); P(76,0); P(80,1); P(84,1024);
     P(96,0); P(396,0); P(424,0);
     option(param,"qp","23"); option(param,"scenecut","0");
     option(param,"b-adapt","0"); option(param,"mbtree","0");
     option(param,"rc-lookahead","0"); option(param,"ipratio","1");
-    option(param,"pbratio","1"); option(param,"cabac","0");
+    option(param,"pbratio","1"); option(param,"cabac","1");
     heap_snapshot("before_open");
     void *encoder=x264_encoder_open_76(param);
     if (!encoder) fail("encoder open",0);
@@ -232,7 +245,8 @@ void carbox_ui_encode_surface(void *surface, int width, int height, int fps,
             carbox_ui_read_headers(&skip,(uint8_t *)(uintptr_t)n[3],n[2])) fail("NAL/header",i);
         total+=n[2]; if (n[1]==5) have_idr=1;
     }
-    if (!have_idr || !skip.have_pps || skip.width!=(unsigned)width || skip.height!=(unsigned)height)
+    if (!have_idr || !skip.have_pps || !skip.cabac ||
+        skip.width!=(unsigned)width || skip.height!=(unsigned)height)
         fail("unsupported SPS/PPS",0);
     /* NALs occupy one x264-owned allocation. Transfer that allocation instead
      * of copying the IDR while fenc/fdec are still live. Verify every boundary. */
@@ -252,32 +266,41 @@ void carbox_ui_encode_surface(void *surface, int width, int height, int fps,
         }
     }
     if (!ui.output_raw) fail("NAL allocation ownership",total);
+    ui.skips=malloc(SKIP_FRAMES*MAX_SKIP_NAL);
+    if (!ui.skips) fail("skip storage",SKIP_FRAMES*MAX_SKIP_NAL);
+    for (unsigned frame=0; frame<SKIP_FRAMES; ++frame) {
+        uint32_t *n=x264_encoder_skip_pframe(encoder);
+        if (!n || n[1]!=1 || !n[3] || n[2]<6 || n[2]>MAX_SKIP_NAL)
+            fail("vendor skip NAL",frame);
+        const uint8_t *data=(const uint8_t *)(uintptr_t)n[3];
+        if (memcmp(data,"\0\0\0\1\x21",5)) fail("vendor skip header",frame);
+        memcpy(ui.skips+ui.skips_size,data,n[2]);
+        ui.skips_size+=n[2];
+        carbox_ui_core_free((void *)(uintptr_t)n[3]);
+        carbox_ui_core_free(n);
+    }
     x264_encoder_close(encoder);
     release_core();
     free(ui.image); ui.image=NULL; memset(ui.base,0,sizeof(ui.base));
     heap_snapshot("after_encoder_release");
-    printf("[UI MEM] IDR=%u; encoder and pixels freed before skip20\r\n",(unsigned)total);
+    printf("[UI MEM] IDR=%u skip20=%u; encoder and pixels freed\r\n",
+           (unsigned)total,(unsigned)ui.skips_size);
     FILE *file=fopen(filename,"wb");
     if (file) {
-        uint8_t packet[128];
-        size_t written=fwrite(ui.output,1,total,file), skip_bytes=0;
-        int ok=written==total;
-        for (unsigned frame=1;ok && frame<=20;++frame) {
-            size_t n=carbox_ui_skip_frame(&skip,frame,packet,sizeof(packet));
-            if (!n) { ok=0; break; }
-            size_t done=fwrite(packet,1,n,file);
-            written+=done; skip_bytes+=done;
-            if (done!=n) ok=0;
-        }
+        size_t written=fwrite(ui.output,1,total,file);
+        size_t skip_written=written==total ? fwrite(ui.skips,1,ui.skips_size,file) : 0;
+        int ok=written==total && skip_written==ui.skips_size;
+        written+=skip_written;
         int closed=fclose(file);
         printf("[UI MEM] saved %s bytes=%u skip=%u status=%s\r\n",filename,
-               (unsigned)written,(unsigned)skip_bytes,ok && !closed ? "OK" : "WRITE_FAILED");
+               (unsigned)written,(unsigned)skip_written,ok && !closed ? "OK" : "WRITE_FAILED");
     } else printf("[UI MEM] file open failed: %s\r\n",filename);
 cleanup:
     release_core();
-    free(ui.image); free(ui.output_raw);
+    free(ui.image); free(ui.output_raw); free(ui.skips);
     /* Do not memset jmp_buf/owner until there are no more core calls. */
     ui.image=NULL; ui.output=NULL; ui.output_raw=NULL; ui.output_size=0;
+    ui.skips=NULL; ui.skips_size=0;
     memset(ui.base,0,sizeof(ui.base)); ui.borrowing=0; ui.borrowed=0;
     ui.peak=ui.calls=0;
     heap_snapshot("done");

@@ -11,9 +11,7 @@ int carbox_ui_layout_init(carbox_ui_layout *l, int width, int height);
 void carbox_ui_pad(uint8_t *image, const carbox_ui_layout *l, int width, int height);
 typedef struct {
     unsigned sps_id, pps_id, frame_bits, poc_bits, mb_count;
-    unsigned width, height, have_sps, have_pps;
+    unsigned width, height, have_sps, have_pps, cabac;
 } carbox_ui_skip;
 int carbox_ui_read_headers(carbox_ui_skip *s, const uint8_t *nal, size_t size);
-size_t carbox_ui_skip_frame(const carbox_ui_skip *s, unsigned frame,
-                          uint8_t *dst, size_t capacity);
 #endif

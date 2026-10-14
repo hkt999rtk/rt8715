@@ -727,11 +727,28 @@ SRC_C += ../../../component/common/utilities/xml.c
 SRC_C += ../../../component/common/drivers/wlan/realtek/src/core/option/rtw_opt_skbuf.c
 
 SRC_C += ../src/main.c
-CARBOX_PAIR_KEYCHAIN_CACHE ?= 1
+# Trace the received CarPlay modes and the show/stop decision on test images.
+# Keep this switch independent of the experimental pairing fast paths.
+CARBOX_MODE_DIAG ?= 1
+ifeq ($(CARBOX_MODE_DIAG),1)
+SRC_C += ../src/carbox/carplay_mode_diag.c
+endif
+# Validated on CHERY /info version 450.14: the vendor resource decision leaves
+# audio/video at 0 for take 500/500/100 and prevents the screen from starting.
+# Keep an explicit 0 setting for A/B comparison with the original behavior.
+CARBOX_RESOURCE_450_COMPAT ?= 1
+ifeq ($(CARBOX_RESOURCE_450_COMPAT),1)
+SRC_C += ../src/carbox/carplay_resource_450_compat.c
+endif
+# Keep the vendor keychain reload path until pairing and mode negotiation are
+# validated on device; enable explicitly for the cache-only A/B build.
+CARBOX_PAIR_KEYCHAIN_CACHE ?= 0
 ifeq ($(CARBOX_PAIR_KEYCHAIN_CACHE),1)
 SRC_C += ../src/carbox/pair_keychain_cache.c
 endif
-CARBOX_PAIR_VERIFY_FASTPATH ?= 1
+# The vendor path runs Pair Setup even with a stored pair. Verify-first is
+# experimental until the receiver's mode negotiation is validated on device.
+CARBOX_PAIR_VERIFY_FASTPATH ?= 0
 ifeq ($(CARBOX_PAIR_VERIFY_FASTPATH),1)
 SRC_C += ../src/carbox/pair_verify_fastpath.c
 endif
@@ -1912,6 +1929,13 @@ CPPFLAGS += -w
 CPPFLAGS += -Wall -Wpointer-arith -Wundef -Wno-write-strings -Wno-maybe-uninitialized
 
 LFLAGS = 
+ifeq ($(CARBOX_MODE_DIAG),1)
+LFLAGS += -Wl,--wrap=AirPlayResponse_GetInfoInfoResponse \
+	-Wl,--wrap=AirPlayResponse_GetInfoChangeModes \
+	-Wl,--wrap=AirPlayInfo_IsPaired \
+	-Wl,--wrap=acc_carplay_cb_audio_video_state \
+	-Wl,--wrap=lib_carplay_show -Wl,--wrap=lib_carplay_stop
+endif
 ifeq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK)$(CARBOX_UI565_ZERO_COPY),11)
 LFLAGS += -Wl,--wrap=x264_frame_pop_unused -Wl,--wrap=x264_frame_copy_picture
 endif
@@ -2314,6 +2338,8 @@ $(SCREEN_RX_POLY_VENDOR_STAMP): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 $(CARBOX_CARPLAY_ARCHIVE): $(SCREEN_RX_POLY_VENDOR_STAMP)
 endif
 CARBOX_ACCESSORY2_HANDOVER_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2_handover.a
+CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2_resource450.a
+CARBOX_RESOURCE450_PATCH := ../src/carbox/tools/patch_carplay_resource_450.py
 CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_Accessory2_vendor_private_mem.a
 CARBOX_SYSTEMLIB_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_SystemLib.a
 CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_SystemLib_vendor_private_mem.a
@@ -2419,6 +2445,17 @@ $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
 		mv -f "$$tmp_archive" $@
 application: $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
 endif
+ifeq ($(CARBOX_RESOURCE_450_COMPAT),1)
+ifneq ($(VIDEO_HANDOVER_ZERO_COPY),1)
+$(error CARBOX_RESOURCE_450_COMPAT requires VIDEO_HANDOVER_ZERO_COPY=1)
+endif
+ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
+$(error CARBOX_RESOURCE_450_COMPAT requires the production CarPlay archive)
+endif
+$(CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE): $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE) $(CARBOX_RESOURCE450_PATCH)
+	python3 $(CARBOX_RESOURCE450_PATCH) $(AR) $(OBJCOPY) $< $@
+application: $(CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE)
+endif
 ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
 $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH) $(CARBOX_SCREEN_WAIT_RELOC_PATCH) \
@@ -2511,7 +2548,9 @@ LIBFLAGS += $(CARBOX_FDK_AAC_ARCHIVE)
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_init.a
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_zlib.a
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_AndroidAuto.a
-ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
+ifeq ($(CARBOX_RESOURCE_450_COMPAT),1)
+LIBFLAGS += $(CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE)
+else ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
 LIBFLAGS += $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE)
 else ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO) $(SCREEN_QUEUE_EVENT_WAIT) $(IAP2_COND_TIMEDWAIT_FIX)),)
 LIBFLAGS += $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)

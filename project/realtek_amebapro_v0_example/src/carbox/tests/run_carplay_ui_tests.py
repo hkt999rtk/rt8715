@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise local conversion and the real ARM x264 archive; requires QEMU/FFmpeg."""
 import os
+import hashlib
 import pathlib
 import re
 import subprocess
@@ -45,6 +46,17 @@ def main():
             frames=[s for s in data.splitlines() if not s.startswith("#")]
             assert len(frames)==21 and len({s.split(",")[-1] for s in frames})==1,data
             assert f"{width}x{height}" in data,data
+            if (width,height,pattern)==(2560,1440,"checker"):
+                # The P NALs must match this archive's original CABAC helper,
+                # not just decode in FFmpeg. Captured from vendor mode1.h264.
+                packets=(work/"ui.h264").read_bytes().split(b"\0\0\0\1")
+                assert len(packets)==24 and not packets[0]
+                assert [p[0]&31 for p in packets[1:]]==[7,8,5]+[1]*20
+                assert packets[1].hex()=="27640032ac1314500a002d69b808083036860c96"
+                assert packets[2].hex()=="28ee0fcb"
+                p_tail=b"".join(b"\0\0\0\1"+p for p in packets[4:])
+                assert hashlib.sha256(p_tail).hexdigest()==(
+                    "a1bff9ad20f6d1a5a06c2a2ed36faac1d9149630b6b1b89914a1074f63a3eb0b")
             print(f"PASS {width}x{height} {pattern}: 21 identical decoded frames; " +
                   re.findall(r"RESULT repeat=1 (.*)",log)[0],flush=True)
         baseline=encode(320,240)
