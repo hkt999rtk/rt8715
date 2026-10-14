@@ -17,16 +17,15 @@
 4. 直接呼叫 core API：single thread、ref=1、B=0、subme=0、CQP=23、scenecut/mbtree/lookahead=0、
    CABAC。fps denominator 設為 0，與原 UI 輸出的 SPS timing 格式一致；requested dimensions
    保留，16 對齊由 SPS cropping 處理。
-5. `x264_frame_pop_unused` 配合受 archive SHA 約束的 allocator call sites，
-   將 fenc 的 Y/U/V allocation 借用上述 padded buffer；picture copy 僅設定 metadata。
-   **第一張仍有獨立 fdec，原 x264 intra reconstruction 需要它。**
+5. 受 archive SHA 約束的 `x264_frame_new` 三個 plane allocation call sites，
+   讓第一張的 fdec 與 fenc **共用**上述 padded I420 buffer；picture copy 僅設定
+   metadata。x264 仍執行完整 IDR intra reconstruction，但沒有第二份 fdec pixels。
 6. 第一張明確產生 IDR。解析實際 SPS/PPS，確認 progressive I420/CABAC、POC type 0 等條件。
    NAL payload 必須連續且完全位於追蹤的 allocation；轉移該 allocation 的所有權，避免另複製 IDR。
-7. 在 encoder 尚在時呼叫原 vendor `x264_encoder_skip_pframe` 20 次，將 NAL 暫存於
-   40 KB 有界緩衝，隨即釋放各次 NAL。原函式的 NAL 輸出配置沒有預留足夠的
-   emulation-prevention 擴張；只對已核對的配置 call site 補足容量。
-   20 張產生後關閉 x264，釋放 fenc/fdec、原 RGB allocation 與 core 遺漏的 CQM allocation，
-   再將 IDR 與暫存的 P NAL 寫入原 UI 檔案。
+7. IDR 完成後立即關閉 x264，釋放 fenc/fdec、原 RGB allocation 與 core 遺漏的
+   CQM allocation。獨立 CABAC skip writer 只使用 archive 的 CABAC arithmetic primitives，
+   不建立 encoder 或 reference frame。每張 P-skip 有新的 frame_num/POC；20 張 NAL
+   暫存於 40 KB 有界緩衝，再與 IDR 一起寫入原 UI 檔案。
 8. 最後釋放持有的 NAL allocation。檔案 open/write/close 結果均有 log。
 
 ### OOM / closed library 所有權
@@ -51,22 +50,27 @@ x264_malloc/free 定義設為 weak，讓 local 強符號能攔截同一個 `.o` 
 - 實際 ARM library：32×32、1920×1080、2560×1200、2560×1440。
   每個案例重複兩次，全部 allocation 釋放，尾端 guard 無越界。
 - FFmpeg 解碼：每個輸出 21 張、尺寸正確、21 張 decoded frame hash 一致。
-- 2560×1440 的 20 個 P NAL 與原 vendor CABAC skip helper 輸出逐 byte 相同。
+- 上述尺寸加上 2560×1440 隨機圖的**完整 bitstream**，均與未共用 fdec 且使用
+  原 vendor skip helper 的基準輸出逐 byte 相同。
+- 32×32、320×240、1920×1080、2560×1200、2560×1440 的 20 個 P NAL
+  均與原 vendor CABAC skip helper 輸出逐 byte 相同。
 - 2560×1440 隨機雜訊圖：也通過解碼、guard、cleanup；bitstream 可超過舊 307,200-byte 限制。
-- 320×240 對全部 61 個配置點逐一注入 OOM，各重複兩次：安全退出、無配置殘留。
+- 320×240 對全部 82 個配置點逐一注入 OOM，各重複兩次：安全退出、無配置殘留。
 - 韌體 linked disassembly 確認 CreateUi 呼叫 local bridge；fenc hooks 與 strong allocator 已生效。
 
 | 測試輸入 | QEMU 追蹤的 UI 峰值 bytes |
 |---|---:|
-| 1920×1080 黑白棋盤 | 12,487,177 |
-| 2560×1200 黑白棋盤 | 16,959,009 |
-| 2560×1440 黑白棋盤 | 19,716,249 |
-| 2560×1440 隨機 RGB565 雜訊 | 28,225,783 |
+| 1920×1080 黑白棋盤 | 8,953,645 |
+| 2560×1200 黑白棋盤 | 11,858,245 |
+| 2560×1440 黑白棋盤 | 13,670,845 |
+| 2560×1440 隨機 RGB565 雜訊 | 22,222,002 |
 
 這些數字包含 UI 像素與 core malloc requests，**不含其他韌體任務、heap metadata、
 allocator table、stack、測試 guard**。複雜內容會使 x264 bitstream buffer 成長；
-不能用 19.72 MB 當作所有圖片的上限。高熵圖片在板上可能仍 OOM，但會安全退出並記錄原因，
+不能用 13.67 MB 當作所有圖片的上限。高熵圖片在板上可能仍 OOM，但會安全退出並記錄原因，
 不會自動降解析度或降低 QP 品質。失敗時可能沒有新的 UI 檔案；既有檔案不會在編碼失敗前覆寫。
+fdec 與 fenc 共用同一份 pixels，使第一張 IDR 的峰值也降低約 6 MB；
+獨立 skip writer 則讓這份 pixels 在產生 P-frame 前釋放。
 
 ### 板上測試
 
@@ -78,9 +82,11 @@ RGB565、CQP23 會改變 IDR 壓縮輸出與畫質，實機需確認。
 ```text
 [UI MEM] start 2560x1440 ... bpp=2 rgb=7372800 scratch=10780
 [UI MEM] before_open heap0_free=... largest=... blocks=...
+[UI MEM] fdec shares I420 allocation
 [UI MEM] fenc shares RGB allocation, padded=6003712
 [UI MEM] after_IDR heap0_free=... largest=... blocks=...
-[UI MEM] IDR=... skip20=2260; encoder and pixels freed
+[UI MEM] before_skip_no_reference heap0_free=... largest=... blocks=...
+[UI MEM] IDR=... skip20=2260; reference freed before skip
 [UI MEM] saved ... bytes=... skip=2260 status=OK
 [UI MEM] done heap0_free=... largest=... blocks=...
 ```
@@ -230,12 +236,12 @@ FFmpeg 解碼得到 21 張 2560×1440 畫面，frame MD5 全部相同，decode e
 這個 proof 限定該組 SPS/PPS、20 張及 progressive CAVLC；還不是通用產生器，
 未驗證 frame_num/POC wrap、其他解析度或車機相容性。
 
-目前 vendor skip 函式仍呼叫 `x264_macroblock_cache_load/save`，會讀 fenc、
-寫 fdec。因此只有替換 skip 產生器後才能在第一張完成時 close encoder。
-第一張 IDR 的 intra prediction 仍用到相鄰重建像素；現有 x264 以完整 fdec
-實作，不能直接取消 malloc 或把 ref 改成 0。若要把第一張的 fdec 也改成
-列緩衝區，需要修改 core 的位址計算、重建、濾波與 cache，屬較大改造。
-只在第一張之後釋放 reference，不會降低本次 OOM 所在的第一張峰值。
+當時 vendor skip 函式仍呼叫 `x264_macroblock_cache_load/save`，會讀 fenc、
+寫 fdec。上文的獨立 CABAC writer 已取代它，因此第一張完成時即可 close encoder。
+第一張 IDR 的 intra prediction 仍用到相鄰重建像素；不能直接把 ref 設成 0。
+當時尚未驗證 fdec/fenc 共用，所以上述 CAVLC proof 只能省 IDR 之後的記憶體。
+目前上文的實作已在受 SHA 保護的 call sites 共用兩者的 pixel planes，並以
+多尺寸、隨機圖的完整 bitstream 逐 byte 比對確認第一張沒有改變。
 
 ### Review 另發現的具體問題
 

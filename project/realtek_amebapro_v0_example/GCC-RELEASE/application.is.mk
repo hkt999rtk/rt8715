@@ -818,7 +818,8 @@ SRC_C += ../src/carbox/screen_rx_rate_limit.c
 SRC_C += ../src/carbox/audio_decode_profiler.c
 SRC_C += ../src/carbox/memcheck.c
 ifeq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK)$(CARBOX_UI565_ZERO_COPY),11)
-SRC_C += ../src/carbox/carplay_ui_memory.c ../src/carbox/carplay_ui_encoder.c
+SRC_C += ../src/carbox/carplay_ui_memory.c ../src/carbox/carplay_ui_encoder.c \
+	../src/carbox/carplay_ui_skip_cabac.c
 endif
 SRC_C += ../src/carbox/carbox_stubs.c
 SRC_C += ../src/carbox/libusb_ref_compat/libusb_ref_compat_hal.c

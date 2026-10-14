@@ -14,4 +14,6 @@ typedef struct {
     unsigned width, height, have_sps, have_pps, cabac;
 } carbox_ui_skip;
 int carbox_ui_read_headers(carbox_ui_skip *s, const uint8_t *nal, size_t size);
+size_t carbox_ui_skip_cabac(const carbox_ui_skip *s, unsigned frame,
+                           uint8_t *dst, size_t capacity);
 #endif
