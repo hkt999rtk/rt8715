@@ -727,6 +727,14 @@ SRC_C += ../../../component/common/utilities/xml.c
 SRC_C += ../../../component/common/drivers/wlan/realtek/src/core/option/rtw_opt_skbuf.c
 
 SRC_C += ../src/main.c
+CARBOX_PAIR_KEYCHAIN_CACHE ?= 1
+ifeq ($(CARBOX_PAIR_KEYCHAIN_CACHE),1)
+SRC_C += ../src/carbox/pair_keychain_cache.c
+endif
+CARBOX_PAIR_VERIFY_FASTPATH ?= 1
+ifeq ($(CARBOX_PAIR_VERIFY_FASTPATH),1)
+SRC_C += ../src/carbox/pair_verify_fastpath.c
+endif
 CHACHA_VENDOR_TRACE ?= 0
 CHACHA_PRE_RX_VENDOR ?= 0
 CHACHA_VENDOR_PRIVATE_MEM ?= 0
@@ -1240,6 +1248,22 @@ $(RX_CRYPTO_STAMP):
 GCCFLAGS += -DCONFIG_CHACHA_RX_SEPARATE_BUFFER=$(if $(filter 1,$(SCREEN_RX_SEPARATE_BUFFER) $(AUDIO_RX_SEPARATE_BUFFER)),1,0)
 GCCFLAGS += -DCONFIG_CHACHA_HW_MIN_LEN=$(CHACHA_HW_MIN_LEN)
 VIDEO_HANDOVER_ZERO_COPY ?= 1
+ifeq ($(CARBOX_PAIR_KEYCHAIN_CACHE),1)
+ifneq ($(VIDEO_HANDOVER_ZERO_COPY),1)
+$(error CARBOX_PAIR_KEYCHAIN_CACHE requires VIDEO_HANDOVER_ZERO_COPY=1)
+endif
+ifneq ($(filter 1,$(CHACHA_PRIVATE_SW_VERIFY) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_VENDOR_PRIVATE_MEM)),)
+$(error CARBOX_PAIR_KEYCHAIN_CACHE is supported only by the production CarPlay handover archive)
+endif
+endif
+ifeq ($(CARBOX_PAIR_VERIFY_FASTPATH),1)
+ifneq ($(VIDEO_HANDOVER_ZERO_COPY),1)
+$(error CARBOX_PAIR_VERIFY_FASTPATH requires VIDEO_HANDOVER_ZERO_COPY=1)
+endif
+ifneq ($(filter 1,$(CHACHA_PRIVATE_SW_VERIFY) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_VENDOR_PRIVATE_MEM)),)
+$(error CARBOX_PAIR_VERIFY_FASTPATH is supported only by the production CarPlay handover archive)
+endif
+endif
 VIDEO_HANDOVER_ZERO_COPY_MIN_BYTES ?= 4096
 ifneq ($(filter 1,$(SCREEN_RX_SEPARATE_BUFFER) $(AUDIO_RX_SEPARATE_BUFFER)),)
 ifneq ($(VIDEO_HANDOVER_ZERO_COPY),1)
@@ -2256,6 +2280,18 @@ CHACHA_TRANSACTION_TRACE ?= 0
 # stamp so switching mode/config automatically rebuilds the derived archive.
 CARBOX_CHACHA_CONFIG_STAMP := $(CARBOX_CARPLAY_CHACHA_DIR)/build/.carbox_chacha_config_mode$(CHACHA_MODE)-min$(CHACHA_HW_MIN_LEN)-direct$(SCREEN_TX_DIRECT_CRYPTO)-stats$(CHACHA_STATS_INTERVAL_MS)-runtimeprof$(CHACHA_RUNTIME_PROFILE)-selftest$(CHACHA_HW_SELFTEST)-partialtest$(CHACHA_COMBINED_PARTIAL_SELFTEST)-trace$(CHACHA_TRANSACTION_TRACE)-privverify$(CHACHA_PRIVATE_SW_VERIFY)-prio$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
 CARBOX_VIDEO_HANDOVER_PATCH := $(CARBOX_SMART_CARPLAY_LIB_DIR)/patch_video_handover_archive.sh
+CARBOX_PAIR_KEYCHAIN_PATCH := ../src/carbox/tools/patch_pair_keychain_archive.py
+CARBOX_PAIR_KEYCHAIN_STAMP := $(OBJ_DIR)/.pair_keychain_cache_$(CARBOX_PAIR_KEYCHAIN_CACHE)
+$(CARBOX_PAIR_KEYCHAIN_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.pair_keychain_cache_*
+	@touch $@
+CARBOX_PAIR_VERIFY_PATCH := ../src/carbox/tools/patch_pair_verify_fastpath_archive.py
+CARBOX_PAIR_VERIFY_STAMP := $(OBJ_DIR)/.pair_verify_fastpath_$(CARBOX_PAIR_VERIFY_FASTPATH)
+$(CARBOX_PAIR_VERIFY_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.pair_verify_fastpath_*
+	@touch $@
 CARBOX_SCREEN_WAIT_RELOC_PATCH := ../src/carbox/tools/patch_screen_wait_relocation.py
 CARBOX_REDUNDANT_COPY_PATCH := ../src/carbox/tools/patch_airplay_redundant_copy.py
 CARBOX_EVENT_RESPONSE_PATCH := ../src/carbox/tools/patch_airplay_event_response.py
@@ -2367,12 +2403,20 @@ $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH) $(CARBOX_SCREEN_WAIT_RELOC_PATCH) \
 		$(CARBOX_REDUNDANT_COPY_PATCH) $(CARBOX_EVENT_RESPONSE_PATCH) \
 		$(CARBOX_EVENT_READAHEAD_PATCH) \
-		$(CARBOX_ACCESSORY_PATCH_STAMP)
-	sh $(CARBOX_VIDEO_HANDOVER_PATCH) \
-		$(if $(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO)),accessory,accessory-wait) \
-		$(AR) $(OBJCOPY) $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) $@ \
-		"AirPlayScreen.o $(if $(filter 1,$(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX)),AirPlayEvent.o) $(if $(filter 1,$(IAP2_COND_TIMEDWAIT_FIX)),iAP2Ctrl.o)" \
-		$(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX) $(CAR_ACK_TIMESTAMP)
+		$(CARBOX_ACCESSORY_PATCH_STAMP) $(CARBOX_PAIR_VERIFY_PATCH) \
+		$(CARBOX_PAIR_VERIFY_STAMP)
+	@set -e; \
+		tmp_archive="$@.pair.tmp"; \
+		trap 'rm -f "$$tmp_archive"' 0; \
+		sh $(CARBOX_VIDEO_HANDOVER_PATCH) \
+			$(if $(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO)),accessory,accessory-wait) \
+			$(AR) $(OBJCOPY) $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) "$$tmp_archive" \
+			"AirPlayScreen.o $(if $(filter 1,$(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX)),AirPlayEvent.o) $(if $(filter 1,$(IAP2_COND_TIMEDWAIT_FIX)),iAP2Ctrl.o)" \
+			$(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX) $(CAR_ACK_TIMESTAMP); \
+		if [ "$(CARBOX_PAIR_VERIFY_FASTPATH)" = 1 ]; then \
+			python3 $(CARBOX_PAIR_VERIFY_PATCH) $(AR) $(OBJCOPY) "$$tmp_archive" "$$tmp_archive"; \
+		fi; \
+		mv -f "$$tmp_archive" $@
 application: $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
 endif
 ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
@@ -2419,6 +2463,7 @@ ifeq ($(VIDEO_HANDOVER_ZERO_COPY),1)
 $(CARBOX_CARPLAY_HANDOVER_ARCHIVE): $(CARBOX_CARPLAY_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH) $(RX_CRYPTO_STAMP) \
 		../src/carbox/tools/patch_rx_crypto_archive.py $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
+		$(CARBOX_PAIR_KEYCHAIN_PATCH) $(CARBOX_PAIR_KEYCHAIN_STAMP) \
 		application.is.mk
 	# Publish only after both patch stages succeed; failed audits must remain
 	# failures on the next make, even when a previous valid archive exists.
@@ -2431,6 +2476,10 @@ $(CARBOX_CARPLAY_HANDOVER_ARCHIVE): $(CARBOX_CARPLAY_ARCHIVE) \
 		python3 ../src/carbox/tools/patch_rx_crypto_archive.py $(AR) $(OBJCOPY) \
 			$(CARBOX_CARPLAY_VENDOR_ARCHIVE) $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) "$$staging_dir/archive.a" \
 			$(SCREEN_RX_SEPARATE_BUFFER) $(AUDIO_RX_SEPARATE_BUFFER); \
+		if [ "$(CARBOX_PAIR_KEYCHAIN_CACHE)" = 1 ]; then \
+			python3 $(CARBOX_PAIR_KEYCHAIN_PATCH) $(AR) $(OBJCOPY) \
+				"$$staging_dir/archive.a" "$$staging_dir/archive.a"; \
+		fi; \
 		mv -f -- "$$staging_dir/archive.a" "$@"
 
 application: $(CARBOX_CARPLAY_HANDOVER_ARCHIVE)
