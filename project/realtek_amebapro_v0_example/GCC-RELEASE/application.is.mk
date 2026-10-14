@@ -746,9 +746,9 @@ CARBOX_PAIR_KEYCHAIN_CACHE ?= 0
 ifeq ($(CARBOX_PAIR_KEYCHAIN_CACHE),1)
 SRC_C += ../src/carbox/pair_keychain_cache.c
 endif
-# Try Pair Verify first for a stored peer, falling back to Pair Setup if the
-# peer rejects it. An explicit 0 restores the vendor path for A/B comparison.
-CARBOX_PAIR_VERIFY_FASTPATH ?= 1
+# Use the vendor Pair Setup / Pair Verify sequence by default. Verify-first
+# remains available only for an explicit A/B test.
+CARBOX_PAIR_VERIFY_FASTPATH ?= 0
 ifeq ($(CARBOX_PAIR_VERIFY_FASTPATH),1)
 SRC_C += ../src/carbox/pair_verify_fastpath.c
 endif

@@ -14,7 +14,11 @@ import tempfile
 import hashlib
 
 
-X264_ABI76_SHA256 = "e4a2c837959c7333c4b12cd692825e078365a8d85b86961d57aff8aa4e034cb4"
+# The customer repacked the same 23 ABI76 members with newer ar timestamps.
+X264_ABI76_SHA256S = {
+    "e4a2c837959c7333c4b12cd692825e078365a8d85b86961d57aff8aa4e034cb4",
+    "079e7e2ca73d26d3ed98e4859db568c7285901cf262c630bc72848df1c721d45",
+}
 
 
 def run(*args, cwd=None):
@@ -60,7 +64,7 @@ def main():
     source = source.resolve()
     output = output.resolve()
     x264 = x264.resolve()
-    if hashlib.sha256(x264.read_bytes()).hexdigest() != X264_ABI76_SHA256:
+    if hashlib.sha256(x264.read_bytes()).hexdigest() not in X264_ABI76_SHA256S:
         raise SystemExit("UI565 patch: lib_x264.a changed; revalidate picture ABI offsets")
     objdump = objcopy.with_name(objcopy.name.replace("objcopy", "objdump"))
     nm = objcopy.with_name(objcopy.name.replace("objcopy", "nm"))

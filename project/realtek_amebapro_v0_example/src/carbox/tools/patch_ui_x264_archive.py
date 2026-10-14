@@ -6,11 +6,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from patch_carplay_ui565_archive import X264_ABI76_SHA256
+from patch_carplay_ui565_archive import X264_ABI76_SHA256S
 
 def main():
     ar, objcopy, source, output = [pathlib.Path(s).resolve() for s in sys.argv[1:]]
-    if hashlib.sha256(source.read_bytes()).hexdigest() != X264_ABI76_SHA256:
+    if hashlib.sha256(source.read_bytes()).hexdigest() not in X264_ABI76_SHA256S:
         raise SystemExit("UI x264 patch: unknown archive; re-audit all ABI offsets")
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=output.parent, prefix="ui-x264-") as tmp:
