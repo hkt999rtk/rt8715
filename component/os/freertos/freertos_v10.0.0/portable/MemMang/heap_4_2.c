@@ -522,6 +522,45 @@ size_t xPortGetFreeHeapSize( void )
 {
 	return xPortGetFreeHeapSizeExt(0);
 }
+
+/* Read-only snapshot for diagnosing large allocations on the two heaps. */
+void vPortGetHeapFragmentationStatsExt( int idx, size_t *free_bytes,
+                                       size_t *largest_allocatable,
+                                       size_t *free_blocks )
+{
+    BlockLink_t *block;
+    size_t largest = 0;
+    size_t count = 0;
+    size_t available = 0;
+
+    if( free_bytes == NULL || largest_allocatable == NULL ||
+        free_blocks == NULL || idx < 0 || idx >= 2 )
+    {
+        return;
+    }
+
+    vPortLock();
+    if( xHeapInfo[idx].pxEnd != NULL )
+    {
+        available = xHeapInfo[idx].xFreeBytesRemaining;
+        for( block = xHeapInfo[idx].xStart.pxNextFreeBlock;
+             block != xHeapInfo[idx].pxEnd;
+             block = block->pxNextFreeBlock )
+        {
+            if( block->xBlockSize > largest )
+            {
+                largest = block->xBlockSize;
+            }
+            count++;
+        }
+    }
+    vPortUnlock();
+
+    *free_bytes = available;
+    *largest_allocatable = largest > xHeapStructSize ?
+                           largest - xHeapStructSize : 0;
+    *free_blocks = count;
+}
 /*-----------------------------------------------------------*/
 
 size_t xPortGetMinimumEverFreeHeapSizeExt( int idx )

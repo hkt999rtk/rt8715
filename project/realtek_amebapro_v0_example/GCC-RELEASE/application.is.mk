@@ -217,6 +217,7 @@ INCLUDES += -I../src/carbox/vfs_compat
 
 CARBOX_EXPERIMENTAL_USB ?= 1
 CARBOX_EXPERIMENTAL_SMART_A_LINK ?= 1
+CARBOX_UI565_ZERO_COPY ?= 1
 
 ifeq ($(CARBOX_EXPERIMENTAL_USB),1)
 CARBOX_USB_LIB := 1
@@ -791,6 +792,9 @@ SRC_C += ../src/carbox/screen_tcp_write_profiler.c
 SRC_C += ../src/carbox/screen_rx_rate_limit.c
 SRC_C += ../src/carbox/audio_decode_profiler.c
 SRC_C += ../src/carbox/memcheck.c
+ifeq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK)$(CARBOX_UI565_ZERO_COPY),11)
+SRC_C += ../src/carbox/carplay_ui_memory.c ../src/carbox/carplay_ui_encoder.c
+endif
 SRC_C += ../src/carbox/carbox_stubs.c
 SRC_C += ../src/carbox/libusb_ref_compat/libusb_ref_compat_hal.c
 SRC_C += ../src/carbox/libusb_ref_compat/libusb_ref_compat_delay.c
@@ -909,6 +913,8 @@ GCCFLAGS += -march=armv8-m.main+dsp -mthumb -mcmse -mfloat-abi=softfp -mfpu=fpv5
 GCCFLAGS += -nostartfiles -nodefaultlibs -nostdlib -fstack-usage -fdata-sections -ffunction-sections -fno-common
 CARBOX_USB_RX_BOOST_LEVEL ?= -1
 GCCFLAGS += -DCARBOX_USB_RX_BOOST_LEVEL=$(CARBOX_USB_RX_BOOST_LEVEL)
+CARBOX_X264_MEM_DIAG ?= 1
+GCCFLAGS += -DCARBOX_X264_MEM_DIAG=$(CARBOX_X264_MEM_DIAG)
 
 # Define Macro
 GCCFLAGS += -D__thumb2__ -DCONFIG_PLATFORM_8195B -DCONFIG_PLATFORM_8195BHP -D__FPU_PRESENT -D__ARM_ARCH_7M__=0 -D__ARM_ARCH_7EM__=0 -D__ARM_ARCH_8M_MAIN__=1 -D__ARM_ARCH_8M_BASE__=0 
@@ -1882,6 +1888,9 @@ CPPFLAGS += -w
 CPPFLAGS += -Wall -Wpointer-arith -Wundef -Wno-write-strings -Wno-maybe-uninitialized
 
 LFLAGS = 
+ifeq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK)$(CARBOX_UI565_ZERO_COPY),11)
+LFLAGS += -Wl,--wrap=x264_frame_pop_unused -Wl,--wrap=x264_frame_copy_picture
+endif
 ifeq ($(CARBOX_USB_LIB),1)
 LFLAGS += -Wl,--wrap=usb_hal_driver
 endif
@@ -2272,6 +2281,9 @@ CARBOX_ACCESSORY2_HANDOVER_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Access
 CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_Accessory2_vendor_private_mem.a
 CARBOX_SYSTEMLIB_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_SystemLib.a
 CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_SystemLib_vendor_private_mem.a
+CARBOX_SYSTEMLIB_UI565_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_SystemLib_ui565.a
+CARBOX_UI_X264_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_x264_ui.a
+CARBOX_SYSTEMLIB_UI565_PATCH := ../src/carbox/tools/patch_carplay_ui565_archive.py
 CARBOX_UILIB_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_UiLib.a
 CARBOX_UILIB_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_UiLib_vendor_private_mem.a
 CARBOX_CARPLAY_HANDOVER_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_chacha_m33_handover.a
@@ -2386,6 +2398,23 @@ $(CARBOX_UILIB_PRIVATE_MEM_ARCHIVE): $(CARBOX_UILIB_VENDOR_ARCHIVE) \
 		$(CARBOX_UILIB_VENDOR_ARCHIVE) $@ "Surface.o ImageView.o" 0 0 0 0
 application: $(CARBOX_UILIB_PRIVATE_MEM_ARCHIVE)
 endif
+ifeq ($(CARBOX_UI565_ZERO_COPY),1)
+ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW)),)
+CARBOX_SYSTEMLIB_UI565_BASE := $(CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE)
+else
+CARBOX_SYSTEMLIB_UI565_BASE := $(CARBOX_SYSTEMLIB_VENDOR_ARCHIVE)
+endif
+$(CARBOX_SYSTEMLIB_UI565_ARCHIVE): $(CARBOX_SYSTEMLIB_UI565_BASE) \
+		$(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_x264.a \
+		$(CARBOX_SYSTEMLIB_UI565_PATCH) application.is.mk
+	python3 $(CARBOX_SYSTEMLIB_UI565_PATCH) $(AR) $(OBJCOPY) $< $@ \
+		$(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_x264.a
+application: $(CARBOX_SYSTEMLIB_UI565_ARCHIVE)
+$(CARBOX_UI_X264_ARCHIVE): $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_x264.a \
+        ../src/carbox/tools/patch_ui_x264_archive.py $(CARBOX_SYSTEMLIB_UI565_PATCH)
+	python3 ../src/carbox/tools/patch_ui_x264_archive.py $(AR) $(OBJCOPY) $< $@
+application: $(CARBOX_UI_X264_ARCHIVE)
+endif
 ifeq ($(VIDEO_HANDOVER_ZERO_COPY),1)
 $(CARBOX_CARPLAY_HANDOVER_ARCHIVE): $(CARBOX_CARPLAY_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH) $(RX_CRYPTO_STAMP) \
@@ -2409,9 +2438,15 @@ endif
 LFLAGS += -Wl,--no-warn-mismatch
 LIBFLAGS += -Wl,--whole-archive
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_link.a
+ifeq ($(CARBOX_UI565_ZERO_COPY),1)
+LIBFLAGS += $(CARBOX_UI_X264_ARCHIVE)
+else
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_x264.a
+endif
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_png.a
-ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW)),)
+ifeq ($(CARBOX_UI565_ZERO_COPY),1)
+LIBFLAGS += $(CARBOX_SYSTEMLIB_UI565_ARCHIVE)
+else ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW)),)
 LIBFLAGS += $(CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE)
 else
 LIBFLAGS += $(CARBOX_SYSTEMLIB_VENDOR_ARCHIVE)

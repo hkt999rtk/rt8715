@@ -35,6 +35,7 @@
 #include "task.h"
 #include "semphr.h"
 #include <reent.h>
+#include <stdio.h>
 
 #include "large_memcpy_gdma.h"
 #include "video_handover_zero_copy.h"
@@ -99,6 +100,17 @@ carbox_memprof_finish(const carbox_memprof_guard_t *guard,
 #define ENOMEM 12
 #endif
 
+#ifndef CARBOX_X264_MEM_DIAG
+#define CARBOX_X264_MEM_DIAG 0
+#endif
+
+#if CARBOX_X264_MEM_DIAG
+#define CARBOX_LARGE_MALLOC_THRESHOLD (4U * 1024U * 1024U)
+extern void vPortGetHeapFragmentationStatsExt(int idx, size_t *free_bytes,
+					       size_t *largest_allocatable,
+					       size_t *free_blocks);
+#endif
+
 /* for GNU C++ */
 #if defined(__GNUC__)
 void* __dso_handle = 0;
@@ -150,7 +162,21 @@ static void set_reent_errno(struct _reent *reent, int error)
 
 void* __wrap_malloc( size_t size )
 {
-	return pvPortMalloc(size);
+	void *ptr = pvPortMalloc(size);
+#if CARBOX_X264_MEM_DIAG
+	if (size >= CARBOX_LARGE_MALLOC_THRESHOLD) {
+		size_t free_bytes, largest, blocks;
+
+		vPortGetHeapFragmentationStatsExt(0, &free_bytes, &largest,
+						 &blocks);
+		printf("[X264 MEM] malloc request=%u result=%p "
+		       "heap0_free=%u largest=%u free_blocks=%u caller=%p\r\n",
+		       (unsigned int)size, ptr, (unsigned int)free_bytes,
+		       (unsigned int)largest, (unsigned int)blocks,
+		       __builtin_return_address(0));
+	}
+#endif
+	return ptr;
 }
 
 void* __wrap_realloc( void *p, size_t size )
@@ -681,6 +707,13 @@ void *__wrap_memcpy(void *s1, const void *s2, size_t n)
 	__asm volatile("mrs %0, ipsr" : "=r" (ipsr));
 	if ((ipsr == 0U) &&
 	    carbox_video_handover_memcpy_is_elided(s1, s2, n)) {
+		return result;
+	}
+
+	/* The CarPlay x264 bridge lends its input I420 planes directly to the
+	 * picture.  Its legacy front end still calls memcpy for each plane. */
+	if (s1 == s2 || n == 0U) {
+		CARBOX_MEMCPY_PROFILE_FINISH();
 		return result;
 	}
 
