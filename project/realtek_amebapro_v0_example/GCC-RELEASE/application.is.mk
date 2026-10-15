@@ -218,6 +218,9 @@ INCLUDES += -I../src/carbox/vfs_compat
 CARBOX_EXPERIMENTAL_USB ?= 1
 CARBOX_EXPERIMENTAL_SMART_A_LINK ?= 1
 CARBOX_UI565_ZERO_COPY ?= 1
+# The customer archives contain the RGB565 conversion, header parser, token ABI,
+# and CABAC skip writer. The integrated branch must not compile local copies.
+CARBOX_CUSTOMER_UI_INTEGRATED ?= 1
 
 ifeq ($(CARBOX_EXPERIMENTAL_USB),1)
 CARBOX_USB_LIB := 1
@@ -817,7 +820,9 @@ SRC_C += ../src/carbox/screen_tcp_write_profiler.c
 SRC_C += ../src/carbox/screen_rx_rate_limit.c
 SRC_C += ../src/carbox/audio_decode_profiler.c
 SRC_C += ../src/carbox/memcheck.c
-ifeq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK)$(CARBOX_UI565_ZERO_COPY),11)
+ifeq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK)$(CARBOX_CUSTOMER_UI_INTEGRATED),11)
+# CABAC skip writer comes from the customer's lib_x264.a.
+else ifeq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK)$(CARBOX_UI565_ZERO_COPY),11)
 SRC_C += ../src/carbox/carplay_ui_memory.c ../src/carbox/carplay_ui_encoder.c \
 	../src/carbox/carplay_ui_skip_cabac.c
 endif
@@ -1937,7 +1942,9 @@ LFLAGS += -Wl,--wrap=AirPlayResponse_GetInfoInfoResponse \
 	-Wl,--wrap=acc_carplay_cb_audio_video_state \
 	-Wl,--wrap=lib_carplay_show -Wl,--wrap=lib_carplay_stop
 endif
-ifeq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK)$(CARBOX_UI565_ZERO_COPY),11)
+ifeq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK)$(CARBOX_CUSTOMER_UI_INTEGRATED),11)
+LFLAGS += -Wl,--wrap=x264_encoder_skip_pframe
+else ifeq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK)$(CARBOX_UI565_ZERO_COPY),11)
 LFLAGS += -Wl,--wrap=x264_frame_pop_unused -Wl,--wrap=x264_frame_copy_picture
 endif
 ifeq ($(CARBOX_USB_LIB),1)
@@ -2480,7 +2487,7 @@ $(CARBOX_UILIB_PRIVATE_MEM_ARCHIVE): $(CARBOX_UILIB_VENDOR_ARCHIVE) \
 		$(CARBOX_UILIB_VENDOR_ARCHIVE) $@ "Surface.o ImageView.o" 0 0 0 0
 application: $(CARBOX_UILIB_PRIVATE_MEM_ARCHIVE)
 endif
-ifeq ($(CARBOX_UI565_ZERO_COPY),1)
+ifeq ($(CARBOX_UI565_ZERO_COPY)$(CARBOX_CUSTOMER_UI_INTEGRATED),10)
 ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW)),)
 CARBOX_SYSTEMLIB_UI565_BASE := $(CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE)
 else
@@ -2525,13 +2532,13 @@ endif
 LFLAGS += -Wl,--no-warn-mismatch
 LIBFLAGS += -Wl,--whole-archive
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_link.a
-ifeq ($(CARBOX_UI565_ZERO_COPY),1)
+ifeq ($(CARBOX_UI565_ZERO_COPY)$(CARBOX_CUSTOMER_UI_INTEGRATED),10)
 LIBFLAGS += $(CARBOX_UI_X264_ARCHIVE)
 else
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_x264.a
 endif
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_png.a
-ifeq ($(CARBOX_UI565_ZERO_COPY),1)
+ifeq ($(CARBOX_UI565_ZERO_COPY)$(CARBOX_CUSTOMER_UI_INTEGRATED),10)
 LIBFLAGS += $(CARBOX_SYSTEMLIB_UI565_ARCHIVE)
 else ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW)),)
 LIBFLAGS += $(CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE)
