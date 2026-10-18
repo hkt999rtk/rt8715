@@ -42,7 +42,8 @@ void RGB2YUV(uint8_t **rgb_buffer, uint8_t **yuv_buffer,
 		       bytes_per_pixel, width, height);
 		return;
 	}
-	stride = (size_t)width * (size_t)bytes_per_pixel;
+	/* The vendor Accessory.o converter reads RGB rows at CSurface pitch. */
+	stride = ((size_t)(width + 15) & ~(size_t)15) * (size_t)bytes_per_pixel;
 	luma = (size_t)width * (size_t)height;
 	rgb = *rgb_buffer;
 	y = *yuv_buffer;
@@ -79,11 +80,13 @@ void RGB2YUV(uint8_t **rgb_buffer, uint8_t **yuv_buffer,
  * [all Y][all U][all V]. Only two RGB rows and a visited bitmap are needed. */
 int carbox_ui_inplace(uint8_t *image, int bpp, int w, int h)
 {
-    size_t rows, stripes, chunks, chunk, marks;
+    size_t rows, source_stride, stripes, chunks, chunk, marks;
     uint8_t *scratch, *seen;
     if (!image || (bpp != 2 && bpp != 3) || w <= 0 || h <= 0 ||
         w > 4096 || h > 4096 || (w & 1) || (h & 1)) return -1;
-    rows = (size_t)2 * w * bpp;
+    /* Align one RGB row before doubling it. RGB2YUV uses this pitch. */
+    source_stride = ((size_t)(w + 15) & ~(size_t)15) * (size_t)bpp;
+    rows = 2 * source_stride;
     stripes = h / 2; chunks = stripes * 6; chunk = w / 2;
     marks = (chunks + 7) / 8;
     scratch = malloc(rows + marks);

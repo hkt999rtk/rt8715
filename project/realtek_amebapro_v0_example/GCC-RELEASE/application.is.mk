@@ -227,10 +227,9 @@ CARBOX_USB_LIB := 1
 endif
 
 ifeq ($(CARBOX_USB_LIB),1)
-# Keep the customer archive intact.  It is linked with --whole-archive, so make
-# a derived link archive without its old carplay_ota_compat.o and compile our
-# source replacement below.  All other customer objects remain byte-for-byte
-# identical to the latest supplied archive.
+# Keep the customer archive intact.  The derived link archive omits only the
+# OTA compatibility object replaced locally; NCM TX and async TX come from the
+# customer archive.
 CARBOX_USB_VENDOR_ARCHIVE := usb_lib/build/lib_usbsmart.a
 CARBOX_USB_ARCHIVE := usb_lib/build/lib_usbsmart_link.a
 endif
@@ -812,6 +811,10 @@ SRC_C += ../src/carbox/usb_rx_priority.c
 SRC_C += ../src/carbox/gcd_sync_profiler.c
 SRC_C += ../src/carbox/airplay_mutex_profiler.c
 SRC_C += ../src/carbox/screen_queue_profiler.c
+UI_H264_DIAG ?= 0
+ifeq ($(UI_H264_DIAG),1)
+SRC_C += ../src/carbox/ui_h264_handover_diag.c
+endif
 SRC_C += ../src/carbox/screen_hw_timestamp.c
 SRC_C += ../src/carbox/screen_rx_record_profiler.c
 SRC_C += ../src/carbox/screen_rx_stage_profiler.c
@@ -822,6 +825,7 @@ SRC_C += ../src/carbox/audio_decode_profiler.c
 SRC_C += ../src/carbox/memcheck.c
 ifeq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK)$(CARBOX_CUSTOMER_UI_INTEGRATED),11)
 # CABAC skip writer comes from the customer's lib_x264.a.
+SRC_C += ../src/carbox/ui_x264_align_compat.c
 else ifeq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK)$(CARBOX_UI565_ZERO_COPY),11)
 SRC_C += ../src/carbox/carplay_ui_memory.c ../src/carbox/carplay_ui_encoder.c \
 	../src/carbox/carplay_ui_skip_cabac.c
@@ -882,13 +886,8 @@ SRAM_C += ../src/carbox/video_handover_zero_copy.c
 SRAM_C += ../src/carbox/screen_rx_poly_buffer.c
 SRAM_C += ../src/carbox/screen_queue_wait.c
 SRAM_C += ../src/carbox/screen_tx_direct_crypto.c
-# The customer archive leaves the NCM TX builder unresolved.  Keep the source
-# ABI, but use the hardware-validated immediate NTH16/NDP16 wire format.  The
-# customer archive's timer fields remain as ABI padding; legacy GTimer-based
-# aggregation is deliberately not compiled.
-SRAM_C += ../src/carbox/ncm/ncm_tx.c
-../src/carbox/ncm/ncm_tx.o: CFLAGS += -DNCM_TX_COMPAT_SINGLE_DATAGRAM=1 \
-	-DNCM_TX_ABI_TIMER_LAYOUT=1
+# The current customer USB archive contains ncm_tx.o and ncm_tx_async.o.
+# Do not also compile the local NCM TX replacement into this image.
 SRAM_C += ../src/carbox/ncm/ncm_ctrl_status_compat.c
 SRAM_C += ../src/carbox/ncm/ncm_hal_ready_compat.c
 # The derived archive globalizes its otherwise-local host state for this
@@ -940,6 +939,9 @@ OBJ_LIST += $(addprefix $(OBJ_DIR)/,$(patsubst %.cpp,%.o,$(notdir $(SRC_CPP))))
 # -------------------------------------------------------------------
 
 GCCFLAGS =
+ifeq ($(UI_H264_DIAG),1)
+GCCFLAGS += -DCONFIG_UI_H264_DIAG=1
+endif
 GCCFLAGS += -march=armv8-m.main+dsp -mthumb -mcmse -mfloat-abi=softfp -mfpu=fpv5-sp-d16 -g -gdwarf-3 -Os -c -MMD --save-temps
 GCCFLAGS += -nostartfiles -nodefaultlibs -nostdlib -fstack-usage -fdata-sections -ffunction-sections -fno-common
 CARBOX_USB_RX_BOOST_LEVEL ?= -1
@@ -990,6 +992,7 @@ $(TCP_OUTPUT_PROFILE_STAMP):
 NCM_TX_PROFILE ?= 0
 # Move the closed synchronous NCM send/wait out of TCP_IP.
 NCM_TX_ASYNC ?= 1
+NCM_TX_VENDOR_ASYNC ?= 1
 # Combine at most this many Ethernet frames into one NCM NTB in the owner task.
 # The negotiated device limit is reported by NCMTXCFG.
 # Default: one Ethernet frame per NTB; do not drain the queue into a batch.
@@ -1021,13 +1024,12 @@ NCM_TX_LINKED_GDMA ?= 1
 NCM_TX_ASYNC_PROFILE ?= 0
 # Compiler command-line changes are not tracked by ordinary source timestamps.
 # Force the sole consumer to rebuild whenever the observation mode changes.
-NCM_TX_PROFILE_STAMP := $(OBJ_DIR)/.ncm_tx_profile_$(NCM_TX_PROFILE)-async$(NCM_TX_ASYNC_PROFILE)-batch$(NCM_TX_BATCH_MAX)-min$(NCM_TX_BATCH_MIN)-wait$(NCM_TX_BATCH_TIMEOUT_LOWER_US)-$(NCM_TX_BATCH_TIMEOUT_UPPER_US)-pipe$(NCM_TX_PIPELINE)-gdma$(NCM_TX_LINKED_GDMA)-ackprio$(CAR_ACK_USB_PRIORITY)
+NCM_TX_PROFILE_STAMP := $(OBJ_DIR)/.ncm_tx_profile_$(NCM_TX_PROFILE)-async$(NCM_TX_ASYNC_PROFILE)-vendor$(NCM_TX_VENDOR_ASYNC)-batch$(NCM_TX_BATCH_MAX)-min$(NCM_TX_BATCH_MIN)-wait$(NCM_TX_BATCH_TIMEOUT_LOWER_US)-$(NCM_TX_BATCH_TIMEOUT_UPPER_US)-pipe$(NCM_TX_PIPELINE)-gdma$(NCM_TX_LINKED_GDMA)-ackprio$(CAR_ACK_USB_PRIORITY)
 $(NCM_TX_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.ncm_tx_profile_*
 	@touch $@
 ../../../component/common/network/lwip/lwip_v2.1.2/port/realtek/freertos/ethernetif.o: $(NCM_TX_PROFILE_STAMP)
-../src/carbox/ncm/ncm_tx.o: $(NCM_TX_PROFILE_STAMP)
 # Keep the recurring 10-second reporter disabled for the 400 MHz test build.
 PC_PROFILER ?= 0
 # Keep the 10-second reporter task as the common clock for focused subsystem
@@ -1518,6 +1520,12 @@ NET_QUEUE_PROFILE ?= 0
 # options affect both the wrappers and lwIP internals, so changing one must
 # recompile every consumer instead of silently retaining yesterday's objects.
 SCREEN_FLOW_PROFILE_STAMP := $(OBJ_DIR)/.screen_flow_profile_q$(SCREEN_QUEUE_PROFILE)-fps$(SCREEN_FPS_PROFILE)-dp$(SCREEN_DATAPATH_PROFILE)-rxlimprof$(SCREEN_RX_RATE_LIMIT_PROFILE)-ingress$(VIDEO_INGRESS_PROFILE)-fmt$(SCREEN_FRAME_FORMAT_PROFILE)-buf$(SCREEN_TCP_BUFFER_PROFILE)-block$(SCREEN_BLOCK_PROFILE)-screenusb$(SCREEN_USB_PROBE)-ack$(SCREEN_TCP_ACK_PROFILE)-stamp$(SCREEN_TIMESTAMP_PROFILE)-hwstamp$(SCREEN_HW_TIMESTAMP)-select$(SCREEN_SELECT_PROFILE)-rxlim$(SCREEN_RX_RATE_LIMIT_ACTIVE)-rxbps$(SCREEN_RX_RATE_LIMIT_BPS)-rxvmax$(SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS)-rxstack$(SCREEN_RX_RATE_LIMIT_TASK_STACK)
+UI_H264_DIAG_STAMP := $(OBJ_DIR)/.ui_h264_diag_$(UI_H264_DIAG)
+$(UI_H264_DIAG_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.ui_h264_diag_*
+	@touch $@
+../src/carbox/video_handover_zero_copy.o: $(UI_H264_DIAG_STAMP)
 $(SCREEN_FLOW_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.screen_flow_profile_*
@@ -1531,7 +1539,6 @@ $(SCREEN_FLOW_PROFILE_STAMP):
 	../src/carbox/chacha_key_alias_fix.o \
 	../src/carbox/screen_hw_timestamp.o \
 	../src/carbox/large_memcpy_gdma.o \
-	../src/carbox/ncm/ncm_tx.o \
 	../../../component/common/network/lwip/lwip_v2.1.2/src/api/api_msg.o \
 	../../../component/common/network/lwip/lwip_v2.1.2/src/api/sockets.o \
 	../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp.o \
@@ -1745,6 +1752,7 @@ GCCFLAGS += -DCONFIG_TCP_CORE_PHASE_PROFILE=$(TCP_CORE_PHASE_PROFILE)
 GCCFLAGS += -DCONFIG_TCP_OUTPUT_PROFILE=$(TCP_OUTPUT_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_TX_PROFILE=$(NCM_TX_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_TX_ASYNC=$(NCM_TX_ASYNC)
+GCCFLAGS += -DCONFIG_NCM_TX_VENDOR_ASYNC=$(NCM_TX_VENDOR_ASYNC)
 GCCFLAGS += -DCONFIG_NCM_TX_ASYNC_PROFILE=$(NCM_TX_ASYNC_PROFILE)
 GCCFLAGS += -DCONFIG_NCM_TX_BATCH_MAX=$(NCM_TX_BATCH_MAX)
 GCCFLAGS += -DCONFIG_NCM_TX_BATCH_MIN=$(NCM_TX_BATCH_MIN)
@@ -1935,6 +1943,10 @@ CPPFLAGS += -w
 CPPFLAGS += -Wall -Wpointer-arith -Wundef -Wno-write-strings -Wno-maybe-uninitialized
 
 LFLAGS = 
+ifeq ($(UI_H264_DIAG),1)
+LFLAGS += -Wl,--wrap=IsFileExist -Wl,--wrap=lib_x264_encode \
+	-Wl,--wrap=lib_accessory_send_video
+endif
 ifeq ($(CARBOX_MODE_DIAG),1)
 LFLAGS += -Wl,--wrap=AirPlayResponse_GetInfoInfoResponse \
 	-Wl,--wrap=AirPlayResponse_GetInfoChangeModes \
@@ -2350,6 +2362,8 @@ CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Acc
 CARBOX_RESOURCE450_PATCH := ../src/carbox/tools/patch_carplay_resource_450.py
 CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_Accessory2_vendor_private_mem.a
 CARBOX_SYSTEMLIB_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_SystemLib.a
+CARBOX_SYSTEMLIB_ALIGNED_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_SystemLib_ui_aligned.a
+CARBOX_SYSTEMLIB_ALIGNED_PATCH := ../src/carbox/tools/patch_carplay_ui_aligned_archive.py
 CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_SystemLib_vendor_private_mem.a
 CARBOX_SYSTEMLIB_UI565_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_SystemLib_ui565.a
 CARBOX_UI_X264_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_x264_ui.a
@@ -2504,6 +2518,11 @@ $(CARBOX_UI_X264_ARCHIVE): $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_x264.a \
 	python3 ../src/carbox/tools/patch_ui_x264_archive.py $(AR) $(OBJCOPY) $< $@
 application: $(CARBOX_UI_X264_ARCHIVE)
 endif
+ifeq ($(CARBOX_UI565_ZERO_COPY)$(CARBOX_CUSTOMER_UI_INTEGRATED),11)
+$(CARBOX_SYSTEMLIB_ALIGNED_ARCHIVE): $(CARBOX_SYSTEMLIB_VENDOR_ARCHIVE) $(CARBOX_SYSTEMLIB_ALIGNED_PATCH)
+	python3 $(CARBOX_SYSTEMLIB_ALIGNED_PATCH) $(AR) $(OBJCOPY) $< $@
+application: $(CARBOX_SYSTEMLIB_ALIGNED_ARCHIVE)
+endif
 ifeq ($(VIDEO_HANDOVER_ZERO_COPY),1)
 $(CARBOX_CARPLAY_HANDOVER_ARCHIVE): $(CARBOX_CARPLAY_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH) $(RX_CRYPTO_STAMP) \
@@ -2540,6 +2559,8 @@ endif
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_png.a
 ifeq ($(CARBOX_UI565_ZERO_COPY)$(CARBOX_CUSTOMER_UI_INTEGRATED),10)
 LIBFLAGS += $(CARBOX_SYSTEMLIB_UI565_ARCHIVE)
+else ifeq ($(CARBOX_UI565_ZERO_COPY)$(CARBOX_CUSTOMER_UI_INTEGRATED),11)
+LIBFLAGS += $(CARBOX_SYSTEMLIB_ALIGNED_ARCHIVE)
 else ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW)),)
 LIBFLAGS += $(CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE)
 else

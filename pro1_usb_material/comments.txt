@@ -1,0 +1,3 @@
+我们是host对吧，因为spec的改动，我们现在disconnect level现在会卡625~720mV上，如果我们是device的话，若是disconnect level的问题，那就是host跟device相容性问题，也就是说host的disconnect level偏低
+
+cable很长的话，要调大boost，我们可以问下AIC那边boost挡位对应的补loss的量是不是线性，boost总共有4档，实验起来应该也快

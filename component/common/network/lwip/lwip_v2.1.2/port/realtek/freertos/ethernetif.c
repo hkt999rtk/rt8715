@@ -508,6 +508,14 @@ static u8 RX_BUFFER[MAX_BUFFER_SIZE];
 #define CONFIG_NCM_TX_ASYNC 0
 #endif
 
+#ifndef CONFIG_NCM_TX_VENDOR_ASYNC
+#define CONFIG_NCM_TX_VENDOR_ASYNC 0
+#endif
+
+#if CONFIG_NCM_TX_VENDOR_ASYNC && CONFIG_CAR_ACK_USB_PRIORITY
+#error "Customer NCM async object has no CAR_ACK_USB_PRIORITY interface"
+#endif
+
 #ifndef CONFIG_NCM_TX_ASYNC_PROFILE
 #define CONFIG_NCM_TX_ASYNC_PROFILE 0
 #endif
@@ -1080,7 +1088,7 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
 }
 
 /*for ethernet mii interface*/
-static err_t ncm_send_pbuf_sync(struct pbuf *p)
+static err_t carbox_ncm_send_pbuf_sync(struct pbuf *p)
 {
 #if (defined(CONFIG_ETHERNET) && CONFIG_ETHERNET)
 	// printf("[NCM] tx len=%d\n", p->tot_len);
@@ -1171,7 +1179,20 @@ static err_t ncm_send_pbuf_sync(struct pbuf *p)
 }
 
 #if defined(CONFIG_PLATFORM_8195BHP) && defined(CONFIG_USBH_CDC_NCM) && \
-	CONFIG_NCM_TX_ASYNC
+	CONFIG_NCM_TX_ASYNC && CONFIG_NCM_TX_VENDOR_ASYNC
+extern int ncm_tx_async_init(void);
+extern int ncm_tx_async_enqueue(struct pbuf *p);
+extern err_t ncm_send_pbuf_sync(struct pbuf *p);
+
+void rltk_ncm_tx_priority_set_car_flow(u16_t local_port, u16_t peer_port)
+{
+	(void)local_port;
+	(void)peer_port;
+}
+#endif
+
+#if defined(CONFIG_PLATFORM_8195BHP) && defined(CONFIG_USBH_CDC_NCM) && \
+	CONFIG_NCM_TX_ASYNC && !CONFIG_NCM_TX_VENDOR_ASYNC
 #define NCM_TX_ASYNC_QUEUE_LEN       128U
 #define NCM_TX_ASYNC_TASK_STACK      2048U
 #define NCM_TX_ASYNC_REPORT_US       10000000U
@@ -1801,7 +1822,7 @@ static void ncm_tx_async_worker(void *arg)
 			/* Single-immediate mode has no batch consumer. Skip its scratch
 			 * allocation, clearing and duplicate pbuf-chain traversal, while
 			 * retaining the common accounting and reference release below. */
-			if (ncm_send_pbuf_sync(items[0].p) != ERR_OK)
+			if (carbox_ncm_send_pbuf_sync(items[0].p) != ERR_OK)
 				result = ERR_BUF;
 #else
 			while (send_index < item_count) {
@@ -1943,7 +1964,7 @@ static void ncm_tx_async_worker(void *arg)
 				result = ERR_BUF;
 				send_index++;
 #else
-				if (ncm_send_pbuf_sync(items[send_index].p) != ERR_OK)
+				if (carbox_ncm_send_pbuf_sync(items[send_index].p) != ERR_OK)
 					result = ERR_BUF;
 				send_index++;
 #endif
@@ -2173,7 +2194,12 @@ static err_t low_level_output_mii(struct netif *netif, struct pbuf *p)
 	}
 #endif
 	{
-		err_t result = ncm_send_pbuf_sync(p);
+		err_t result;
+#if CONFIG_NCM_TX_VENDOR_ASYNC
+		result = ncm_send_pbuf_sync(p);
+#else
+		result = carbox_ncm_send_pbuf_sync(p);
+#endif
 
 		usb_tx_lifetime_source_release();
 		return result;

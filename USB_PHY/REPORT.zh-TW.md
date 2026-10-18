@@ -1,5 +1,7 @@
 # RTL8715／AmebaSmart USB PHY 設定差異調查
 
+> 2026-10-14 更新：後來取得 [`USB20PHY_Register Table_RLE0799(AmebaPro).doc`](../pro1_usb_material/USB20PHY_Register%20Table_RLE0799%28AmebaPro%29.doc)，直接列出 PRO1 RX boost 是 PHY page 0 `E4[3:2]`。下文是較早的調查快照；其「缺少 PRO1 boost register map」結論已失效。現行設定與四檔說明見 [USB_REG.md](../USB_REG.md)。
+
 整理日期：2026-09-18。範圍：比較本地原始碼、實際 USB archive 與 link map，再以晶片廠文件解釋可能的電氣影響。來源總表見 [SOURCES.md](SOURCES.md)。
 
 **1. 目前能下的結論**

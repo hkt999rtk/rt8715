@@ -11,11 +11,9 @@ python_deps=${USB_BOOST_PYTHONPATH:-/tmp/rt8715-vfsdeps}
 test -f "$build_dir/application_lp/Debug/bin/application_lp.axf"
 mkdir -p "$out_dir"
 
-names=(0dB 3p3dB 6p9dB 9p3dB)
 for level in 0 1 2 3; do
-	name=${names[$level]}
-	log="$out_dir/build_rxboost_${name}.log"
-	image="$out_dir/flash_is_rxboost_${name}.bin"
+	log="$out_dir/build_rxboost_level${level}.log"
+	image="$out_dir/flash_is_rxboost_level${level}.bin"
 
 	# The level is a compiler argument.  Force just this source to rebuild
 	# even when a previous variant already produced its object file.
@@ -27,7 +25,7 @@ for level in 0 1 2 3; do
 		tail -60 "$log" >&2
 		exit 1
 	fi
-	if ! grep -aFq "[USB BOOST] candidate level=$level " \
+	if ! grep -aFq "[USB BOOST] PHY p0:E4 level=$level " \
 		"$build_dir/application_is/Debug/bin/application_is.axf"; then
 		printf 'Variant %s was not compiled into the ELF\n' "$level" >&2
 		exit 1
@@ -36,7 +34,9 @@ for level in 0 1 2 3; do
 	printf '%s -> %s\n' "$level" "$image"
 done
 
-(cd "$out_dir" && sha256sum flash_is_rxboost_*.bin > SHA256SUMS)
+(cd "$out_dir" && sha256sum \
+	flash_is_rxboost_level0.bin flash_is_rxboost_level1.bin \
+	flash_is_rxboost_level2.bin flash_is_rxboost_level3.bin > SHA256SUMS)
 if test "$(cut -d' ' -f1 "$out_dir/SHA256SUMS" | sort -u | wc -l)" -ne 4; then
 	printf 'Expected four distinct flash images\n' >&2
 	exit 1
@@ -52,9 +52,21 @@ if ! (cd "$build_dir" &&
 	tail -60 "$out_dir/build_default_restore.log" >&2
 	exit 1
 fi
-if grep -aFq '[USB BOOST] candidate level=' \
+if grep -aFq '[USB BOOST] PHY p0:E4 level=' \
 	"$build_dir/application_is/Debug/bin/application_is.axf"; then
 	printf 'Default pass-through ELF still contains an RX boost variant\n' >&2
 	exit 1
 fi
+
+# The previous test images changed AmebaSmart SYSCFG2, not PRO1 PHY E4.
+# Remove them only after all corrected images and the default build succeeded.
+rm -f "$out_dir"/flash_is_rxboost_0dB.bin \
+	"$out_dir"/flash_is_rxboost_3p3dB.bin \
+	"$out_dir"/flash_is_rxboost_6p9dB.bin \
+	"$out_dir"/flash_is_rxboost_9p3dB.bin \
+	"$out_dir"/flash_is_boost.tgz \
+	"$out_dir"/build_rxboost_0dB.log \
+	"$out_dir"/build_rxboost_3p3dB.log \
+	"$out_dir"/build_rxboost_6p9dB.log \
+	"$out_dir"/build_rxboost_9p3dB.log
 printf 'Four distinct images built; hashes: %s\n' "$out_dir/SHA256SUMS"

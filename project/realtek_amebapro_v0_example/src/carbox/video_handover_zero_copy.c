@@ -4,6 +4,7 @@
 #include "screen_rx_stage_profiler.h"
 #include "screen_rx_rate_limit.h"
 #include "screen_rx_poly_buffer.h"
+#include "ui_h264_handover_diag.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -38,6 +39,10 @@
 
 #ifndef CONFIG_SCREEN_FPS_PROFILE
 #define CONFIG_SCREEN_FPS_PROFILE 0
+#endif
+
+#ifndef CONFIG_UI_H264_DIAG
+#define CONFIG_UI_H264_DIAG 0
 #endif
 
 #if CONFIG_VIDEO_HANDOVER_ZERO_COPY
@@ -1008,6 +1013,9 @@ typedef struct video_handover_frame_item_s {
 
 void __wrap_AirPlayScreen_SendVideo(const void *data, int bytes)
 {
+#if CONFIG_UI_H264_DIAG
+	carbox_ui_h264_remote_frame(data, bytes);
+#endif
 #if CONFIG_SCREEN_FPS_PROFILE
 	uint32_t start_us = screen_fps_begin(bytes);
 	carbox_screen_rx_stage_handover_begin();

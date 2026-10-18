@@ -1,5 +1,7 @@
 # USB PHY 調查資料
 
+更新：已取得 AmebaPro 的 Word PHY register table。PRO1 RX boost 的直接欄位定義和目前 wrapper 請看 [USB_REG.md](../USB_REG.md)；舊調查報告是取得該文件前的紀錄。
+
 整理日期：2026-09-18。比較目前 `rt8715` 專案與 `../carbox_smart.orig` 的 USB PHY 初始化，並保存相關技術文件。
 
 - [調查報告](REPORT.zh-TW.md)：設定差異、library 反組譯、可確認的影響及仍缺少的寄存器資料。

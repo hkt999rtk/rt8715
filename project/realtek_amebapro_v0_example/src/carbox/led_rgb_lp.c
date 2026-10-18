@@ -56,9 +56,13 @@ int led_rgb_lp_init(void)
     set_channel(&green, 255);
     set_channel(&blue, 255);
     if (hal_icc_hal_cmd_register(&icc_hal_adp, LED_RGB_ICC_SET,
-                                 led_rgb_request, 0) != HAL_OK)
+                                 led_rgb_request, 0) != HAL_OK) {
+        dbg_printf("[LED_RGB][LP] ICC register failed\r\n");
         return -1;
+    }
     initialized = 1;
+    dbg_printf("[LED_RGB][LP] ready pins=PA_6,PA_13,PA_4 active_low=%u\r\n",
+               (unsigned)RGB_LED_ACTIVE_LOW);
     return 0;
 }
 
@@ -83,6 +87,12 @@ void led_rgb_lp_poll(void)
         ack_pending = 1;
     }
     if (ack_pending && hal_icc_l2h_cmd_send(&icc_hal_adp,
-            (LED_RGB_ICC_ACK << 24) | applied_sequence, applied_payload, 0) == HAL_OK)
+            (LED_RGB_ICC_ACK << 24) | applied_sequence, applied_payload, 0) == HAL_OK) {
         ack_pending = 0;
+        dbg_printf("[LED_RGB][LP] applied seq=%lu rgb=%lu,%lu,%lu ack=ok\r\n",
+                   (unsigned long)applied_sequence,
+                   (unsigned long)((applied_payload >> 16) & 0xffU),
+                   (unsigned long)((applied_payload >> 8) & 0xffU),
+                   (unsigned long)(applied_payload & 0xffU));
+    }
 }

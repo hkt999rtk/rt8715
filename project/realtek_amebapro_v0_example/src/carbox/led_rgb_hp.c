@@ -2,6 +2,7 @@
 #include "led_rgb_protocol.h"
 #include "hal_icc.h"
 #include "hal_timer.h"
+#include "rt_printf.h"
 #include "FreeRTOS.h"
 #include "task.h"
 
@@ -30,7 +31,7 @@ int led_rgb_get_status(void)
 
 void led_rgb(float r, float g, float b)
 {
-    uint32_t payload, start;
+    uint32_t payload, start, sent_sequence;
     hal_status_t status;
     int result;
 
@@ -64,6 +65,7 @@ void led_rgb(float r, float g, float b)
     }
     sequence = (sequence + 1U) & LED_RGB_SEQUENCE_MASK;
     if (!sequence) sequence = 1;
+    sent_sequence = sequence;
     expected_sequence = sequence;
     expected_payload = payload;
     acknowledged = 0;
@@ -71,7 +73,7 @@ void led_rgb(float r, float g, float b)
     taskEXIT_CRITICAL();
 
     status = hal_icc_h2l_cmd_send(&icc_hal_adp,
-                                 (LED_RGB_ICC_SET << 24) | sequence,
+                                 (LED_RGB_ICC_SET << 24) | sent_sequence,
                                  payload, 1000);
     if (status != HAL_OK) {
         result = status == HAL_BUSY ? LED_RGB_BUSY :
@@ -87,4 +89,9 @@ void led_rgb(float r, float g, float b)
     last_status = result;
     active = 0;
     taskEXIT_CRITICAL();
+    rt_printf("[LED_RGB][HP] seq=%lu rgb=%lu,%lu,%lu status=%d\r\n",
+              (unsigned long)sent_sequence,
+              (unsigned long)((payload >> 16) & 0xffU),
+              (unsigned long)((payload >> 8) & 0xffU),
+              (unsigned long)(payload & 0xffU), result);
 }

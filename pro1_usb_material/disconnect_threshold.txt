@@ -1,0 +1,12 @@
+REG_SEN_HST[3:0]
+
+R/W
+
+1001
+
+Sensitivity reference voltage for host
+Ref Current =
+50 + 6.25*SEN[0] + 12.5*SEN[1] + 25*SEN[2] + 56.25*SEN[3] uA
+Default is 112.5uA
+Reference Voltage = Ref. Current * 5 Kohms,
+Therefore, reference voltage = 562.5 mV
