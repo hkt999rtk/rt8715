@@ -25,6 +25,7 @@ RECOVERED_RX_SOURCE := $(RECOVERED_DIR)/rtl8195b_recv_recovered.c
 RECOVERED_SKBUFF_SOURCE := $(RECOVERED_DIR)/freertos_skbuff_recovered.c
 DMA_MANAGER_SOURCE := $(RECOVERED_DIR)/wlan_rx_dma_mgr.c
 DMA_MANAGER_HEADER := $(RECOVERED_DIR)/wlan_rx_dma_mgr.h
+AMSDU_ALLOC_PATCH := $(RECOVERED_DIR)/patch_amsdu_alloc_failure.py
 RECOVERED_RX_OBJECT := $(BUILD_DIR)/rtl8195b_recv.o
 COPY_PARITY_RX_OBJECT := $(BUILD_DIR)/copy_parity/rtl8195b_recv.o
 RECOVERED_SKBUFF_OBJECT := $(BUILD_DIR)/freertos_skbuff.o
@@ -167,11 +168,12 @@ $(DMA_MANAGER_OBJECT): $(DMA_MANAGER_SOURCE) $(DMA_MANAGER_HEADER) \
 	@echo "  CC    WLAN RX DMA buffer manager"
 	@$(CC) $(CFLAGS) -DCONFIG_WLAN_RX_DMA_PROFILE=$(WLAN_RX_DMA_PROFILE) $< -o $@
 
-# Build a complete object staging tree from the vendor archive, then replace
-# only the two source-recovered members and append the source-built DMA manager.
-# The manifest preserves vendor member order so link selection remains stable.
+# Build a complete object staging tree from the vendor archive, repair the
+# A-MSDU allocation-failure exit, replace the two source-recovered members,
+# and append the source-built DMA manager. Preserve vendor member order.
 $(ARCHIVE_STAGE_STAMP): $(ORIGINAL_ARCHIVE) $(RECOVERED_RX_OBJECT) \
-		$(RECOVERED_SKBUFF_OBJECT) $(DMA_MANAGER_OBJECT) Makefile | $(BUILD_DIR)
+		$(RECOVERED_SKBUFF_OBJECT) $(DMA_MANAGER_OBJECT) \
+		$(AMSDU_ALLOC_PATCH) Makefile | $(BUILD_DIR)
 	@echo "  EXTRACT vendor lib_wlan.a -> $(ARCHIVE_STAGE_DIR)"
 	@$(RM) -r $(ARCHIVE_STAGE_DIR)
 	@mkdir -p $(ARCHIVE_STAGE_DIR)
@@ -182,6 +184,7 @@ $(ARCHIVE_STAGE_STAMP): $(ORIGINAL_ARCHIVE) $(RECOVERED_RX_OBJECT) \
 		{ echo "ERROR: duplicate vendor archive member names are unsupported"; \
 		  sort $(VENDOR_MEMBER_LIST) | uniq -d; exit 1; }
 	@cd $(ARCHIVE_STAGE_DIR) && $(AR) x $(abspath $(ORIGINAL_ARCHIVE))
+	@python3 $(AMSDU_ALLOC_PATCH) $(ARCHIVE_STAGE_DIR)/rtw_recv.o
 	@cp $(RECOVERED_RX_OBJECT) $(ARCHIVE_STAGE_DIR)/rtl8195b_recv.o
 	@cp $(RECOVERED_SKBUFF_OBJECT) $(ARCHIVE_STAGE_DIR)/freertos_skbuff.o
 	@cp $(DMA_MANAGER_OBJECT) $(ARCHIVE_STAGE_DIR)/wlan_rx_dma_mgr.o
@@ -322,11 +325,12 @@ verify: $(ZERO_COPY_ARCHIVE)
 		{ echo "ERROR: duplicate freertos_skbuff.o members"; exit 1; }
 	@test "$$($(AR) t $(ZERO_COPY_ARCHIVE) | grep -c '^wlan_rx_dma_mgr.o$$')" = 1 || \
 		{ echo "ERROR: DMA manager member missing or duplicated"; exit 1; }
+	@python3 $(AMSDU_ALLOC_PATCH) --check $(ARCHIVE_STAGE_DIR)/rtw_recv.o
 	@test "$$($(AR) p $(ZERO_COPY_ARCHIVE) rtw_recv.o | sha256sum | cut -d' ' -f1)" = \
-		"$$($(AR) p $(ORIGINAL_ARCHIVE) rtw_recv.o | sha256sum | cut -d' ' -f1)" || \
-		{ echo "ERROR: vendor rtw_recv.o changed"; exit 1; }
+		"$$(sha256sum $(ARCHIVE_STAGE_DIR)/rtw_recv.o | cut -d' ' -f1)" || \
+		{ echo "ERROR: archived rtw_recv.o differs from verified patch"; exit 1; }
 	@set -e; for member in $$($(AR) t $(ORIGINAL_ARCHIVE)); do \
-		case "$$member" in rtl8195b_recv.o|freertos_skbuff.o) continue ;; esac; \
+		case "$$member" in rtl8195b_recv.o|freertos_skbuff.o|rtw_recv.o) continue ;; esac; \
 		original_hash=$$($(AR) p $(ORIGINAL_ARCHIVE) "$$member" | sha256sum | cut -d' ' -f1); \
 		rebuilt_hash=$$($(AR) p $(ZERO_COPY_ARCHIVE) "$$member" | sha256sum | cut -d' ' -f1); \
 		test "$$original_hash" = "$$rebuilt_hash" || \
