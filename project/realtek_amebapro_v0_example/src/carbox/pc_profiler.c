@@ -30,6 +30,11 @@
 #include "ncm/ncm_tx_profile.h"
 #include "ethernetif.h"
 
+/* The customer crypto API no longer needs the legacy alias wrapper that
+ * supplied this optional per-record latency report. */
+extern void carbox_chacha_rx_latency_report(uint32_t sequence)
+	__attribute__((weak));
+
 /* Supplied by the optional CarPlay ChaCha replacement archive. */
 extern void chacha_rtl8195b_partial_selftest_report(unsigned window_index)
 	__attribute__((weak));
@@ -1807,7 +1812,8 @@ static void pcprof_task(void *arg)
 		carbox_screen_fps_report(sequence);
 		carbox_screen_queue_wait_report(sequence);
 		carbox_video_handover_gate_report(sequence);
-		carbox_chacha_rx_latency_report(sequence);
+		if (carbox_chacha_rx_latency_report != NULL)
+			carbox_chacha_rx_latency_report(sequence);
 		carbox_screen_rx_stage_report(sequence);
 		carbox_screen_crypto_latency_report(sequence);
 		carbox_screen_tx_stage_report(sequence);

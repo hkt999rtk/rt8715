@@ -22,7 +22,7 @@
 #error "CONFIG_AES_MODE must be 0, 1, or 2"
 #endif
 
-/* Globalized from the vendor AESUtils.o by chacha_m33/Makefile. */
+/* Exported directly by the customer AESUtils.o. */
 extern volatile int gAESRTLHWState;
 
 #if CONFIG_AES_MODE == CARBOX_AES_MODE_SOFTWARE_HW_VERIFY
@@ -39,7 +39,7 @@ typedef struct aes_verify_slot_s {
 	uint8_t active;
 } aes_verify_slot_t;
 
-/* Pure software helper globalized from AESUtils.o. */
+/* Pure software helper is needed only by the optional shadow verifier. */
 extern void _AES_RTL_SW_ECB(const uint8_t key[16], int encrypt,
 			     const uint8_t *source, size_t length,
 			     uint8_t *destination);
@@ -153,11 +153,13 @@ static void aes_verify_software_update(aes_verify_slot_t *slot,
 
 #endif
 
+#if CONFIG_AES_MODE == CARBOX_AES_MODE_SOFTWARE_HW_VERIFY
 extern int __real_AES_CTR_Init(void *context, const uint8_t key[16],
 			       const uint8_t nonce[16]);
 extern int __real_AES_CTR_Update(void *context, const void *source,
 				 size_t length, void *destination);
 extern void __real_AES_CTR_Final(void *context);
+#endif
 
 void carbox_aes_backend_select(void)
 {
@@ -177,6 +179,7 @@ void carbox_aes_backend_select(void)
 #endif
 }
 
+#if CONFIG_AES_MODE == CARBOX_AES_MODE_SOFTWARE_HW_VERIFY
 int __wrap_AES_CTR_Init(void *context, const uint8_t key[16],
 			const uint8_t nonce[16])
 {
@@ -277,3 +280,4 @@ void __wrap_AES_CTR_Final(void *context)
 #endif
 	__real_AES_CTR_Final(context);
 }
+#endif

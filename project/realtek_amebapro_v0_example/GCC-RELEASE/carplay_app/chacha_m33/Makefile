@@ -34,6 +34,7 @@ VENDOR_PRIVATE_MEM_LIB := $(OUTPUT_DIR)/lib_CarPlay_vendor_private_mem.a
 VENDOR_PRIVATE_SW_LIB := $(OUTPUT_DIR)/lib_CarPlay_vendor_private_sw.a
 CHACHA_ENABLE_CLEAR ?= 0
 CHACHA_MODE ?= 0
+AES_MODE ?= 2
 CHACHA_HW_MIN_LEN ?= 4096
 SCREEN_TX_DIRECT_CRYPTO ?= 1
 SCREEN_RX_POLY_INPLACE ?= 0
@@ -54,8 +55,11 @@ OBJ_DIR := $(OUTPUT_DIR)/obj-mode$(CHACHA_MODE)-clear$(CHACHA_ENABLE_CLEAR)-min$
 OBJ_DIR := $(OBJ_DIR)-rxpoly$(SCREEN_RX_POLY_INPLACE)-rxsingle$(SCREEN_RX_CHACHA_SINGLE_PASS)-aadpool$(CHACHA_AAD_POOL)
 CORE_OBJ := $(OBJ_DIR)/ChaCha20Poly1305.o
 RTL_OBJ := $(OBJ_DIR)/ChaCha20Poly1305_rtl8195b.o
-AES_PATCHED_OBJ := $(OBJ_DIR)/AESUtils.o
-NETTRANSPORT_PATCHED_OBJ := $(OBJ_DIR)/NetTransportChaCha20Poly1305.o
+ifeq ($(AES_MODE),1)
+# Only the optional shadow verifier calls this private software helper.
+AES_SHADOW_OBJ := $(OBJ_DIR)/AESUtils.o
+CUSTOMER_AES_DELETE := AESUtils.o
+endif
 OBJS := $(CORE_OBJ) \
 	$(OBJ_DIR)/ChaCha20Poly1305_rtl8195b.o
 
@@ -138,28 +142,11 @@ $(OBJ_DIR)/ChaCha20Poly1305_rtl8195b.o: ChaCha20Poly1305_rtl8195b.c ChaCha20Poly
 			--redefine-sym memset=carbox_vendor_chacha_memset $@; \
 	fi
 
-# The customer archive contains AESUtils.o built from aes_rtl8195b/AESUtils.c,
-# but its proprietary support headers are not shipped in this workspace. Keep
-# that exact object and redirect only its crypto lock calls to the API-level
-# priority-aware lock used by the matching source. Other members are unchanged.
-$(AES_PATCHED_OBJ): $(VENDOR_CARPLAY_LIB) Makefile | $(OBJ_DIR)
+ifeq ($(AES_MODE),1)
+$(AES_SHADOW_OBJ): $(VENDOR_CARPLAY_LIB) Makefile | $(OBJ_DIR)
 	cd $(OBJ_DIR) && $(abspath $(AR)) x $(abspath $(VENDOR_CARPLAY_LIB)) AESUtils.o
-	$(OBJCOPY) \
-		--redefine-sym device_mutex_lock=carbox_crypto_aes_device_lock \
-		--redefine-sym device_mutex_unlock=carbox_crypto_aes_device_unlock \
-		--redefine-sym rtl_crypto_irq_enable=carbox_crypto_irq_controller_vendor_enable \
-		--globalize-symbol=gAESRTLHWState \
-		--globalize-symbol=_AES_RTL_SW_ECB $@
-
-# NetTransport owns the record-level copies surrounding ChaCha.  Redirect only
-# this member's memory calls to a pre-RX dispatcher; no other CarPlay object is
-# changed, and the dispatcher resumes the normal global wrappers in RX.
-$(NETTRANSPORT_PATCHED_OBJ): $(VENDOR_CARPLAY_LIB) Makefile | $(OBJ_DIR)
-	cd $(OBJ_DIR) && $(abspath $(AR)) x \
-		$(abspath $(VENDOR_CARPLAY_LIB)) NetTransportChaCha20Poly1305.o
-	$(OBJCOPY) \
-		--redefine-sym memcpy=carbox_chacha_pre_rx_memcpy \
-		--redefine-sym memset=carbox_chacha_pre_rx_memset $@
+	$(OBJCOPY) --globalize-symbol=_AES_RTL_SW_ECB $@
+endif
 
 $(STANDALONE_LIB): $(OBJS)
 	$(AR) rcs $@ $^
@@ -268,15 +255,13 @@ $(VENDOR_PRIVATE_SW_LIB): $(VENDOR_CARPLAY_LIB) Makefile | $(OUTPUT_DIR)
 		$(OUTPUT_DIR)/vendor-private-sw/ChaCha20Poly1305_rtl8195b.o \
 		$(OUTPUT_DIR)/vendor-private-sw/NetTransportChaCha20Poly1305.o
 
-$(REPLACEMENT_CARPLAY_LIB): $(VENDOR_CARPLAY_LIB) $(CORE_OBJ) $(RTL_OBJ) \
-		$(AES_PATCHED_OBJ) $(NETTRANSPORT_PATCHED_OBJ) Makefile | $(OUTPUT_DIR)
+$(REPLACEMENT_CARPLAY_LIB): $(VENDOR_CARPLAY_LIB) $(CORE_OBJ) $(RTL_OBJ) $(AES_SHADOW_OBJ) Makefile | $(OUTPUT_DIR)
 	cp -f $(VENDOR_CARPLAY_LIB) $@
 	chmod u+w $@
-	# Replace only the CarPlay crypto API members; no global lock wrapper.
-	$(AR) d $@ ChaCha20Poly1305.o ChaCha20Poly1305_rtl8195b.o \
-		AESUtils.o NetTransportChaCha20Poly1305.o chacha_m33_asm.o
-	$(AR) rcs $@ $(CORE_OBJ) $(RTL_OBJ) $(AES_PATCHED_OBJ) \
-		$(NETTRANSPORT_PATCHED_OBJ)
+	# Customer AESUtils and NetTransport already call the required shared APIs.
+	# This legacy diagnostic route rebuilds only the two ChaCha objects.
+	$(AR) d $@ ChaCha20Poly1305.o ChaCha20Poly1305_rtl8195b.o chacha_m33_asm.o $(CUSTOMER_AES_DELETE)
+	$(AR) rcs $@ $(CORE_OBJ) $(RTL_OBJ) $(AES_SHADOW_OBJ)
 
 FORCE:
 
@@ -290,8 +275,8 @@ check: $(REPLACEMENT_CARPLAY_LIB)
 	$(NM) -A -u $< | grep 'ChaCha20Poly1305_rtl8195b[.]o:.* carbox_crypto_chacha_device_lock$$' >/dev/null || { \
 		echo "Missing priority-aware ChaCha lock"; exit 1; \
 	}; \
-	$(NM) -A -u $< | grep 'NetTransportChaCha20Poly1305[.]o:.* carbox_chacha_pre_rx_memcpy$$' >/dev/null || { \
-		echo "Missing pre-RX NetTransport memcpy redirect"; exit 1; \
+	$(NM) -A -g --defined-only $< | grep 'AESUtils[.]o:.* gAESRTLHWState$$' >/dev/null || { \
+		echo "Customer AES state is not exported"; exit 1; \
 	}; \
 	for symbol in \
 		chacha20_poly1305_init_64x64 \

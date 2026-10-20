@@ -759,7 +759,14 @@ CHACHA_PRE_RX_VENDOR ?= 0
 CHACHA_VENDOR_PRIVATE_MEM ?= 0
 CHACHA_VENDOR_PRIVATE_SW ?= 0
 CHACHA_API_TRACE ?= 0
-CHACHA_KEY_ALIAS_FIX ?= 1
+# The customer ChaCha API now snapshots/restores an overlapping key and nonce.
+# Keep the old ABI wrapper available only for explicit legacy experiments.
+CHACHA_KEY_ALIAS_FIX ?= 0
+ifeq ($(CHACHA_KEY_ALIAS_FIX),1)
+ifeq ($(CHACHA_API_TRACE)$(CHACHA_VENDOR_TRACE)$(CHACHA_PRE_RX_VENDOR),000)
+$(error Customer ChaCha already handles key/nonce aliasing; CHACHA_KEY_ALIAS_FIX must be 0)
+endif
+endif
 CHACHA_PRIVATE_SW_VERIFY ?= 0
 ifeq ($(CHACHA_PRIVATE_SW_VERIFY),1)
 ifneq ($(CHACHA_VENDOR_PRIVATE_MEM),1)
@@ -1258,8 +1265,8 @@ ifneq ($(filter-out 0 1,$(SCREEN_RX_SEPARATE_BUFFER) $(AUDIO_RX_SEPARATE_BUFFER)
 $(error RX_SEPARATE_BUFFER switches must be 0 or 1)
 endif
 ifneq ($(filter 1,$(SCREEN_RX_SEPARATE_BUFFER) $(AUDIO_RX_SEPARATE_BUFFER)),)
-ifneq ($(CHACHA_MODE)$(CHACHA_KEY_ALIAS_FIX),21)
-$(error RX separate buffers require CHACHA_MODE=2 and CHACHA_KEY_ALIAS_FIX=1)
+ifneq ($(CHACHA_MODE),2)
+$(error RX separate buffers require CHACHA_MODE=2)
 endif
 ifneq ($(CHACHA_API_TRACE)$(CHACHA_VENDOR_TRACE)$(CHACHA_PRE_RX_VENDOR)$(CHACHA_VENDOR_PRIVATE_MEM)$(CHACHA_VENDOR_PRIVATE_SW),00000)
 $(error RX separate buffers require the normal local ChaCha replacement)
@@ -1511,11 +1518,8 @@ $(error TOUCH_PATH_PROFILE and TOUCH_FRAME_PROFILE are mutually exclusive)
 endif
 SCREEN_RX_RECORD_PROFILE ?= 0
 ifeq ($(SCREEN_RX_RECORD_PROFILE),1)
-ifneq ($(CHACHA_KEY_ALIAS_FIX),1)
-$(error SCREEN_RX_RECORD_PROFILE requires CHACHA_KEY_ALIAS_FIX=1)
-endif
 ifneq ($(CHACHA_API_TRACE)$(CHACHA_VENDOR_TRACE)$(CHACHA_PRE_RX_VENDOR),000)
-$(error SCREEN_RX_RECORD_PROFILE requires the normal key-alias ChaCha route)
+$(error SCREEN_RX_RECORD_PROFILE requires the normal ChaCha route)
 endif
 endif
 USB_PROFILE_STAMP := $(OBJ_DIR)/.usb_profile_h$(USB_HCD_PROFILE)-c$(USB_HCD_CHANNEL_PROFILE)-rx$(USB_NCM_RX_PROFILE)-life$(USB_TX_LIFETIME_PROFILE)-ch4front$(USB_CH4_QUEUE_FRONT)-screenusb$(SCREEN_USB_PROBE)-report$(USB_PROFILE_REPORT)
@@ -2070,8 +2074,11 @@ LFLAGS += -Wl,--wrap=CVector_erase
 endif
 endif
 endif
+ifeq ($(AES_MODE),1)
+# Only the optional software-authoritative shadow verifier needs API wrapping.
 LFLAGS += -Wl,--wrap=AES_CTR_Init -Wl,--wrap=AES_CTR_Update
 LFLAGS += -Wl,--wrap=AES_CTR_Final
+endif
 ifneq ($(filter 1,$(CHACHA_VENDOR_TRACE) $(CHACHA_API_TRACE)),)
 LFLAGS += -Wl,--wrap=chacha20_poly1305_init_64x64
 LFLAGS += -Wl,--wrap=chacha20_poly1305_add_aad
@@ -2313,7 +2320,16 @@ ifeq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK),1)
 CARBOX_SMART_CARPLAY_LIB_DIR := carplay_app
 CARBOX_CARPLAY_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_CarPlay.a
 CARBOX_CARPLAY_CHACHA_DIR := $(CARBOX_SMART_CARPLAY_LIB_DIR)/chacha_m33
-CARBOX_CARPLAY_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_chacha_m33.a
+CARBOX_CARPLAY_LOCAL_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_chacha_m33.a
+# Release 10 includes the production ChaCha implementation in the customer
+# archive.  Retain the local replacement for explicit diagnostic builds only;
+# its compile-time switches do not change the customer-supplied object.
+CARBOX_CARPLAY_USE_VENDOR ?= $(if $(filter 2,$(CHACHA_MODE)),$(if $(filter 2,$(AES_MODE)),1,0),0)
+ifeq ($(CARBOX_CARPLAY_USE_VENDOR),1)
+CARBOX_CARPLAY_ARCHIVE := $(CARBOX_CARPLAY_VENDOR_ARCHIVE)
+else
+CARBOX_CARPLAY_ARCHIVE := $(CARBOX_CARPLAY_LOCAL_ARCHIVE)
+endif
 CARBOX_CHACHA_VENDOR_PRE_RX_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/libchacha_vendor_pre_rx.a
 CARBOX_CHACHA_VENDOR_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_vendor_private_mem.a
 CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_vendor_private_sw.a
@@ -2333,7 +2349,7 @@ CHACHA_TRANSACTION_TRACE ?= 0
 # GNU Make does not normally treat command-line option changes as target
 # dependencies. Include every exposed archive-affecting ChaCha option in a
 # stamp so switching mode/config automatically rebuilds the derived archive.
-CARBOX_CHACHA_CONFIG_STAMP := $(CARBOX_CARPLAY_CHACHA_DIR)/build/.carbox_chacha_config_mode$(CHACHA_MODE)-min$(CHACHA_HW_MIN_LEN)-direct$(SCREEN_TX_DIRECT_CRYPTO)-stats$(CHACHA_STATS_INTERVAL_MS)-runtimeprof$(CHACHA_RUNTIME_PROFILE)-selftest$(CHACHA_HW_SELFTEST)-partialtest$(CHACHA_COMBINED_PARTIAL_SELFTEST)-trace$(CHACHA_TRANSACTION_TRACE)-privverify$(CHACHA_PRIVATE_SW_VERIFY)-prio$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
+CARBOX_CHACHA_CONFIG_STAMP := $(CARBOX_CARPLAY_CHACHA_DIR)/build/.carbox_chacha_config_mode$(CHACHA_MODE)-aes$(AES_MODE)-min$(CHACHA_HW_MIN_LEN)-direct$(SCREEN_TX_DIRECT_CRYPTO)-stats$(CHACHA_STATS_INTERVAL_MS)-runtimeprof$(CHACHA_RUNTIME_PROFILE)-selftest$(CHACHA_HW_SELFTEST)-partialtest$(CHACHA_COMBINED_PARTIAL_SELFTEST)-trace$(CHACHA_TRANSACTION_TRACE)-privverify$(CHACHA_PRIVATE_SW_VERIFY)-prio$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
 CARBOX_VIDEO_HANDOVER_PATCH := $(CARBOX_SMART_CARPLAY_LIB_DIR)/patch_video_handover_archive.sh
 CARBOX_PAIR_KEYCHAIN_PATCH := ../src/carbox/tools/patch_pair_keychain_archive.py
 CARBOX_PAIR_KEYCHAIN_STAMP := $(OBJ_DIR)/.pair_keychain_cache_$(CARBOX_PAIR_KEYCHAIN_CACHE)
@@ -2366,7 +2382,7 @@ $(SCREEN_RX_POLY_VENDOR_STAMP): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 	sh $(SCREEN_RX_POLY_VENDOR_CHECK) "$(AR)" \
 		$(CARBOX_CARPLAY_VENDOR_ARCHIVE) $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE)
 	@touch $@
-$(CARBOX_CARPLAY_ARCHIVE): $(SCREEN_RX_POLY_VENDOR_STAMP)
+$(CARBOX_CARPLAY_LOCAL_ARCHIVE): $(SCREEN_RX_POLY_VENDOR_STAMP)
 endif
 CARBOX_ACCESSORY2_HANDOVER_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2_handover.a
 CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2_resource450.a
@@ -2404,7 +2420,7 @@ $(CARBOX_CHACHA_CONFIG_STAMP):
 	@mkdir -p $(dir $@)
 	@rm -f $(CARBOX_CARPLAY_CHACHA_DIR)/build/.carbox_chacha_config_*
 	@touch $@
-$(CARBOX_CARPLAY_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
+$(CARBOX_CARPLAY_LOCAL_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/ChaCha20Poly1305.c \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/ChaCha20Poly1305.h \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/ChaCha20Poly1305_rtl8195b.c \
@@ -2417,7 +2433,8 @@ $(CARBOX_CARPLAY_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 	# Reassemble it so an older cached mode cannot survive a mode switch.
 	@rm -f $@
 	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) replacement \
-		CHACHA_MODE=$(CHACHA_MODE) CHACHA_HW_MIN_LEN=$(CHACHA_HW_MIN_LEN) \
+		CHACHA_MODE=$(CHACHA_MODE) AES_MODE=$(AES_MODE) \
+		CHACHA_HW_MIN_LEN=$(CHACHA_HW_MIN_LEN) \
 		SCREEN_TX_DIRECT_CRYPTO=$(SCREEN_TX_DIRECT_CRYPTO) \
 		SCREEN_RX_POLY_INPLACE=$(SCREEN_RX_POLY_INPLACE) \
 		SCREEN_RX_CHACHA_SINGLE_PASS=$(SCREEN_RX_CHACHA_SINGLE_PASS) \
@@ -2430,7 +2447,7 @@ $(CARBOX_CARPLAY_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 		CHACHA_PRIVATE_MEMORY=$(CHACHA_PRIVATE_SW_VERIFY) \
 		CRYPTO_OWNER_BOOST_PRIORITY=$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
 ifeq ($(CHACHA_PRIVATE_SW_VERIFY),1)
-application: $(CARBOX_CARPLAY_ARCHIVE)
+application: $(CARBOX_CARPLAY_LOCAL_ARCHIVE)
 else ifeq ($(CHACHA_VENDOR_PRIVATE_SW),1)
 application: $(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE)
 else ifeq ($(CHACHA_VENDOR_PRIVATE_MEM),1)
@@ -2602,11 +2619,12 @@ LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_jpeg.a
 # LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_usbdev.a
 # LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_ncm.a
 LIBFLAGS += -Wl,--no-whole-archive
-# Keep the customer's RTL8195B hardware backend, replacing only the protocol
-# object so its internal copies use the measured M33 ITCM memcpy.  Leave this
-# archive outside --whole-archive so unrelated members remain demand-linked.
+# Link the customer's integrated AES and ChaCha implementation directly in the
+# production build.  Keep the local replacement for explicit diagnostic modes.
+# Leave this archive outside --whole-archive so unrelated members remain
+# demand-linked.
 ifeq ($(CHACHA_PRIVATE_SW_VERIFY),1)
-LIBFLAGS += $(CARBOX_CARPLAY_ARCHIVE)
+LIBFLAGS += $(CARBOX_CARPLAY_LOCAL_ARCHIVE)
 else ifeq ($(CHACHA_VENDOR_PRIVATE_SW),1)
 LIBFLAGS += $(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE)
 else ifeq ($(CHACHA_VENDOR_PRIVATE_MEM),1)
