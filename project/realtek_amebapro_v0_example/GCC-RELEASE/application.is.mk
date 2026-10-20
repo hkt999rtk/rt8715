@@ -818,7 +818,7 @@ endif
 SRC_C += ../src/carbox/screen_hw_timestamp.c
 SRC_C += ../src/carbox/screen_rx_record_profiler.c
 SRC_C += ../src/carbox/screen_rx_stage_profiler.c
-SRC_C += ../src/carbox/screen_tx_stage_report.c
+# The direct-crypto-disabled object supplies the stage-report no-op itself.
 SRC_C += ../src/carbox/screen_tcp_write_profiler.c
 SRC_C += ../src/carbox/screen_rx_rate_limit.c
 SRC_C += ../src/carbox/audio_decode_profiler.c
@@ -1143,7 +1143,9 @@ SCREEN_FPS_PROFILE ?= 0
 # queue-arrival semaphore wait.  Keep this independent of handover zero-copy
 # and direct crypto so every supported A/B combination either installs both
 # the relocation and notification wrappers, or installs neither.
-SCREEN_QUEUE_EVENT_WAIT ?= 1
+# Customer AirPlayScreen.o owns its queue. The old CVector relocation hook
+# targets a different object layout and must not be applied to this release.
+SCREEN_QUEUE_EVENT_WAIT ?= 0
 # Keep the screen RX profiler aware of the selected backend.  In mode 2 the
 # decrypt/update API only queues record data and the hardware work is performed
 # by verify/finalize, so labelling the first phase as software throughput is
@@ -1272,7 +1274,9 @@ $(RX_CRYPTO_STAMP):
 ../src/carbox/rx_crypto_buffers.o ../src/carbox/chacha_key_alias_fix.o: $(RX_CRYPTO_STAMP)
 GCCFLAGS += -DCONFIG_CHACHA_RX_SEPARATE_BUFFER=$(if $(filter 1,$(SCREEN_RX_SEPARATE_BUFFER) $(AUDIO_RX_SEPARATE_BUFFER)),1,0)
 GCCFLAGS += -DCONFIG_CHACHA_HW_MIN_LEN=$(CHACHA_HW_MIN_LEN)
-VIDEO_HANDOVER_ZERO_COPY ?= 1
+# The customer RX/decoder/TX objects transfer malloc-owned frame pointers.
+# Do not remap their malloc/free calls through the former handover wrapper.
+VIDEO_HANDOVER_ZERO_COPY ?= 0
 ifeq ($(CARBOX_PAIR_KEYCHAIN_CACHE),1)
 ifneq ($(VIDEO_HANDOVER_ZERO_COPY),1)
 $(error CARBOX_PAIR_KEYCHAIN_CACHE requires VIDEO_HANDOVER_ZERO_COPY=1)
@@ -1297,7 +1301,9 @@ endif
 endif
 # RX-only Poly1305 input reuse, enabled by default for board validation.
 # Set to 0 for the scratch-buffer A/B baseline.
-SCREEN_RX_POLY_INPLACE ?= 1
+# Customer RX uses ordinary malloc/free with a +15-byte suffix; it does not
+# return the offset pointer required by the old Poly1305 input-reuse hook.
+SCREEN_RX_POLY_INPLACE ?= 0
 # Merge standalone RX raw-ChaCha prefix/tail submissions for managed buffers.
 # Set to 0 to retain two submissions without disabling Poly1305 input reuse.
 SCREEN_RX_CHACHA_SINGLE_PASS ?= 1
@@ -1332,13 +1338,15 @@ $(SCREEN_RX_POLY_STAMP):
 # Bound queued plus actively-sent screen frames before entering the closed
 # AirPlayScreen mutex.  This lets downstream TCP/USB pressure stop the receiver
 # callback and naturally close the upstream TCP window toward the iPhone.
-VIDEO_HANDOVER_BACKPRESSURE ?= 1
+VIDEO_HANDOVER_BACKPRESSURE ?= 0
 VIDEO_HANDOVER_MAX_INFLIGHT ?= 2
 # Closed AirPlay normal-frame sender optimization. Its payload memcpy is
 # deferred only after object-local allocation/header/layout validation, then
 # AES or ChaCha writes ciphertext directly into wireBuffer + 128.
 # The direct path has passed frame correctness, ownership and long-run tests.
-SCREEN_TX_DIRECT_CRYPTO ?= 1
+# Direct TX crypto requires the old object-local allocation/memcpy rewrite.
+# The customer's new AirPlayScreen.o is used without that rewrite.
+SCREEN_TX_DIRECT_CRYPTO ?= 0
 SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES ?= 4096
 # AES and ChaCha use the same mode numbering: 0=software only,
 # 1=software-authoritative with hardware shadow comparison, 2=hardware only.
@@ -1354,7 +1362,10 @@ $(AES_MODE_STAMP):
 ../src/carbox/aes_backend_select.o: $(AES_MODE_STAMP)
 # Video-only TCP no-copy bring-up.  The legacy socket API remains COPY; only a
 # wire buffer proven by the direct-crypto transaction uses ACK-owned pbuf refs.
-TCP_OWNED_WRITE ?= 1
+TCP_OWNED_WRITE ?= 0
+ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_RX_POLY_INPLACE) $(SCREEN_QUEUE_EVENT_WAIT) $(SCREEN_TX_DIRECT_CRYPTO) $(TCP_OWNED_WRITE)),)
+$(error carplay_app_7 uses customer frame ownership; old RX/TX handover, queue, direct-crypto, and owned-write hooks are incompatible)
+endif
 # Report the ACK lifetime of video buffers independently of the retired full
 # screen queue profiler.  This is the direct measure of queued video latency.
 TCP_OWNED_AGE_PROFILE ?= 0
@@ -2446,7 +2457,10 @@ $(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) vendor-private-sw
 application: $(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE)
 endif
-ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO) $(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX)),)
+# The customer owns the screen frame buffer and queue. Keep the independent
+# AirPlay event and iAP2 fixes in a derived archive, leaving AirPlayScreen.o
+# byte-for-byte as supplied by the customer.
+ifneq ($(filter 1,$(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX)),)
 $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH) $(CARBOX_SCREEN_WAIT_RELOC_PATCH) \
 		$(CARBOX_REDUNDANT_COPY_PATCH) $(CARBOX_EVENT_RESPONSE_PATCH) \
@@ -2457,10 +2471,10 @@ $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
 		tmp_archive="$@.pair.tmp"; \
 		trap 'rm -f "$$tmp_archive"' 0; \
 		sh $(CARBOX_VIDEO_HANDOVER_PATCH) \
-			$(if $(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO)),accessory,accessory-wait) \
+			accessory-wait \
 			$(AR) $(OBJCOPY) $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) "$$tmp_archive" \
-			"AirPlayScreen.o $(if $(filter 1,$(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX)),AirPlayEvent.o) $(if $(filter 1,$(IAP2_COND_TIMEDWAIT_FIX)),iAP2Ctrl.o)" \
-			$(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX) $(CAR_ACK_TIMESTAMP); \
+			"$(if $(filter 1,$(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX)),AirPlayEvent.o) $(if $(filter 1,$(IAP2_COND_TIMEDWAIT_FIX)),iAP2Ctrl.o)" \
+			0 $(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX) $(CAR_ACK_TIMESTAMP); \
 		if [ "$(CARBOX_PAIR_VERIFY_FASTPATH)" = 1 ]; then \
 			python3 $(CARBOX_PAIR_VERIFY_PATCH) $(AR) $(OBJCOPY) "$$tmp_archive" "$$tmp_archive"; \
 		fi; \
@@ -2468,13 +2482,11 @@ $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
 application: $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
 endif
 ifeq ($(CARBOX_RESOURCE_450_COMPAT),1)
-ifneq ($(VIDEO_HANDOVER_ZERO_COPY),1)
-$(error CARBOX_RESOURCE_450_COMPAT requires VIDEO_HANDOVER_ZERO_COPY=1)
-endif
 ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
 $(error CARBOX_RESOURCE_450_COMPAT requires the production CarPlay archive)
 endif
-$(CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE): $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE) $(CARBOX_RESOURCE450_PATCH)
+CARBOX_RESOURCE450_BASE := $(if $(filter 1,$(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX)),$(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE),$(CARBOX_ACCESSORY2_VENDOR_ARCHIVE))
+$(CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE): $(CARBOX_RESOURCE450_BASE) $(CARBOX_RESOURCE450_PATCH)
 	python3 $(CARBOX_RESOURCE450_PATCH) $(AR) $(OBJCOPY) $< $@
 application: $(CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE)
 endif

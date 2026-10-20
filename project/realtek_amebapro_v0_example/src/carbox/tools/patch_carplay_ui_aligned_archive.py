@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Restore the old UI's aligned RGB->I420 and x264 dimensions.
 
-Only the audited Accessory.o is accepted.  Two Thumb LDR immediates select
-the aligned dimensions for carbox_ui_inplace; the x264 init relocation is
-renamed to a local wrapper which applies the same alignment.  Other code and
-relocations stay intact.
+Only audited Accessory.o revisions are accepted. The newer customer object
+already selects aligned dimensions for carbox_ui_inplace; the x264 init
+relocation still needs to be renamed to the aligned local entry point.
 """
 
 import hashlib
@@ -17,7 +16,10 @@ import sys
 import tempfile
 
 
-ACCESSORY_SHA256 = "4f1b417b43f19b3bb70d41f312fd11a206f416ccbf4b19a914462a1de6c4fc45"
+ACCESSORY_SHA256S = {
+    "4f1b417b43f19b3bb70d41f312fd11a206f416ccbf4b19a914462a1de6c4fc45",
+    "e0fc401a62a2a9a51548b259038d93f6945896785a8d9e96dc05d7db6f27434d",
+}
 SECTION_NAME = b".text.CAccessory_CreateUi"
 CALL_OFFSET = 0x502
 OLD = bytes.fromhex("0a9b099a")  # visible height, width: [sp,#40], [sp,#36]
@@ -60,10 +62,11 @@ def main():
     ar, objcopy, source, output = sys.argv[1], sys.argv[2], Path(sys.argv[3]).resolve(), Path(sys.argv[4]).resolve()
     objdump = objcopy.replace("objcopy", "objdump")
     original = subprocess.check_output([ar, "p", str(source), "Accessory.o"])
-    if hashlib.sha256(original).hexdigest() != ACCESSORY_SHA256:
+    if hashlib.sha256(original).hexdigest() not in ACCESSORY_SHA256S:
         raise ValueError("unknown customer Accessory.o; audit before patching")
     start, size = section_bytes(original, SECTION_NAME)
-    if size <= CALL_OFFSET + len(OLD) or original[start + CALL_OFFSET:start + CALL_OFFSET + len(OLD)] != OLD:
+    original_instructions = original[start + CALL_OFFSET:start + CALL_OFFSET + len(OLD)]
+    if size <= CALL_OFFSET + len(OLD) or original_instructions not in (OLD, NEW):
         raise ValueError("unexpected UI conversion instructions")
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -81,9 +84,10 @@ def main():
                         str(member), str(renamed)], check=True)
         data = bytearray(renamed.read_bytes())
         renamed_start, renamed_size = section_bytes(data, SECTION_NAME)
-        if renamed_size != size or data[renamed_start + CALL_OFFSET:renamed_start + CALL_OFFSET + len(OLD)] != OLD:
+        if renamed_size != size or data[renamed_start + CALL_OFFSET:renamed_start + CALL_OFFSET + len(OLD)] != original_instructions:
             raise ValueError("objcopy changed UI code unexpectedly")
-        data[renamed_start + CALL_OFFSET:renamed_start + CALL_OFFSET + len(OLD)] = NEW
+        if original_instructions == OLD:
+            data[renamed_start + CALL_OFFSET:renamed_start + CALL_OFFSET + len(OLD)] = NEW
         member.write_bytes(data)
         after_relocs = relocations(objdump, member)
         if after_relocs != before_relocs.replace(
