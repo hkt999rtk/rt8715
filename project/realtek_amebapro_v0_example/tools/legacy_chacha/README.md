@@ -17,7 +17,7 @@ The active `Makefile` implements the CarPlay replacement flow:
 
 1. Build the optimized Cortex-M33 software implementation and the selected
    RTL8195B backend mode.
-2. Copy `../lib_CarPlay.a` without modifying the vendor archive.
+2. Copy `../../GCC-RELEASE/carplay_app/lib_CarPlay.a` without modifying the vendor archive.
 3. Remove the embedded vendor `ChaCha20Poly1305.o` and any bundled
    `chacha_m33_asm.o` from the copy.
 4. Insert the new `ChaCha20Poly1305.o` and

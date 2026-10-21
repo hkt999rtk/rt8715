@@ -1,6 +1,6 @@
 # Cortex-M33 ChaCha20-Poly1305 replacement for the RTL8195B CarPlay archive.
 
-PROJECT_TOOLCHAIN := ../../../../../tools/arm-none-eabi-gcc/asdk/linux/newlib/bin
+PROJECT_TOOLCHAIN := ../../../../tools/arm-none-eabi-gcc/asdk/linux/newlib/bin
 
 ifeq ($(wildcard $(PROJECT_TOOLCHAIN)/arm-none-eabi-gcc),)
 CROSS_COMPILE ?= arm-none-eabi-
@@ -26,7 +26,7 @@ NM := $(CROSS_COMPILE)nm
 OBJCOPY := $(CROSS_COMPILE)objcopy
 
 OUTPUT_DIR ?= build
-VENDOR_CARPLAY_LIB ?= ../lib_CarPlay.a
+VENDOR_CARPLAY_LIB ?= ../../GCC-RELEASE/carplay_app/lib_CarPlay.a
 REPLACEMENT_CARPLAY_LIB := $(OUTPUT_DIR)/lib_CarPlay_chacha_m33.a
 STANDALONE_LIB := $(OUTPUT_DIR)/libchacha_m33.a
 VENDOR_PRE_RX_LIB := $(OUTPUT_DIR)/libchacha_vendor_pre_rx.a
@@ -65,7 +65,7 @@ OBJS := $(CORE_OBJ) \
 
 ARCH_FLAGS := -march=armv8-m.main+dsp -mthumb -mcmse \
 	-mfloat-abi=softfp -mfpu=fpv5-sp-d16
-SDK_ROOT := $(abspath ../../../../..)
+SDK_ROOT := $(abspath ../../../..)
 RTL_INCLUDES := \
 	-I$(SDK_ROOT)/project/realtek_amebapro_v0_example/inc \
 	-I$(SDK_ROOT)/component/soc/realtek/8195b/cmsis/rtl8195b-hp/include \
@@ -125,7 +125,7 @@ vendor-private-sw: $(VENDOR_PRIVATE_SW_LIB)
 $(OUTPUT_DIR) $(OBJ_DIR):
 	mkdir -p $@
 
-$(OBJ_DIR)/ChaCha20Poly1305.o: ChaCha20Poly1305.c ChaCha20Poly1305.h Makefile \
+$(OBJ_DIR)/ChaCha20Poly1305.o: ChaCha20Poly1305.c $(SDK_ROOT)/project/realtek_amebapro_v0_example/src/carbox/ChaCha20Poly1305.h Makefile \
 	$(SDK_ROOT)/project/realtek_amebapro_v0_example/src/carbox/screen_rx_poly_buffer.h \
 	$(SDK_ROOT)/project/realtek_amebapro_v0_example/src/carbox/screen_tx_direct_crypto.h \
 	$(SDK_ROOT)/project/realtek_amebapro_v0_example/src/carbox/crypto_priority_lock.h | $(OBJ_DIR)
@@ -135,7 +135,7 @@ $(OBJ_DIR)/ChaCha20Poly1305.o: ChaCha20Poly1305.c ChaCha20Poly1305.h Makefile \
 			--redefine-sym memset=carbox_vendor_chacha_memset $@; \
 	fi
 
-$(OBJ_DIR)/ChaCha20Poly1305_rtl8195b.o: ChaCha20Poly1305_rtl8195b.c ChaCha20Poly1305_rtl8195b.h ChaCha20Poly1305.h Makefile | $(OBJ_DIR)
+$(OBJ_DIR)/ChaCha20Poly1305_rtl8195b.o: ChaCha20Poly1305_rtl8195b.c ChaCha20Poly1305_rtl8195b.h $(SDK_ROOT)/project/realtek_amebapro_v0_example/src/carbox/ChaCha20Poly1305.h Makefile | $(OBJ_DIR)
 	$(CC) $(CFLAGS) -Wno-unused-parameter -c $< -o $@
 	@if [ "$(CHACHA_PRIVATE_MEMORY)" = 1 ]; then \
 		$(OBJCOPY) --redefine-sym memcpy=carbox_vendor_chacha_memcpy \
@@ -314,8 +314,8 @@ print-config:
 	@echo "REPLACEMENT_CARPLAY_LIB=$(REPLACEMENT_CARPLAY_LIB)"
 
 HOST_CC ?= cc
-HOST_TEST_FLAGS := -O2 -Wall -Wextra -I.
-RX_POLY_SOURCE_DIR := ../../../src/carbox
+HOST_TEST_FLAGS := -O2 -Wall -Wextra -I. -I$(SDK_ROOT)/project/realtek_amebapro_v0_example/src/carbox
+RX_POLY_SOURCE_DIR := ../../src/carbox
 
 .PHONY: host-aad-pool-check
 host-aad-pool-check: | $(OUTPUT_DIR)

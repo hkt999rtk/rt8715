@@ -29,7 +29,7 @@ debug-message defaults are unchanged.
 
 ## Validation
 
-From `carplay_app/chacha_m33`:
+From `tools/legacy_chacha`:
 
 ```
 make host-check

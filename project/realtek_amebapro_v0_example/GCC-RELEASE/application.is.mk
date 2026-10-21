@@ -1456,9 +1456,9 @@ endif
 # response still uses the vendor HTTPMessage writer and encrypted transport;
 # only GetLocalTime/date formatting/header construction leave the request path.
 CAR_ACK_RESPONSE_CACHE ?= 1
-# HTTPMessageReset preserves bytes read beyond the current vehicle event.
-# Consume those bytes before waiting on socket readability again.
-CAR_EVENT_READAHEAD_FIX ?= 1
+# Release 12 AirPlayEvent.o retries buffered bytes after HTTPMessageReset.
+# Keep the archive patch available only for older customer releases.
+CAR_EVENT_READAHEAD_FIX ?= 0
 # Split the iPhone HID HTTP response latency at the lwIP recvmbox boundary.
 # This identifies whether a slow 200 response was late on the wire or whether
 # the priority-4 DispatchLite worker was late to consume already-arrived data.
@@ -1486,10 +1486,10 @@ AIRPLAY_HID_HTTP_BYPASS ?= 1
 # the iPhone timezone offset, then passes local calendar fields to its callback;
 # synchronize that local wall clock while preserving the original callback.
 IAP2_DEVICE_TIME_SYNC ?= 1
-# Keep the customer iAP2 control thread's intended 20 ms condition wait after
-# wall-clock synchronization.  Its original tv_sec*1000 deadline arithmetic
-# overflows at a real Unix epoch and otherwise turns the thread into a busy loop.
-IAP2_COND_TIMEDWAIT_FIX ?= 1
+# Release 12 iAP2Ctrl.o computes the 20 ms absolute deadline without a
+# 32-bit epoch-millisecond intermediate and accepts both timeout codes.
+# Keep the archive patch available only for older customer releases.
+IAP2_COND_TIMEDWAIT_FIX ?= 0
 # Sample the wall clock used by time(NULL) once per 10-second touch-path
 # report, including UTC text and progress relative to the monotonic interval.
 GMT_TIME_PROFILE ?= 0
@@ -2319,8 +2319,9 @@ endif
 ifeq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK),1)
 CARBOX_SMART_CARPLAY_LIB_DIR := carplay_app
 CARBOX_CARPLAY_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_CarPlay.a
-CARBOX_CARPLAY_CHACHA_DIR := $(CARBOX_SMART_CARPLAY_LIB_DIR)/chacha_m33
-CARBOX_CARPLAY_LOCAL_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_chacha_m33.a
+CARBOX_CARPLAY_CHACHA_DIR := ../tools/legacy_chacha
+CARBOX_CARPLAY_DERIVED_DIR := $(CARBOX_SMART_CARPLAY_LIB_DIR)/build
+CARBOX_CARPLAY_LOCAL_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/lib_CarPlay_chacha_m33.a
 # Release 10 includes the production ChaCha implementation in the customer
 # archive.  Retain the local replacement for explicit diagnostic builds only;
 # its compile-time switches do not change the customer-supplied object.
@@ -2330,9 +2331,9 @@ CARBOX_CARPLAY_ARCHIVE := $(CARBOX_CARPLAY_VENDOR_ARCHIVE)
 else
 CARBOX_CARPLAY_ARCHIVE := $(CARBOX_CARPLAY_LOCAL_ARCHIVE)
 endif
-CARBOX_CHACHA_VENDOR_PRE_RX_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/libchacha_vendor_pre_rx.a
-CARBOX_CHACHA_VENDOR_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_vendor_private_mem.a
-CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_vendor_private_sw.a
+CARBOX_CHACHA_VENDOR_PRE_RX_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/libchacha_vendor_pre_rx.a
+CARBOX_CHACHA_VENDOR_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/lib_CarPlay_vendor_private_mem.a
+CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/lib_CarPlay_vendor_private_sw.a
 # ChaCha backend policy:
 #   0 = software only
 #   1 = software authoritative plus hardware verification
@@ -2349,7 +2350,7 @@ CHACHA_TRANSACTION_TRACE ?= 0
 # GNU Make does not normally treat command-line option changes as target
 # dependencies. Include every exposed archive-affecting ChaCha option in a
 # stamp so switching mode/config automatically rebuilds the derived archive.
-CARBOX_CHACHA_CONFIG_STAMP := $(CARBOX_CARPLAY_CHACHA_DIR)/build/.carbox_chacha_config_mode$(CHACHA_MODE)-aes$(AES_MODE)-min$(CHACHA_HW_MIN_LEN)-direct$(SCREEN_TX_DIRECT_CRYPTO)-stats$(CHACHA_STATS_INTERVAL_MS)-runtimeprof$(CHACHA_RUNTIME_PROFILE)-selftest$(CHACHA_HW_SELFTEST)-partialtest$(CHACHA_COMBINED_PARTIAL_SELFTEST)-trace$(CHACHA_TRANSACTION_TRACE)-privverify$(CHACHA_PRIVATE_SW_VERIFY)-prio$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
+CARBOX_CHACHA_CONFIG_STAMP := $(CARBOX_CARPLAY_DERIVED_DIR)/.carbox_chacha_config_mode$(CHACHA_MODE)-aes$(AES_MODE)-min$(CHACHA_HW_MIN_LEN)-direct$(SCREEN_TX_DIRECT_CRYPTO)-stats$(CHACHA_STATS_INTERVAL_MS)-runtimeprof$(CHACHA_RUNTIME_PROFILE)-selftest$(CHACHA_HW_SELFTEST)-partialtest$(CHACHA_COMBINED_PARTIAL_SELFTEST)-trace$(CHACHA_TRANSACTION_TRACE)-privverify$(CHACHA_PRIVATE_SW_VERIFY)-prio$(CARBOX_CRYPTO_OWNER_BOOST_PRIORITY)
 CARBOX_VIDEO_HANDOVER_PATCH := $(CARBOX_SMART_CARPLAY_LIB_DIR)/patch_video_handover_archive.sh
 CARBOX_PAIR_KEYCHAIN_PATCH := ../src/carbox/tools/patch_pair_keychain_archive.py
 CARBOX_PAIR_KEYCHAIN_STAMP := $(OBJ_DIR)/.pair_keychain_cache_$(CARBOX_PAIR_KEYCHAIN_CACHE)
@@ -2387,17 +2388,28 @@ endif
 CARBOX_ACCESSORY2_HANDOVER_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2_handover.a
 CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2_resource450.a
 CARBOX_RESOURCE450_PATCH := ../src/carbox/tools/patch_carplay_resource_450.py
-CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_Accessory2_vendor_private_mem.a
+CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/lib_Accessory2_vendor_private_mem.a
 CARBOX_SYSTEMLIB_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_SystemLib.a
-CARBOX_SYSTEMLIB_ALIGNED_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_SystemLib_ui_aligned.a
+CARBOX_SYSTEMLIB_ALIGNED_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/lib_SystemLib_ui_aligned.a
 CARBOX_SYSTEMLIB_ALIGNED_PATCH := ../src/carbox/tools/patch_carplay_ui_aligned_archive.py
-CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_SystemLib_vendor_private_mem.a
-CARBOX_SYSTEMLIB_UI565_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_SystemLib_ui565.a
-CARBOX_UI_X264_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_x264_ui.a
+CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/lib_SystemLib_vendor_private_mem.a
+CARBOX_SYSTEMLIB_UI565_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/lib_SystemLib_ui565.a
+CARBOX_UI_X264_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/lib_x264_ui.a
 CARBOX_SYSTEMLIB_UI565_PATCH := ../src/carbox/tools/patch_carplay_ui565_archive.py
 CARBOX_UILIB_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_UiLib.a
-CARBOX_UILIB_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_UiLib_vendor_private_mem.a
-CARBOX_CARPLAY_HANDOVER_ARCHIVE := $(CARBOX_CARPLAY_CHACHA_DIR)/build/lib_CarPlay_chacha_m33_handover.a
+CARBOX_UILIB_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/lib_UiLib_vendor_private_mem.a
+CARBOX_CARPLAY_HANDOVER_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/lib_CarPlay_chacha_m33_handover.a
+$(CARBOX_CARPLAY_DERIVED_DIR):
+	@mkdir -p $@
+$(CARBOX_CARPLAY_LOCAL_ARCHIVE) $(CARBOX_CHACHA_VENDOR_PRE_RX_ARCHIVE) \
+		$(CARBOX_CHACHA_VENDOR_PRIVATE_MEM_ARCHIVE) \
+		$(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE) \
+		$(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE) \
+		$(CARBOX_SYSTEMLIB_ALIGNED_ARCHIVE) \
+		$(CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE) \
+		$(CARBOX_SYSTEMLIB_UI565_ARCHIVE) $(CARBOX_UI_X264_ARCHIVE) \
+		$(CARBOX_UILIB_PRIVATE_MEM_ARCHIVE) \
+		$(CARBOX_CARPLAY_HANDOVER_ARCHIVE): | $(CARBOX_CARPLAY_DERIVED_DIR)
 # The vendor archive remains available for an immediate A/B fallback.  The O3
 # archive is rebuilt from upstream FDK AAC v0.1.6 with the RTL8195B/M33 DSP ISA.
 CARBOX_FDK_AAC_OPTIMIZED ?= 1
@@ -2418,11 +2430,11 @@ application: carbox_fdkaac
 endif
 $(CARBOX_CHACHA_CONFIG_STAMP):
 	@mkdir -p $(dir $@)
-	@rm -f $(CARBOX_CARPLAY_CHACHA_DIR)/build/.carbox_chacha_config_*
+	@rm -f $(CARBOX_CARPLAY_DERIVED_DIR)/.carbox_chacha_config_*
 	@touch $@
 $(CARBOX_CARPLAY_LOCAL_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/ChaCha20Poly1305.c \
-		$(CARBOX_CARPLAY_CHACHA_DIR)/ChaCha20Poly1305.h \
+		../src/carbox/ChaCha20Poly1305.h \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/ChaCha20Poly1305_rtl8195b.c \
 		../src/carbox/crypto_priority_lock.h \
 		../src/carbox/screen_rx_poly_buffer.h \
@@ -2433,6 +2445,7 @@ $(CARBOX_CARPLAY_LOCAL_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 	# Reassemble it so an older cached mode cannot survive a mode switch.
 	@rm -f $@
 	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) replacement \
+		OUTPUT_DIR=$(abspath $(CARBOX_CARPLAY_DERIVED_DIR)) \
 		CHACHA_MODE=$(CHACHA_MODE) AES_MODE=$(AES_MODE) \
 		CHACHA_HW_MIN_LEN=$(CHACHA_HW_MIN_LEN) \
 		SCREEN_TX_DIRECT_CRYPTO=$(SCREEN_TX_DIRECT_CRYPTO) \
@@ -2460,18 +2473,21 @@ endif
 ifeq ($(CHACHA_PRE_RX_VENDOR),1)
 $(CARBOX_CHACHA_VENDOR_PRE_RX_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/Makefile
-	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) vendor-pre-rx
+	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) vendor-pre-rx \
+		OUTPUT_DIR=$(abspath $(CARBOX_CARPLAY_DERIVED_DIR))
 application: $(CARBOX_CHACHA_VENDOR_PRE_RX_ARCHIVE)
 endif
 ifeq ($(CHACHA_VENDOR_PRIVATE_MEM),1)
 $(CARBOX_CHACHA_VENDOR_PRIVATE_MEM_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/Makefile
-	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) vendor-private-mem
+	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) vendor-private-mem \
+		OUTPUT_DIR=$(abspath $(CARBOX_CARPLAY_DERIVED_DIR))
 endif
 ifeq ($(CHACHA_VENDOR_PRIVATE_SW),1)
 $(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 		$(CARBOX_CARPLAY_CHACHA_DIR)/Makefile
-	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) vendor-private-sw
+	$(MAKE) -C $(CARBOX_CARPLAY_CHACHA_DIR) vendor-private-sw \
+		OUTPUT_DIR=$(abspath $(CARBOX_CARPLAY_DERIVED_DIR))
 application: $(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE)
 endif
 # The customer owns the screen frame buffer and queue. Keep the independent

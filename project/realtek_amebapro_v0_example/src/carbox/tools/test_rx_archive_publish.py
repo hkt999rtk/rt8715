@@ -25,7 +25,7 @@ def main():
     mk = (BUILD / 'application.is.mk').read_text()
     start = mk.index('$(CARBOX_CARPLAY_HANDOVER_ARCHIVE):')
     recipe = mk[start:mk.index('\n\napplication:', start)]
-    base = BUILD / 'carplay_app/chacha_m33/build/lib_CarPlay_chacha_m33.a'
+    base = BUILD / 'carplay_app/build/lib_CarPlay_chacha_m33.a'
     vendor = BUILD / 'carplay_app/lib_CarPlay.a'
     accessory = BUILD / 'carplay_app/lib_Accessory2.a'
     with tempfile.TemporaryDirectory(prefix='rx-archive-publish-') as directory:

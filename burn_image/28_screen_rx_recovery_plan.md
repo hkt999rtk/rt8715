@@ -165,7 +165,7 @@ Do not emit key/nonce values, ciphertext or plaintext.
 | chacha_key_alias_fix.c | Preserve wrapper order; prevent double nonce correction on this route |
 | patch_video_handover_archive.sh, audit tools | Receiver-local redirects and actual object audits |
 | Audio archive relocation audit/adapter tooling | Scope redirects to the two audio RX functions in AirPlayReceiverSession.o |
-| application.is.mk, chacha_m33/Makefile | Feature switch and complete configuration dependencies |
+| application.is.mk, tools/legacy_chacha/Makefile | Feature switch and complete configuration dependencies |
 
 Proposed A/B switch: `SCREEN_RX_SEPARATE_BUFFER=0/1`, default off until tests
 pass; the test firmware explicitly enables it. Disabling restores the existing

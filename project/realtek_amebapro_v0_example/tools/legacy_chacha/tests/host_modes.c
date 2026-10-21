@@ -1,4 +1,4 @@
-#include "../ChaCha20Poly1305.h"
+#include "ChaCha20Poly1305.h"
 #include "../ChaCha20Poly1305_rtl8195b.h"
 
 #include <openssl/evp.h>

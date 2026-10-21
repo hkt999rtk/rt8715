@@ -22,7 +22,7 @@
 ```text
 src/carbox/screen_tx_direct_crypto.c/.h
 GCC-RELEASE/carplay_app/patch_video_handover_archive.sh
-GCC-RELEASE/carplay_app/chacha_m33/ChaCha20Poly1305.c
+tools/legacy_chacha/ChaCha20Poly1305.c
 ```
 
 ## 1. 目的與範圍

@@ -9,7 +9,7 @@
 #include "task.h"
 #include "video_handover_zero_copy.h"
 #include "chacha_key_alias_fix.h"
-#include "../../GCC-RELEASE/carplay_app/chacha_m33/ChaCha20Poly1305.h"
+#include "ChaCha20Poly1305.h"
 
 #define RX_SLOTS 8u
 #ifndef CONFIG_CHACHA_HW_MIN_LEN

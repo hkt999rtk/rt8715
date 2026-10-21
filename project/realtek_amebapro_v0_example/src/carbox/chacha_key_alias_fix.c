@@ -8,7 +8,7 @@
 #include "hal_timer.h"
 #include "diag.h"
 #include "chacha_key_alias_fix.h"
-#include "../../GCC-RELEASE/carplay_app/chacha_m33/ChaCha20Poly1305.h"
+#include "ChaCha20Poly1305.h"
 #include "crypto_priority_lock.h"
 #include "screen_rx_record_profiler.h"
 #include "screen_rx_stage_profiler.h"
