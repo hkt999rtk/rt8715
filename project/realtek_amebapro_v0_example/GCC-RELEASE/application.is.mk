@@ -759,12 +759,6 @@ CHACHA_PRE_RX_VENDOR ?= 0
 CHACHA_VENDOR_PRIVATE_MEM ?= 0
 CHACHA_VENDOR_PRIVATE_SW ?= 0
 CHACHA_API_TRACE ?= 0
-# Temporary observation-only firmware for screen stalls. Keep normal builds
-# unchanged; the probe reports socket progress, verify errors and IRQ resets.
-SCREEN_STOP_DIAG ?= 0
-ifeq ($(SCREEN_STOP_DIAG),1)
-SRC_C += ../src/carbox/screen_stop_diag.c
-endif
 # Preserve SystemLib's usage log layout while replacing its fixed -10.0 C
 # placeholder with the SDK's RF thermal meter reading (raw 0..63).
 RF_THERMAL_USAGE_LOG ?= 0
@@ -1574,7 +1568,7 @@ $(SCREEN_FLOW_PROFILE_STAMP):
 # These switches affect several standalone profiler/wrapper objects.  Track
 # them explicitly so a diagnostic override cannot reuse release-mode objects.
 CRYPTO_ENGINE_PROFILE ?= 0
-DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-pcreport$(PC_PROFILER_SELF_REPORT)-platform$(PC_PROFILER_PLATFORM_REPORT)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)-touch$(TOUCH_PATH_PROFILE)-aa$(TOUCH_AA_COMMAND)-touchdetail$(TOUCH_PATH_REPORT_DETAIL)-airmutex$(AIRPLAY_MUTEX_PROFILE)-carack$(CAR_ACK_TCP_PROFILE)-iphonerx$(IPHONE_HTTP_RX_PROFILE)-gmttime$(GMT_TIME_PROFILE)-hidpipe$(AIRPLAY_HID_HTTP_PIPELINE_DEPTH)-hidbypass$(AIRPLAY_HID_HTTP_BYPASS)-touchsample$(TOUCH_MOVE_SAMPLE_HZ)-touchframe$(TOUCH_FRAME_PROFILE)-gcd$(GCD_SYNC_PROFILE)-gcdprio$(GCD_WORK_PRIORITY)-uisr$(USBH_ISR_TASK_PRIORITY)-umain$(USBH_MAIN_TASK_PRIORITY)-tcpclient$(TCP_CLIENT_PRIORITY)-rxrec$(SCREEN_RX_RECORD_PROFILE)-crypto$(CRYPTO_ENGINE_PROFILE)-cryptotmo$(CARBOX_CRYPTO_IRQ_TIMEOUT_MS)-stop$(SCREEN_STOP_DIAG)-rftherm$(RF_THERMAL_USAGE_LOG)
+DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-pcreport$(PC_PROFILER_SELF_REPORT)-platform$(PC_PROFILER_PLATFORM_REPORT)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)-touch$(TOUCH_PATH_PROFILE)-aa$(TOUCH_AA_COMMAND)-touchdetail$(TOUCH_PATH_REPORT_DETAIL)-airmutex$(AIRPLAY_MUTEX_PROFILE)-carack$(CAR_ACK_TCP_PROFILE)-iphonerx$(IPHONE_HTTP_RX_PROFILE)-gmttime$(GMT_TIME_PROFILE)-hidpipe$(AIRPLAY_HID_HTTP_PIPELINE_DEPTH)-hidbypass$(AIRPLAY_HID_HTTP_BYPASS)-touchsample$(TOUCH_MOVE_SAMPLE_HZ)-touchframe$(TOUCH_FRAME_PROFILE)-gcd$(GCD_SYNC_PROFILE)-gcdprio$(GCD_WORK_PRIORITY)-uisr$(USBH_ISR_TASK_PRIORITY)-umain$(USBH_MAIN_TASK_PRIORITY)-tcpclient$(TCP_CLIENT_PRIORITY)-rxrec$(SCREEN_RX_RECORD_PROFILE)-crypto$(CRYPTO_ENGINE_PROFILE)-cryptotmo$(CARBOX_CRYPTO_IRQ_TIMEOUT_MS)-rftherm$(RF_THERMAL_USAGE_LOG)
 $(DIAGNOSTIC_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.diagnostic_profile_*
@@ -2109,14 +2103,6 @@ endif
 LFLAGS += -Wl,--wrap=chacha20_poly1305_final
 LFLAGS += -Wl,--wrap=chacha20_poly1305_verify
 endif
-endif
-ifeq ($(SCREEN_STOP_DIAG),1)
-ifneq ($(CHACHA_API_TRACE)$(CHACHA_VENDOR_TRACE)$(CHACHA_PRE_RX_VENDOR)$(CHACHA_KEY_ALIAS_FIX)$(SCREEN_QUEUE_PROFILE)$(SCREEN_FPS_PROFILE)$(SCREEN_RX_RATE_LIMIT_ACTIVE)$(SCREEN_RX_RATE_LIMIT_PROFILE)$(VIDEO_INGRESS_PROFILE),000000000)
-$(error SCREEN_STOP_DIAG conflicts with another ChaCha or lwip_recv wrapper)
-endif
-LFLAGS += -Wl,--wrap=lwip_recv
-LFLAGS += -Wl,--wrap=chacha20_poly1305_decrypt
-LFLAGS += -Wl,--wrap=chacha20_poly1305_verify
 endif
 ifeq ($(RF_THERMAL_USAGE_LOG),1)
 LFLAGS += -Wl,--wrap=CarApi_GetUsage
