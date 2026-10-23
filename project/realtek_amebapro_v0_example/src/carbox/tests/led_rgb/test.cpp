@@ -9,7 +9,7 @@ hal_icc_adapter_t icc_hal_adp;
 int rt_printf(const char *, ...) { return 0; }
 static icc_user_cmd_handler_t request_cb, ack_cb;
 static unsigned irq, primask, basepri, critical_depth, sends, writes;
-static unsigned pwm_inits, pwm_frees;
+static unsigned pwm_inits;
 static uint32_t time_us;
 static bool missing_ack, corrupt_ack, drop_request, reenter;
 static int register_status = HAL_OK, send_status = HAL_OK, ack_busy;
@@ -63,66 +63,66 @@ void gpio_init(gpio_t *gpio, PinName pin) {
     gpio->pin = pin; gpio->output = 0;
 }
 void gpio_mode(gpio_t *, int pull) {
-    assert(pull == (RGB_LED_ACTIVE_LOW ? PullUp : PullDown));
+    assert(pull == PullUp);
 }
 void gpio_write(gpio_t *gpio, int level) {
     gpio->level = level;
 }
 void gpio_dir(gpio_t *gpio, int direction) {
     assert(direction == PIN_OUTPUT);
-    assert(gpio->level == (RGB_LED_ACTIVE_LOW ? 1 : 0));
+    assert(gpio->level == 1);
     gpio->output = 1;
 }
 void gpio_deinit(gpio_t *gpio) {
-    assert(gpio->output && gpio->level == (RGB_LED_ACTIVE_LOW ? 1 : 0));
+    assert(gpio->output && gpio->level == 1);
     gpio->output = 0;
 }
 void pwmout_init(pwmout_t *pwm, int pin) { pwm->pin = pin; }
-void pwmout_free(pwmout_t *) { ++pwm_frees; }
 int pwmout_init_with_duty(pwmout_t *pwm, PinName pin, int period, float duty) {
     assert(period == 1000);
-    assert(duty > 0.0f && duty < 1.0f);
+    assert(duty == 0.0f);
     ++pwm_inits;
     pwm->pin = pin; pwm->duty = duty;
     return 0;
 }
 void pwmout_period_us(pwmout_t *, int period) { assert(period == 1000); }
 void pwmout_write(pwmout_t *pwm, float value) {
-    assert(!irq && value > 0 && value < 1);
+    assert(!irq && value >= 0 && value <= 1);
     pwm->duty = value; ++writes;
 }
 static void expect_gpio(const gpio_t &gpio, int on) {
     assert(gpio.output);
     assert(gpio.level == (on ? !LED_RGB_OFF_LEVEL : LED_RGB_OFF_LEVEL));
 }
+static void expect_duty(float r, float g, float b) {
+    assert(std::fabs(red.duty-r) < 0.00001f);
+    assert(std::fabs(green.duty-g) < 0.00001f);
+    assert(std::fabs(blue.duty-b) < 0.00001f);
+}
 int main() {
     assert(led_rgb_get_status() == LED_RGB_NOT_READY);
     led_rgb_lp_prepare_boot_red();
     assert(red_off.output && green_off.output && blue_off.output);
-    assert(red_off.level == (RGB_LED_ACTIVE_LOW ? 0 : 1));
-    assert(green_off.level == (RGB_LED_ACTIVE_LOW ? 1 : 0));
-    assert(blue_off.level == (RGB_LED_ACTIVE_LOW ? 1 : 0));
+    assert(red_off.level == 0);
+    assert(green_off.level == 1);
+    assert(blue_off.level == 1);
     assert(led_rgb_lp_init() == 0);
-    assert(!pwm_inits);
+    assert(!pwm_ready && !pwm_inits);
     assert(red_off.output && green_off.output && blue_off.output);
     expect_gpio(red_off, 1);
     register_status = HAL_NOT_READY;
     led_rgb(1,0,0); assert(led_rgb_get_status() == LED_RGB_NOT_READY);
     register_status = HAL_OK;
     led_rgb(0,0,0); assert(led_rgb_get_status() == LED_RGB_OK);
-    assert(!pwm_inits);
+    assert(!pwm_ready && !pwm_inits);
     expect_gpio(red_off, 0);
     led_rgb(1,0.5f,0); assert(led_rgb_get_status() == LED_RGB_OK);
-    assert(pwm_inits == 1 && !red_pwm && green_pwm && !blue_pwm);
-    expect_gpio(red_off, 1);
-    assert(std::fabs(green.duty - (RGB_LED_ACTIVE_LOW ?
-        1.0f - 128.0f/255.0f : 128.0f/255.0f)) < 0.00001f);
-    expect_gpio(blue_off, 0);
+    assert(pwm_ready && pwm_inits == 3);
+    expect_duty(1,128.0f/255.0f,0);
     led_rgb(1,0.25f,0); assert(led_rgb_get_status() == LED_RGB_OK);
-    assert(writes == 1 && green_pwm);
+    expect_duty(1,64.0f/255.0f,0);
     led_rgb(0,0,0); assert(led_rgb_get_status() == LED_RGB_OK);
-    assert(pwm_frees == 1 && !green_pwm);
-    expect_gpio(red_off, 0); expect_gpio(green_off, 0); expect_gpio(blue_off, 0);
+    expect_duty(0,0,0);
     unsigned before = sends;
     for (float bad : {-0.1f, 1.1f, NAN, INFINITY}) {
         led_rgb(bad,0,0); assert(led_rgb_get_status() == LED_RGB_INVALID_ARGUMENT);
@@ -144,11 +144,11 @@ int main() {
     drop_request = false;
     reenter = true; ack_busy = 3; time_us = UINT32_MAX - 1000;
     led_rgb(1,1,1); assert(led_rgb_get_status() == LED_RGB_OK);
-    expect_gpio(red_off, 1); expect_gpio(green_off, 1); expect_gpio(blue_off, 1);
-    assert(pwm_inits == 1);
+    expect_duty(1,1,1);
+    assert(pwm_inits == 3);
     led_rgb(1,0,1); assert(led_rgb_get_status() == LED_RGB_OK);
-    expect_gpio(red_off, 1); expect_gpio(green_off, 0); expect_gpio(blue_off, 1);
-    assert(pwm_inits == 1);
+    expect_duty(1,0,1);
+    assert(pwm_inits == 3);
     // Duplicate requests (e.g. after an HP restart) must still receive ACK.
     sequence = applied_sequence - 1;
     led_rgb(1,1,1); assert(led_rgb_get_status() == LED_RGB_OK);

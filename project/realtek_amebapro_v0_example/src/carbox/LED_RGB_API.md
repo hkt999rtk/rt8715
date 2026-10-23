@@ -64,18 +64,19 @@ replacing the existing reset, power-management or eFuse handlers. Reserve ICC
 IDs `0xBA/0xBB` for this protocol in customer code as well.
 
 LP pins are R=`PA_6`, G=`PA_13`, B=`PA_4`, with a 1000 us (1 kHz) PWM period.
-This board's LP build sets `RGB_LED_ACTIVE_LOW=1` because high is electrically
-off. Other board wiring may require a different setting; change the LP build,
-not only the HP customer application, and rebuild LP after changing polarity.
+GPIO output is low-active on this board: high is electrically off. The PWM
+duty mapping is kept at the direct vendor setting that the application has
+already used successfully; GPIO level and PWM duty must not share one
+`RGB_LED_ACTIVE_LOW` switch.
 
 The LP build uses active-low polarity. Its main function first drives all
 three pins high as GPIOs, then drives only the red pin low, before boot
-logging. Startup therefore shows full red with PWM disabled. Exact 0% and
-100% channel brightness use GPIO output, including an all-off command. Only
-intermediate brightness hands that channel over to PWM, with its requested
-duty configured before PWM output is enabled. This avoids the PWM HAL's
-100%-duty initialization path. The pin state before LP firmware executes
-still depends on the board's pull-up circuitry.
+logging. Startup therefore shows full red with PWM disabled. An all-off
+command before PWM starts returns red high. The first nonzero color command
+hands all channels to PWM with 0% duty configured before PWM output is
+enabled; subsequent colors use the same direct duty mapping as the tested
+application. The pin state before LP firmware executes still depends on the
+board's pull-up circuitry.
 The old rainbow/breathing test source is preserved but no longer linked or
 called. Main-loop servicing replaces its infinite animation loop.
 
@@ -102,8 +103,8 @@ g++ -std=c++11 -Wall -Wextra -Werror -fsanitize=undefined \
 /tmp/rt8715-led-test
 ```
 
-Repeat with `-DRGB_LED_ACTIVE_LOW=1` to test inverted duty. Tests cover
-float packing, rejected values/contexts, PWM updates outside IRQ, ACK after
-application, registration/transport failures, missing/wrong ACK, concurrent
-calls, busy ACK retry, timer wrap, duplicate requests, and malformed protocol.
+Tests cover boot-red GPIO levels, PWM handover with direct duty, float packing,
+rejected values/contexts, PWM updates outside IRQ, ACK after application,
+registration/transport failures, missing/wrong ACK, concurrent calls, busy
+ACK retry, timer wrap, duplicate requests, and malformed protocol.
 They do not emulate Realtek ICC hardware or PWM silicon.

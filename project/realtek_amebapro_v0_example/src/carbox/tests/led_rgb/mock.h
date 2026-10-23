@@ -29,7 +29,6 @@ hal_status_t hal_icc_hal_cmd_register(hal_icc_adapter_t *, uint8_t,
 hal_status_t hal_icc_h2l_cmd_send(hal_icc_adapter_t *, uint32_t, uint32_t, uint32_t);
 hal_status_t hal_icc_l2h_cmd_send(hal_icc_adapter_t *, uint32_t, uint32_t, uint32_t);
 void pwmout_init(pwmout_t *, int);
-void pwmout_free(pwmout_t *);
 int pwmout_init_with_duty(pwmout_t *, PinName, int, float);
 void pwmout_period_us(pwmout_t *, int);
 void pwmout_write(pwmout_t *, float);
