@@ -41,6 +41,9 @@ extern void uart2_test(void);
 
 extern void console_init(void);
 extern hal_uart_adapter_t log_uart;
+#if defined(CONFIG_WLAN_RX_DMA_SKB) && CONFIG_WLAN_RX_DMA_SKB
+extern void carbox_wlan_recvframe_diag_start(void);
+#endif
 
 #define CARBOX_LOGUART_BAUD  1500000//3000000
 
@@ -591,6 +594,9 @@ void main(void)
 	/* init diagnostic tracing before any task creation */
 	carbox_ota_local_upload_page_install();
 	carbox_diag_init();
+#if defined(CONFIG_WLAN_RX_DMA_SKB) && CONFIG_WLAN_RX_DMA_SKB
+	carbox_wlan_recvframe_diag_start();
+#endif
 	carbox_large_memcpy_gdma_init();
 	carbox_aes_backend_select();
 	carbox_aes_ctr_periodic_selftest_start();

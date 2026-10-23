@@ -978,6 +978,9 @@ WLAN_RX_RING_SWAP ?= 0
 # Source-recovered rtl8195b_recv.o uses ordinary skb-backed DMA buffers.
 # This is independent of the retired rtw_memcpy/kfree symbol-hook path.
 WLAN_RX_DMA_SKB ?= 1
+ifeq ($(WLAN_RX_DMA_SKB),1)
+SRC_C += ../src/carbox/wlan_recvframe_diag.c
+endif
 # Periodic zero-copy counters are useful during bring-up but add UART/printf
 # disturbance. Keep the implementation available and default it off for soak.
 WLAN_RX_DMA_PROFILE ?= 0
@@ -1145,6 +1148,10 @@ CAR_ACK_TIMESTAMP ?= 0
 # 10 ms response delay was caused by the lwIP nonblocking receive retry.
 # A nonnegative value explicitly overrides the library's requested priority.
 TCP_CLIENT_PRIORITY ?= -1
+# The AAC decoder runs on the AirPlayAudioDecoder task. Give its 10 ms frames
+# precedence over the priority-4 audio output worker without delaying the
+# priority-10 networking and USB workers.
+AUDIO_DECODER_TASK_PRIORITY ?= 6
 # Overnight UI-freeze diagnosis: trace the CarPlay screen RX, handover queue,
 # and TX stages in the existing 10-second profiler report.
 SCREEN_QUEUE_PROFILE ?= 0
@@ -1229,12 +1236,19 @@ SCREEN_TCP_ACK_PROFILE ?= 0
 AUDIO_DECODE_PROFILE ?= 0
 AUDIO_DECODE_PROFILE_WINDOW_MS ?= 10000
 AUDIO_DECODE_PROFILE_SLOW_US ?= 10000
+# Label navigation-tone status 20/21 and compare MainAltAudio RTP sequence
+# at UDP input (before lwIP validation) and at SocketRecvFrom.
+AUDIO_STREAM_DIAG ?= 1
+ifeq ($(AUDIO_STREAM_DIAG),1)
+SRC_C += ../src/carbox/audio_stream_diag.c
+endif
 # Only decoder calls are routed; all AAC encoder symbols remain on FDK.
 # 0: FDK only. 1: Helix for supported raw AAC-LC, automatic FDK fallback.
 AAC_DECODER_MODE ?= 1
+AAC_ELD_DIAG ?= 1
 AAC_DECODER_ROUTE_PROFILE ?= 0
 AAC_DECODER_ROUTE_PROFILE_WINDOW_MS ?= 10000
-AAC_DECODER_MODE_STAMP := $(OBJ_DIR)/.aac_decoder_mode_$(AAC_DECODER_MODE)-profile$(AAC_DECODER_ROUTE_PROFILE)
+AAC_DECODER_MODE_STAMP := $(OBJ_DIR)/.aac_decoder_mode_$(AAC_DECODER_MODE)-profile$(AAC_DECODER_ROUTE_PROFILE)-eld$(AAC_ELD_DIAG)
 $(AAC_DECODER_MODE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.aac_decoder_mode_*
@@ -1568,7 +1582,7 @@ $(SCREEN_FLOW_PROFILE_STAMP):
 # These switches affect several standalone profiler/wrapper objects.  Track
 # them explicitly so a diagnostic override cannot reuse release-mode objects.
 CRYPTO_ENGINE_PROFILE ?= 0
-DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-pcreport$(PC_PROFILER_SELF_REPORT)-platform$(PC_PROFILER_PLATFORM_REPORT)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)-touch$(TOUCH_PATH_PROFILE)-aa$(TOUCH_AA_COMMAND)-touchdetail$(TOUCH_PATH_REPORT_DETAIL)-airmutex$(AIRPLAY_MUTEX_PROFILE)-carack$(CAR_ACK_TCP_PROFILE)-iphonerx$(IPHONE_HTTP_RX_PROFILE)-gmttime$(GMT_TIME_PROFILE)-hidpipe$(AIRPLAY_HID_HTTP_PIPELINE_DEPTH)-hidbypass$(AIRPLAY_HID_HTTP_BYPASS)-touchsample$(TOUCH_MOVE_SAMPLE_HZ)-touchframe$(TOUCH_FRAME_PROFILE)-gcd$(GCD_SYNC_PROFILE)-gcdprio$(GCD_WORK_PRIORITY)-uisr$(USBH_ISR_TASK_PRIORITY)-umain$(USBH_MAIN_TASK_PRIORITY)-tcpclient$(TCP_CLIENT_PRIORITY)-rxrec$(SCREEN_RX_RECORD_PROFILE)-crypto$(CRYPTO_ENGINE_PROFILE)-cryptotmo$(CARBOX_CRYPTO_IRQ_TIMEOUT_MS)-rftherm$(RF_THERMAL_USAGE_LOG)
+DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-pcreport$(PC_PROFILER_SELF_REPORT)-platform$(PC_PROFILER_PLATFORM_REPORT)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)-touch$(TOUCH_PATH_PROFILE)-aa$(TOUCH_AA_COMMAND)-touchdetail$(TOUCH_PATH_REPORT_DETAIL)-airmutex$(AIRPLAY_MUTEX_PROFILE)-carack$(CAR_ACK_TCP_PROFILE)-iphonerx$(IPHONE_HTTP_RX_PROFILE)-gmttime$(GMT_TIME_PROFILE)-hidpipe$(AIRPLAY_HID_HTTP_PIPELINE_DEPTH)-hidbypass$(AIRPLAY_HID_HTTP_BYPASS)-touchsample$(TOUCH_MOVE_SAMPLE_HZ)-touchframe$(TOUCH_FRAME_PROFILE)-gcd$(GCD_SYNC_PROFILE)-gcdprio$(GCD_WORK_PRIORITY)-audioprio$(AUDIO_DECODER_TASK_PRIORITY)-uisr$(USBH_ISR_TASK_PRIORITY)-umain$(USBH_MAIN_TASK_PRIORITY)-tcpclient$(TCP_CLIENT_PRIORITY)-rxrec$(SCREEN_RX_RECORD_PROFILE)-crypto$(CRYPTO_ENGINE_PROFILE)-cryptotmo$(CARBOX_CRYPTO_IRQ_TIMEOUT_MS)-rftherm$(RF_THERMAL_USAGE_LOG)
 $(DIAGNOSTIC_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.diagnostic_profile_*
@@ -1819,6 +1833,7 @@ GCCFLAGS += -DCONFIG_TCP_SOCKET_HANDOFF_PROFILE=$(TCP_SOCKET_HANDOFF_PROFILE)
 GCCFLAGS += -DCONFIG_GDMA_RESERVE_MULTIBLOCK_CHANNELS=$(GDMA_RESERVE_MULTIBLOCK_CHANNELS)
 GCCFLAGS += -DCONFIG_GCD_SYNC_PROFILE=$(GCD_SYNC_PROFILE)
 GCCFLAGS += -DCONFIG_GCD_WORK_PRIORITY=$(GCD_WORK_PRIORITY)
+GCCFLAGS += -DCONFIG_AUDIO_DECODER_TASK_PRIORITY=$(AUDIO_DECODER_TASK_PRIORITY)
 GCCFLAGS += -DCONFIG_USBH_ISR_TASK_PRIORITY=$(USBH_ISR_TASK_PRIORITY)
 GCCFLAGS += -DCONFIG_USBH_MAIN_TASK_PRIORITY=$(USBH_MAIN_TASK_PRIORITY)
 GCCFLAGS += -DCONFIG_CAR_ACK_TIMESTAMP=$(CAR_ACK_TIMESTAMP)
@@ -1860,6 +1875,7 @@ GCCFLAGS += -DCONFIG_AUDIO_DECODE_PROFILE=$(AUDIO_DECODE_PROFILE)
 GCCFLAGS += -DAUDIO_DECODE_PROFILE_WINDOW_MS=$(AUDIO_DECODE_PROFILE_WINDOW_MS)
 GCCFLAGS += -DAUDIO_DECODE_PROFILE_SLOW_US=$(AUDIO_DECODE_PROFILE_SLOW_US)
 GCCFLAGS += -DCARBOX_AAC_DECODER_MODE=$(AAC_DECODER_MODE)
+GCCFLAGS += -DCONFIG_AAC_ELD_DIAG=$(AAC_ELD_DIAG)
 GCCFLAGS += -DCONFIG_AAC_DECODER_ROUTE_PROFILE=$(AAC_DECODER_ROUTE_PROFILE)
 GCCFLAGS += -DAAC_DECODER_ROUTE_PROFILE_WINDOW_MS=$(AAC_DECODER_ROUTE_PROFILE_WINDOW_MS)
 GCCFLAGS += -DCONFIG_AAC_DECODER_BENCHMARK=$(AAC_DECODER_BENCHMARK)
@@ -1964,6 +1980,13 @@ CPPFLAGS += -w
 CPPFLAGS += -Wall -Wpointer-arith -Wundef -Wno-write-strings -Wno-maybe-uninitialized
 
 LFLAGS = 
+ifeq ($(WLAN_RX_DMA_SKB),1)
+LFLAGS += -Wl,--wrap=rtw_queue_empty
+endif
+ifeq ($(AUDIO_STREAM_DIAG),1)
+LFLAGS += -Wl,--wrap=CAccessory_StatusNotify -Wl,--wrap=SocketRecvFrom \
+	-Wl,--wrap=udp_input
+endif
 ifeq ($(UI_H264_DIAG),1)
 LFLAGS += -Wl,--wrap=IsFileExist -Wl,--wrap=lib_x264_encode \
 	-Wl,--wrap=lib_accessory_send_video
@@ -2022,7 +2045,7 @@ ifeq ($(AIRPLAY_MUTEX_PROFILE),1)
 LFLAGS += -Wl,--wrap=pthread_mutex_lock -Wl,--wrap=pthread_mutex_unlock
 LFLAGS += -Wl,--wrap=lib_carplay_hid_report
 endif
-ifneq ($(strip $(filter-out -1,$(GCD_WORK_PRIORITY) $(USBH_ISR_TASK_PRIORITY) $(USBH_MAIN_TASK_PRIORITY) $(TCP_CLIENT_PRIORITY))),)
+ifneq ($(strip $(filter-out -1,$(GCD_WORK_PRIORITY) $(AUDIO_DECODER_TASK_PRIORITY) $(USBH_ISR_TASK_PRIORITY) $(USBH_MAIN_TASK_PRIORITY) $(TCP_CLIENT_PRIORITY))),)
 LFLAGS += -Wl,--wrap=xTaskCreate
 endif
 ifeq ($(CAR_ACK_TIMESTAMP),1)

@@ -1,4 +1,5 @@
 #include "device.h"
+#include "gpio_api.h"
 #include "pwmout_api.h"
 #include "hal_icc.h"
 #include "led_rgb_lp.h"
@@ -12,10 +13,64 @@ extern void icc_hal_app_init(void);
 #endif
 
 static pwmout_t red, green, blue;
+static gpio_t red_off, green_off, blue_off;
 static volatile uint32_t pending_sequence, pending_payload;
 static volatile uint8_t pending;
 static uint32_t applied_sequence, applied_payload;
-static int initialized, ack_pending;
+static int initialized, pwm_ready, ack_pending;
+static int pins_prepared;
+
+#if RGB_LED_ACTIVE_LOW
+#define LED_RGB_OFF_LEVEL 1
+#define LED_RGB_OFF_DUTY 1.0f
+#define LED_RGB_OFF_PULL PullUp
+#else
+#define LED_RGB_OFF_LEVEL 0
+#define LED_RGB_OFF_DUTY 0.0f
+#define LED_RGB_OFF_PULL PullDown
+#endif
+
+static void hold_channel_off(gpio_t *gpio, PinName pin)
+{
+    gpio_init(gpio, pin);
+    gpio_mode(gpio, LED_RGB_OFF_PULL);
+    /* Load the output latch before changing direction. */
+    gpio_write(gpio, LED_RGB_OFF_LEVEL);
+    gpio_dir(gpio, PIN_OUTPUT);
+}
+
+void led_rgb_lp_prepare_pins_off(void)
+{
+    if (pins_prepared) return;
+    hold_channel_off(&red_off, PA_6);
+    hold_channel_off(&green_off, PA_13);
+    hold_channel_off(&blue_off, PA_4);
+    pins_prepared = 1;
+}
+
+static int init_channel_off(pwmout_t *channel, gpio_t *off_gpio, PinName pin)
+{
+    gpio_deinit(off_gpio);
+    if (pwmout_init_with_duty(channel, pin, 1000, LED_RGB_OFF_DUTY) != 0) {
+        hold_channel_off(off_gpio, pin);
+        return -1;
+    }
+    return 0;
+}
+
+static int start_pwm(void)
+{
+    if (pwm_ready) return 0;
+    if (init_channel_off(&red, &red_off, PA_6) != 0 ||
+        init_channel_off(&green, &green_off, PA_13) != 0 ||
+        init_channel_off(&blue, &blue_off, PA_4) != 0) {
+        initialized = -1;
+        dbg_printf("[LED_RGB][LP] PWM init failed\r\n");
+        return -1;
+    }
+    pwm_ready = 1;
+    return 0;
+}
 
 static void led_rgb_request(uint32_t command, uint32_t payload, uint32_t arg)
 {
@@ -42,19 +97,13 @@ static void set_channel(pwmout_t *channel, uint8_t value)
 
 int led_rgb_lp_init(void)
 {
-    if (initialized) return 0;
+    if (initialized > 0) return 0;
+    if (initialized < 0) return -1;
+    led_rgb_lp_prepare_pins_off();
     icc_hal_app_init(); /* Idempotent SDK boot initialization. */
-    pwmout_init(&red, PA_6);
-    pwmout_init(&green, PA_13);
-    pwmout_init(&blue, PA_4);
-    pwmout_period_us(&red, 1000);
-    pwmout_period_us(&green, 1000);
-    pwmout_period_us(&blue, 1000);
-    /* Initial RGB is (1, 1, 1): high outputs turn this board's LEDs off.
-     * Keep the existing runtime duty mapping unchanged. */
-    set_channel(&red, 255);
-    set_channel(&green, 255);
-    set_channel(&blue, 255);
+    /* Keep all channels as off-level GPIOs through startup. The PWM HAL may
+     * change pinmux/output during initialization, so defer it until a color
+     * other than off is actually requested. */
     if (hal_icc_hal_cmd_register(&icc_hal_adp, LED_RGB_ICC_SET,
                                  led_rgb_request, 0) != HAL_OK) {
         dbg_printf("[LED_RGB][LP] ICC register failed\r\n");
@@ -70,7 +119,7 @@ void led_rgb_lp_poll(void)
 {
     uint32_t seq, payload, primask;
     uint8_t have_request;
-    if (!initialized) return;
+    if (initialized <= 0) return;
     primask = __get_PRIMASK();
     __disable_irq();
     seq = pending_sequence;
@@ -79,9 +128,13 @@ void led_rgb_lp_poll(void)
     pending = 0;
     __set_PRIMASK(primask);
     if (have_request && seq) {
-        set_channel(&red, (uint8_t)(payload >> 16));
-        set_channel(&green, (uint8_t)(payload >> 8));
-        set_channel(&blue, (uint8_t)payload);
+        if ((payload & 0x00ffffffUL) && start_pwm() != 0)
+            return; /* No ACK: the requested color was not applied. */
+        if (pwm_ready) {
+            set_channel(&red, (uint8_t)(payload >> 16));
+            set_channel(&green, (uint8_t)(payload >> 8));
+            set_channel(&blue, (uint8_t)payload);
+        }
         applied_sequence = seq;
         applied_payload = payload;
         ack_pending = 1;

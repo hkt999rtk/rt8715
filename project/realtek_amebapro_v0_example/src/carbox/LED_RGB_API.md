@@ -63,14 +63,18 @@ The HP HAL command table has one extra slot for the LED ACK handler, without
 replacing the existing reset, power-management or eFuse handlers. Reserve ICC
 IDs `0xBA/0xBB` for this protocol in customer code as well.
 
-LP pins and polarity match the previous test: R=`PA_6`, G=`PA_13`, B=`PA_4`,
-PWM period 1000 us (1 kHz), active-high by default. Common-anode hardware needs
-the LP build define `RGB_LED_ACTIVE_LOW=1`. Do not define it only in the HP
-customer application. Rebuild LP after changing polarity.
+LP pins are R=`PA_6`, G=`PA_13`, B=`PA_4`, with a 1000 us (1 kHz) PWM period.
+This board's LP build sets `RGB_LED_ACTIVE_LOW=1` because high is electrically
+off. Other board wiring may require a different setting; change the LP build,
+not only the HP customer application, and rebuild LP after changing polarity.
 
-LP initializes RGB to `(1, 1, 1)` and retains the last requested values.
-With the unchanged default duty mapping, all three outputs start high,
-which turns the LEDs off on this active-low board.
+The LP build uses active-low polarity. Its main function first drives all
+three pins high as GPIOs, before boot logging. Startup leaves PWM disabled;
+an all-off command also leaves the pins as GPIOs. The first nonzero color
+command hands each channel over to PWM with 100% duty configured before PWM
+output is enabled. The logical RGB initial value is `(0, 0, 0)`, matching the
+API's off value. The pin state before LP firmware executes still depends on
+the board's pull-up circuitry.
 The old rainbow/breathing test source is preserved but no longer linked or
 called. Main-loop servicing replaces its infinite animation loop.
 

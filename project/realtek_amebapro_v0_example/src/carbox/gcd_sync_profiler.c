@@ -31,6 +31,10 @@
 #define CONFIG_GCD_WORK_PRIORITY (-1)
 #endif
 
+#ifndef CONFIG_AUDIO_DECODER_TASK_PRIORITY
+#define CONFIG_AUDIO_DECODER_TASK_PRIORITY (-1)
+#endif
+
 #ifndef CONFIG_USBH_ISR_TASK_PRIORITY
 #define CONFIG_USBH_ISR_TASK_PRIORITY (-1)
 #endif
@@ -43,7 +47,8 @@
 #define CONFIG_TCP_CLIENT_PRIORITY (-1)
 #endif
 
-#if CONFIG_GCD_WORK_PRIORITY >= 0 || CONFIG_USBH_ISR_TASK_PRIORITY >= 0 || \
+#if CONFIG_GCD_WORK_PRIORITY >= 0 || CONFIG_AUDIO_DECODER_TASK_PRIORITY >= 0 || \
+	CONFIG_USBH_ISR_TASK_PRIORITY >= 0 || \
 	CONFIG_USBH_MAIN_TASK_PRIORITY >= 0 || CONFIG_TCP_CLIENT_PRIORITY >= 0
 
 extern BaseType_t __real_xTaskCreate(TaskFunction_t task_code,
@@ -56,6 +61,22 @@ extern BaseType_t __real_xTaskCreate(TaskFunction_t task_code,
 static int gcdprof_is_worker_name(const char *name)
 {
 	static const char expected[] = "gcd-work";
+	uint32_t i;
+
+	if (name == NULL) {
+		return 0;
+	}
+	for (i = 0U; i < sizeof(expected); i++) {
+		if (name[i] != expected[i]) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+static int gcdprof_is_audio_decoder_name(const char *name)
+{
+	static const char expected[] = "AirPlayAudioDecoder";
 	uint32_t i;
 
 	if (name == NULL) {
@@ -118,10 +139,9 @@ static int gcdprof_is_tcp_client_name(const char *name)
 }
 
 /*
- * DispatchLite creates its workers through FreeRTOS-Plus-POSIX and requests
- * priority 2.  Its binary has no source, so alter only tasks named gcd-work at
- * the final FreeRTOS creation boundary.  Every other xTaskCreate call is passed
- * through unchanged.  This is intentionally a build-time A/B test switch.
+ * Closed libraries create POSIX threads with fixed priorities.  Match their
+ * exact task names at the FreeRTOS creation boundary so each configured
+ * override affects only its intended worker.
  */
 BaseType_t __wrap_xTaskCreate(TaskFunction_t task_code,
 			      const char *task_name,
@@ -133,6 +153,14 @@ BaseType_t __wrap_xTaskCreate(TaskFunction_t task_code,
 #if CONFIG_GCD_WORK_PRIORITY >= 0
 	if (gcdprof_is_worker_name(task_name)) {
 		priority = (UBaseType_t)CONFIG_GCD_WORK_PRIORITY;
+		if (priority >= (UBaseType_t)configMAX_PRIORITIES) {
+			priority = (UBaseType_t)configMAX_PRIORITIES - 1U;
+		}
+	}
+#endif
+#if CONFIG_AUDIO_DECODER_TASK_PRIORITY >= 0
+	if (gcdprof_is_audio_decoder_name(task_name)) {
+		priority = (UBaseType_t)CONFIG_AUDIO_DECODER_TASK_PRIORITY;
 		if (priority >= (UBaseType_t)configMAX_PRIORITIES) {
 			priority = (UBaseType_t)configMAX_PRIORITIES - 1U;
 		}

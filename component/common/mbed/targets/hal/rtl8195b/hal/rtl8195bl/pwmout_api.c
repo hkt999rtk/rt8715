@@ -58,16 +58,16 @@ static const PinMap PinMap_PWM[] = {
 
 static u8 timer_for_pwm[] = {GTimer1, GTimer2, GTimer3, GTimer4,GTimer5,GTimer6,GTimer7, 0xff};  // the timer ID list those can be used as PWM tick source
 static hal_pwm_comm_adapter_t pwm_com_handler;
+static u8 pwm_com_initialed;
 
-void pwmout_init(pwmout_t *obj, PinName pin)
+static int pwmout_init_internal(pwmout_t *obj, PinName pin,
+                                int period_us, float initial_duty,
+                                int preset_duty)
 {
     uint32_t peripheral;
     u32 pwm_idx;
     u32 pin_sel;
     u16 duty_res = 0;
-    static u8 pwm_com_initialed;
-
-
     if (!pwm_com_initialed) {
         hal_pwm_comm_init (&pwm_com_handler);
         hal_pwm_comm_tick_source_list (timer_for_pwm);
@@ -81,7 +81,7 @@ void pwmout_init(pwmout_t *obj, PinName pin)
 
     if (unlikely(peripheral == NC)) {
         DBG_PWM_ERR("%s: Cannot find matched pwm for this pin(0x%x)\n", __func__, pin);
-        return;
+        return -1;
     }
 
     pwm_idx = RTL_GET_PERI_IDX(peripheral);
@@ -98,11 +98,38 @@ void pwmout_init(pwmout_t *obj, PinName pin)
 
     if (hal_pwm_init (&obj->pwm_hal_adp, pwm_idx, pin_sel, duty_res) != HAL_OK) {
         DBG_PWM_ERR("pwmout_init Err!\n");
-        return;
+        return -1;
     }
     obj->is_init = 1; // Initialize Success
-    pwmout_period_us(obj, 20000); // 20 ms per default
+    if (preset_duty) {
+        /* The vendor default path enables a zero-duty PWM. For active-low
+         * LEDs that briefly turns the LED on. Set the off duty first. */
+        obj->period = (uint32_t)period_us;
+        obj->pulse = (uint32_t)((float)period_us * initial_duty);
+        if (hal_pwm_set_duty(&obj->pwm_hal_adp, obj->period,
+                             obj->pulse, obj->offset_us) != HAL_OK) {
+            hal_pwm_deinit(&obj->pwm_hal_adp);
+            obj->is_init = 0;
+            return -1;
+        }
+    } else {
+        pwmout_period_us(obj, 20000); // 20 ms per default
+    }
     hal_pwm_enable ((&obj->pwm_hal_adp));
+    return 0;
+}
+
+void pwmout_init(pwmout_t *obj, PinName pin)
+{
+    (void)pwmout_init_internal(obj, pin, 0, 0.0f, 0);
+}
+
+int pwmout_init_with_duty(pwmout_t *obj, PinName pin, int period_us,
+                          float initial_duty)
+{
+    if (period_us <= 0 || !(initial_duty >= 0.0f && initial_duty <= 1.0f))
+        return -1;
+    return pwmout_init_internal(obj, pin, period_us, initial_duty, 1);
 }
 
 void pwmout_free(pwmout_t *obj)

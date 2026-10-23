@@ -53,6 +53,13 @@ typedef struct pwmout_s pwmout_t;
   */
 void pwmout_init(pwmout_t* obj, PinName pin);
 
+#if defined(CONFIG_PLATFORM_8195BLP) && (CONFIG_PLATFORM_8195BLP == 1)
+/* Set the initial period/duty before enabling the LP PWM output.
+ * Returns 0 on success, -1 if initialization fails. */
+int pwmout_init_with_duty(pwmout_t* obj, PinName pin, int period_us,
+                          float initial_duty);
+#endif
+
 /**
   * @brief  Deinitializes the PWM device of the specified channel.
   * @param  obj: PWM object define in application software.

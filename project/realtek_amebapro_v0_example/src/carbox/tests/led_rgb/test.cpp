@@ -6,6 +6,7 @@
 #include "../../led_rgb_lp.c"
 
 hal_icc_adapter_t icc_hal_adp;
+int rt_printf(const char *, ...) { return 0; }
 static icc_user_cmd_handler_t request_cb, ack_cb;
 static unsigned irq, primask, basepri, critical_depth, sends, writes;
 static uint32_t time_us;
@@ -57,7 +58,31 @@ hal_status_t hal_icc_l2h_cmd_send(hal_icc_adapter_t *, uint32_t cmd,
     }
     return HAL_OK;
 }
+void gpio_init(gpio_t *gpio, PinName pin) {
+    gpio->pin = pin; gpio->output = 0;
+}
+void gpio_mode(gpio_t *, int pull) {
+    assert(pull == (RGB_LED_ACTIVE_LOW ? PullUp : PullDown));
+}
+void gpio_write(gpio_t *gpio, int level) {
+    gpio->level = level;
+}
+void gpio_dir(gpio_t *gpio, int direction) {
+    assert(direction == PIN_OUTPUT);
+    assert(gpio->level == (RGB_LED_ACTIVE_LOW ? 1 : 0));
+    gpio->output = 1;
+}
+void gpio_deinit(gpio_t *gpio) {
+    assert(gpio->output && gpio->level == (RGB_LED_ACTIVE_LOW ? 1 : 0));
+    gpio->output = 0;
+}
 void pwmout_init(pwmout_t *pwm, int pin) { pwm->pin = pin; }
+int pwmout_init_with_duty(pwmout_t *pwm, PinName pin, int period, float duty) {
+    assert(period == 1000);
+    assert(duty == (RGB_LED_ACTIVE_LOW ? 1.0f : 0.0f));
+    pwm->pin = pin; pwm->duty = duty;
+    return 0;
+}
 void pwmout_period_us(pwmout_t *, int period) { assert(period == 1000); }
 void pwmout_write(pwmout_t *pwm, float value) {
     assert(!irq && value >= 0 && value <= 1);
@@ -73,11 +98,16 @@ static void expect_duty(float r, float g, float b) {
 }
 int main() {
     assert(led_rgb_get_status() == LED_RGB_NOT_READY);
+    led_rgb_lp_prepare_pins_off();
+    assert(red_off.output && green_off.output && blue_off.output);
     assert(led_rgb_lp_init() == 0);
-    expect_duty(1,1,1);
+    assert(!pwm_ready);
+    assert(red_off.output && green_off.output && blue_off.output);
     register_status = HAL_NOT_READY;
     led_rgb(1,0,0); assert(led_rgb_get_status() == LED_RGB_NOT_READY);
     register_status = HAL_OK;
+    led_rgb(0,0,0); assert(led_rgb_get_status() == LED_RGB_OK);
+    assert(!pwm_ready);
     led_rgb(1,0.5f,0); assert(led_rgb_get_status() == LED_RGB_OK);
     expect_duty(1,128.0f/255,0);
     led_rgb(0,0,0); expect_duty(0,0,0);

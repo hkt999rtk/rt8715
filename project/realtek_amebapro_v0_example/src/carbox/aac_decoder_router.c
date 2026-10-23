@@ -21,6 +21,8 @@
 #endif
 #include "aacdecoder_lib.h"
 #include "hal_timer.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #ifndef CARBOX_AAC_DECODER_MODE
 #define CARBOX_AAC_DECODER_MODE 0
@@ -32,6 +34,10 @@
 
 #ifndef CONFIG_AAC_DECODER_ROUTE_PROFILE
 #define CONFIG_AAC_DECODER_ROUTE_PROFILE 0
+#endif
+
+#ifndef CONFIG_AAC_ELD_DIAG
+#define CONFIG_AAC_ELD_DIAG 0
 #endif
 
 #define CARBOX_AAC_DECODER_FDK_ONLY 0
@@ -65,6 +71,18 @@ typedef struct aac_router_s {
 	uint32_t profile_fdk_frames;
 	uint32_t profile_errors;
 	uint32_t fallback_total;
+#if CONFIG_AAC_ELD_DIAG
+	uint32_t nav_window_start_us;
+	uint32_t nav_decode_calls;
+	uint32_t nav_decode_errors;
+	uint32_t nav_over_budget;
+	uint32_t nav_max_us;
+	uint32_t nav_frame_budget_us;
+	uint64_t nav_total_us;
+	uint8_t nav_eld;
+	uint8_t nav_task_logged;
+	uint8_t qmf_lp_accepted;
+#endif
 	uint8_t pending[AAC_ROUTER_INPUT_CAPACITY];
 } aac_router_t;
 
@@ -149,6 +167,93 @@ static int aac_router_parse_lc_asc(const uint8_t *config, uint32_t length,
 	return 1;
 }
 
+static const char *aac_router_aot_name(uint32_t object_type)
+{
+	switch (object_type) {
+	case 2U: return "AAC-LC";
+	case 5U: return "HE-AAC";
+	case 23U: return "AAC-LD";
+	case 29U: return "HE-AACv2";
+	case 39U: return "AAC-ELD";
+	default: return "other";
+	}
+}
+
+/* Called only after FDK accepts the ASC and Helix cannot use it. Keep the
+ * diagnostic independent of the Helix eligibility check above. */
+static void aac_router_describe_helix_reject(const aac_router_t *router,
+	UCHAR *config[], const UINT length[], char *reason, size_t reason_size)
+{
+	uint32_t object_type;
+	uint32_t bit_offset = 5U;
+	uint32_t rate_index;
+	uint32_t channel_config;
+
+	if (router->transport != TT_MP4_RAW) {
+		snprintf(reason, reason_size, "helix-requires-raw transport=%u",
+			(unsigned int)router->transport);
+		return;
+	}
+	if (router->layers != 1U) {
+		snprintf(reason, reason_size, "helix-requires-one-layer layers=%lu",
+			(unsigned long)router->layers);
+		return;
+	}
+	if (config == NULL || length == NULL || config[0] == NULL) {
+		snprintf(reason, reason_size, "missing-audio-specific-config");
+		return;
+	}
+	if (length[0] < 2U) {
+		snprintf(reason, reason_size, "short-audio-specific-config bytes=%u",
+			(unsigned int)length[0]);
+		return;
+	}
+	object_type = aac_router_read_bits(config[0], 0U, 5U);
+	if (object_type == 31U) {
+		object_type = 32U + aac_router_read_bits(config[0], bit_offset, 6U);
+		bit_offset += 6U;
+	}
+	if (object_type != 2U) {
+		snprintf(reason, reason_size,
+			"helix-unsupported-profile profile=%s aot=%lu supported=AAC-LC asc_bytes=%u",
+			aac_router_aot_name(object_type), (unsigned long)object_type,
+			(unsigned int)length[0]);
+		return;
+	}
+	if ((uint64_t)length[0] * 8U < bit_offset + 8U) {
+		snprintf(reason, reason_size, "short-AAC-LC-config bytes=%u",
+			(unsigned int)length[0]);
+		return;
+	}
+	rate_index = aac_router_read_bits(config[0], bit_offset, 4U);
+	bit_offset += 4U;
+	if (rate_index >= 13U) {
+		snprintf(reason, reason_size,
+			"helix-unsupported-sample-rate-index index=%lu profile=AAC-LC",
+			(unsigned long)rate_index);
+		return;
+	}
+	channel_config = aac_router_read_bits(config[0], bit_offset, 4U);
+	bit_offset += 4U;
+	if (channel_config != 1U && channel_config != 2U) {
+		snprintf(reason, reason_size,
+			"helix-requires-mono-or-stereo channels=%lu profile=AAC-LC",
+			(unsigned long)channel_config);
+		return;
+	}
+	if ((uint64_t)length[0] * 8U < bit_offset + 1U) {
+		snprintf(reason, reason_size, "short-AAC-LC-frame-config bytes=%u",
+			(unsigned int)length[0]);
+		return;
+	}
+	if (aac_router_read_bits(config[0], bit_offset, 1U) != 0U) {
+		snprintf(reason, reason_size,
+			"helix-requires-1024-sample-frames profile=AAC-LC");
+		return;
+	}
+	snprintf(reason, reason_size, "helix-unsupported-config profile=AAC-LC");
+}
+
 static void aac_router_select_fdk(aac_router_t *router, const char *reason)
 {
 	if (router->helix != NULL) {
@@ -203,17 +308,123 @@ static void aac_router_profile_record(aac_router_t *router,
 #endif
 }
 
+#if CONFIG_AAC_ELD_DIAG && CARBOX_AAC_DECODER_MODE == CARBOX_AAC_DECODER_HELIX_AUTO
+static void aac_router_nav_decode_report(aac_router_t *router,
+	const char *event, uint32_t now_us)
+{
+	uint32_t window_ms;
+
+	if (!router->nav_eld || router->nav_decode_calls == 0U) {
+		return;
+	}
+	window_ms = (now_us - router->nav_window_start_us) / 1000U;
+	printf("[AAC_ELD_DECODE] handle=%p event=%s window_ms=%lu "
+		"calls=%lu errors=%lu avg_us=%llu max_us=%lu "
+		"over_frame_budget=%lu frame_budget_us=%lu\n",
+		(void *)router, event, (unsigned long)window_ms,
+		(unsigned long)router->nav_decode_calls,
+		(unsigned long)router->nav_decode_errors,
+		(unsigned long long)(router->nav_total_us / router->nav_decode_calls),
+		(unsigned long)router->nav_max_us,
+		(unsigned long)router->nav_over_budget,
+		(unsigned long)router->nav_frame_budget_us);
+	router->nav_window_start_us = 0U;
+	router->nav_decode_calls = 0U;
+	router->nav_decode_errors = 0U;
+	router->nav_over_budget = 0U;
+	router->nav_max_us = 0U;
+	router->nav_total_us = 0U;
+}
+
+static void aac_router_nav_decode_record(aac_router_t *router,
+	uint32_t elapsed_us, AAC_DECODER_ERROR error)
+{
+	uint32_t now_us;
+
+	if (!router->nav_eld) {
+		return;
+	}
+	if (!router->nav_task_logged) {
+		TaskHandle_t task = xTaskGetCurrentTaskHandle();
+		printf("[AAC_ELD_TASK] handle=%p task=%s priority=%lu\n",
+			(void *)router, pcTaskGetName(task),
+			(unsigned long)uxTaskPriorityGet(task));
+		router->nav_task_logged = 1U;
+	}
+	now_us = hal_read_curtime_us();
+	if (router->nav_decode_calls == 0U) {
+		router->nav_window_start_us = now_us;
+	}
+	router->nav_decode_calls++;
+	router->nav_decode_errors += error != AAC_DEC_OK ? 1U : 0U;
+	router->nav_over_budget += elapsed_us > router->nav_frame_budget_us ? 1U : 0U;
+	router->nav_total_us += elapsed_us;
+	if (elapsed_us > router->nav_max_us) {
+		router->nav_max_us = elapsed_us;
+	}
+	if (now_us - router->nav_window_start_us >= 1000000U) {
+		aac_router_nav_decode_report(router, "window", now_us);
+	}
+}
+
+static void aac_router_nav_config(aac_router_t *router, UCHAR *config[],
+	const UINT length[])
+{
+	CStreamInfo *info = aacDecoder_GetStreamInfo(router->fdk);
+	uint32_t asc_prefix = 0U;
+	uint32_t prefix_bytes = 0U;
+	uint32_t i;
+
+	/* aacNumChannels is populated by DecodeFrame, but channelConfig is
+	 * available immediately after ConfigRaw. */
+	if (info == NULL || info->aot != AOT_ER_AAC_ELD ||
+	    info->aacSampleRate != 44100 || info->channelConfig != 1) {
+		return;
+	}
+	router->nav_eld = 1U;
+	if (info->aacSamplesPerFrame > 0) {
+		router->nav_frame_budget_us =
+			(uint32_t)(((uint64_t)info->aacSamplesPerFrame * 1000000U) /
+				(uint32_t)info->aacSampleRate);
+	}
+	if (config != NULL && length != NULL && config[0] != NULL) {
+		prefix_bytes = length[0] < 4U ? length[0] : 4U;
+		for (i = 0U; i < prefix_bytes; ++i) {
+			asc_prefix = (asc_prefix << 8) | config[0][i];
+		}
+	}
+	printf("[AAC_ELD_CFG] handle=%p rate=%d channels=%d core_samples=%d "
+		"frame_budget_us=%lu sbr=%u mps=%u qmf_lowpower_set=%u "
+		"asc_bytes=%u asc_prefix_bytes=%lu asc_prefix=%08lx\n",
+		(void *)router, info->aacSampleRate, info->channelConfig,
+		info->aacSamplesPerFrame,
+		(unsigned long)router->nav_frame_budget_us,
+		(info->flags & AC_SBR_PRESENT) != 0U ? 1U : 0U,
+		(info->flags & AC_MPS_PRESENT) != 0U ? 1U : 0U,
+		(unsigned int)router->qmf_lp_accepted,
+		length != NULL ? (unsigned int)length[0] : 0U,
+		(unsigned long)prefix_bytes, (unsigned long)asc_prefix);
+}
+#endif
+
 /* Configure the real FDK instance before the caller supplies ConfigRaw.
  * Bypass the router so this preference cannot switch a Helix decoder to FDK. */
-static HANDLE_AACDECODER aac_router_open_fdk(TRANSPORT_TYPE transport, UINT layers)
+static HANDLE_AACDECODER aac_router_open_fdk(TRANSPORT_TYPE transport,
+	UINT layers, uint8_t *qmf_lp_accepted)
 {
 	HANDLE_AACDECODER fdk = __real_aacDecoder_Open(transport, layers);
 	AAC_DECODER_ERROR error;
 
+	if (qmf_lp_accepted != NULL) {
+		*qmf_lp_accepted = 0U;
+	}
 	if (fdk == NULL) {
 		return NULL;
 	}
 	error = __real_aacDecoder_SetParam(fdk, AAC_QMF_LOWPOWER, 1);
+	if (qmf_lp_accepted != NULL && error == AAC_DEC_OK) {
+		*qmf_lp_accepted = 1U;
+	}
 	if (error != AAC_DEC_OK) {
 		/* An optional processing preference must not prevent audio startup. */
 		printf("[AACROUTE] FDK QMF low-power request failed: 0x%x\n",
@@ -225,14 +436,19 @@ static HANDLE_AACDECODER aac_router_open_fdk(TRANSPORT_TYPE transport, UINT laye
 HANDLE_AACDECODER __wrap_aacDecoder_Open(TRANSPORT_TYPE transport, UINT layers)
 {
 #if CARBOX_AAC_DECODER_MODE == CARBOX_AAC_DECODER_FDK_ONLY
-	return aac_router_open_fdk(transport, layers);
+	return aac_router_open_fdk(transport, layers, NULL);
 #else
 	aac_router_t *router = calloc(1U, sizeof(*router));
 
 	if (router == NULL) {
 		return NULL;
 	}
-	router->fdk = aac_router_open_fdk(transport, layers);
+#if CONFIG_AAC_ELD_DIAG
+	router->fdk = aac_router_open_fdk(transport, layers,
+		&router->qmf_lp_accepted);
+#else
+	router->fdk = aac_router_open_fdk(transport, layers, NULL);
+#endif
 	if (router->fdk == NULL) {
 		free(router);
 		return NULL;
@@ -256,6 +472,7 @@ AAC_DECODER_ERROR __wrap_aacDecoder_ConfigRaw(HANDLE_AACDECODER decoder,
 	uint32_t sample_rate;
 	uint32_t channels;
 	AACFrameInfo info;
+	char reject_reason[128];
 
 	if (router == NULL) {
 		return __real_aacDecoder_ConfigRaw(decoder, config, length);
@@ -264,6 +481,12 @@ AAC_DECODER_ERROR __wrap_aacDecoder_ConfigRaw(HANDLE_AACDECODER decoder,
 	if (error != AAC_DEC_OK) {
 		return error;
 	}
+#if CONFIG_AAC_ELD_DIAG
+	aac_router_nav_decode_report(router, "reconfig", hal_read_curtime_us());
+	router->nav_eld = 0U;
+	router->nav_task_logged = 0U;
+	aac_router_nav_config(router, config, length);
+#endif
 	router->pending_bytes = 0U;
 	router->backend = AAC_ROUTER_BACKEND_FDK;
 	if (router->helix != NULL) {
@@ -274,7 +497,9 @@ AAC_DECODER_ERROR __wrap_aacDecoder_ConfigRaw(HANDLE_AACDECODER decoder,
 	    config == NULL || length == NULL ||
 	    !aac_router_parse_lc_asc(config[0], length[0], &sample_rate,
 		&channels)) {
-		aac_router_select_fdk(router, "unsupported-config");
+		aac_router_describe_helix_reject(router, config, length,
+			reject_reason, sizeof(reject_reason));
+		aac_router_select_fdk(router, reject_reason);
 		return AAC_DEC_OK;
 	}
 	router->helix = AACInitDecoder();
@@ -431,8 +656,17 @@ AAC_DECODER_ERROR __wrap_aacDecoder_DecodeFrame(HANDLE_AACDECODER decoder,
 		"helix-decode");
 	profile_name = "FDK-FALLBACK";
 out:
-	carbox_audio_decode_profile_record_backend(profile_name,
-		hal_read_curtime_us() - start_us, error != AAC_DEC_OK);
+	{
+		uint32_t elapsed_us = hal_read_curtime_us() - start_us;
+		carbox_audio_decode_profile_record_backend(profile_name,
+			elapsed_us, error != AAC_DEC_OK);
+#if CONFIG_AAC_ELD_DIAG
+		if (router != NULL && router->backend == AAC_ROUTER_BACKEND_FDK &&
+		    flags == 0U) {
+			aac_router_nav_decode_record(router, elapsed_us, error);
+		}
+#endif
+	}
 	if (router != NULL) {
 		aac_router_profile_record(router, profile_name, error);
 	}
@@ -447,6 +681,7 @@ AAC_DECODER_ERROR __wrap_aacDecoder_SetParam(const HANDLE_AACDECODER decoder,
 	return __real_aacDecoder_SetParam(decoder, parameter, value);
 #else
 	aac_router_t *router = aac_router_from_handle(decoder);
+	AAC_DECODER_ERROR error;
 
 	if (router == NULL) {
 		return __real_aacDecoder_SetParam(decoder, parameter, value);
@@ -460,7 +695,19 @@ AAC_DECODER_ERROR __wrap_aacDecoder_SetParam(const HANDLE_AACDECODER decoder,
 	if (router->backend == AAC_ROUTER_BACKEND_HELIX) {
 		aac_router_select_fdk(router, "unsupported-param");
 	}
-	return __real_aacDecoder_SetParam(router->fdk, parameter, value);
+	error = __real_aacDecoder_SetParam(router->fdk, parameter, value);
+#if CONFIG_AAC_ELD_DIAG
+	if (parameter == AAC_QMF_LOWPOWER) {
+		router->qmf_lp_accepted = error == AAC_DEC_OK && value == 1 ? 1U : 0U;
+		if (router->nav_eld) {
+			printf("[AAC_ELD_QMF] handle=%p requested=%d result=0x%x "
+				"lowpower_set=%u\n", (void *)router, value,
+				(unsigned int)error,
+				(unsigned int)router->qmf_lp_accepted);
+		}
+	}
+#endif
+	return error;
 #endif
 }
 
@@ -475,6 +722,9 @@ void __wrap_aacDecoder_Close(HANDLE_AACDECODER decoder)
 		__real_aacDecoder_Close(decoder);
 		return;
 	}
+#if CONFIG_AAC_ELD_DIAG
+	aac_router_nav_decode_report(router, "close", hal_read_curtime_us());
+#endif
 	router->magic = 0U;
 	if (router->helix != NULL) {
 		AACDeInitDecoder(router->helix);

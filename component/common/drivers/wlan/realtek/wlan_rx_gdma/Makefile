@@ -26,6 +26,7 @@ RECOVERED_SKBUFF_SOURCE := $(RECOVERED_DIR)/freertos_skbuff_recovered.c
 DMA_MANAGER_SOURCE := $(RECOVERED_DIR)/wlan_rx_dma_mgr.c
 DMA_MANAGER_HEADER := $(RECOVERED_DIR)/wlan_rx_dma_mgr.h
 AMSDU_ALLOC_PATCH := $(RECOVERED_DIR)/patch_amsdu_alloc_failure.py
+RECVFRAME_POOL_PATCH := $(RECOVERED_DIR)/patch_recvframe_pool.py
 RECOVERED_RX_OBJECT := $(BUILD_DIR)/rtl8195b_recv.o
 COPY_PARITY_RX_OBJECT := $(BUILD_DIR)/copy_parity/rtl8195b_recv.o
 RECOVERED_SKBUFF_OBJECT := $(BUILD_DIR)/freertos_skbuff.o
@@ -173,7 +174,7 @@ $(DMA_MANAGER_OBJECT): $(DMA_MANAGER_SOURCE) $(DMA_MANAGER_HEADER) \
 # and append the source-built DMA manager. Preserve vendor member order.
 $(ARCHIVE_STAGE_STAMP): $(ORIGINAL_ARCHIVE) $(RECOVERED_RX_OBJECT) \
 		$(RECOVERED_SKBUFF_OBJECT) $(DMA_MANAGER_OBJECT) \
-		$(AMSDU_ALLOC_PATCH) Makefile | $(BUILD_DIR)
+		$(AMSDU_ALLOC_PATCH) $(RECVFRAME_POOL_PATCH) Makefile | $(BUILD_DIR)
 	@echo "  EXTRACT vendor lib_wlan.a -> $(ARCHIVE_STAGE_DIR)"
 	@$(RM) -r $(ARCHIVE_STAGE_DIR)
 	@mkdir -p $(ARCHIVE_STAGE_DIR)
@@ -185,6 +186,7 @@ $(ARCHIVE_STAGE_STAMP): $(ORIGINAL_ARCHIVE) $(RECOVERED_RX_OBJECT) \
 		  sort $(VENDOR_MEMBER_LIST) | uniq -d; exit 1; }
 	@cd $(ARCHIVE_STAGE_DIR) && $(AR) x $(abspath $(ORIGINAL_ARCHIVE))
 	@python3 $(AMSDU_ALLOC_PATCH) $(ARCHIVE_STAGE_DIR)/rtw_recv.o
+	@python3 $(RECVFRAME_POOL_PATCH) $(ARCHIVE_STAGE_DIR)/rtw_recv.o
 	@cp $(RECOVERED_RX_OBJECT) $(ARCHIVE_STAGE_DIR)/rtl8195b_recv.o
 	@cp $(RECOVERED_SKBUFF_OBJECT) $(ARCHIVE_STAGE_DIR)/freertos_skbuff.o
 	@cp $(DMA_MANAGER_OBJECT) $(ARCHIVE_STAGE_DIR)/wlan_rx_dma_mgr.o
@@ -326,6 +328,7 @@ verify: $(ZERO_COPY_ARCHIVE)
 	@test "$$($(AR) t $(ZERO_COPY_ARCHIVE) | grep -c '^wlan_rx_dma_mgr.o$$')" = 1 || \
 		{ echo "ERROR: DMA manager member missing or duplicated"; exit 1; }
 	@python3 $(AMSDU_ALLOC_PATCH) --check $(ARCHIVE_STAGE_DIR)/rtw_recv.o
+	@python3 $(RECVFRAME_POOL_PATCH) --check $(ARCHIVE_STAGE_DIR)/rtw_recv.o
 	@test "$$($(AR) p $(ZERO_COPY_ARCHIVE) rtw_recv.o | sha256sum | cut -d' ' -f1)" = \
 		"$$(sha256sum $(ARCHIVE_STAGE_DIR)/rtw_recv.o | cut -d' ' -f1)" || \
 		{ echo "ERROR: archived rtw_recv.o differs from verified patch"; exit 1; }

@@ -55,7 +55,10 @@ void malloc_test(void)
 }
 
 void main (void)
-{   
+{
+#if defined(CONFIG_PWM_EN)
+    led_rgb_lp_prepare_pins_off();
+#endif
     malloc_test();
     dbg_printf ("Build @ %s, %s\r\n", __TIME__, __DATE__);
     shell_cmd_init ();
