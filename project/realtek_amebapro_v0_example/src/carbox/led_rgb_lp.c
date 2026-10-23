@@ -29,6 +29,7 @@ static int pins_prepared;
 #define LED_RGB_OFF_DUTY 0.0f
 #define LED_RGB_OFF_PULL PullDown
 #endif
+#define LED_RGB_ON_LEVEL (!LED_RGB_OFF_LEVEL)
 
 static void hold_channel_off(gpio_t *gpio, PinName pin)
 {
@@ -39,17 +40,21 @@ static void hold_channel_off(gpio_t *gpio, PinName pin)
     gpio_dir(gpio, PIN_OUTPUT);
 }
 
-void led_rgb_lp_prepare_pins_off(void)
+void led_rgb_lp_prepare_boot_red(void)
 {
     if (pins_prepared) return;
     hold_channel_off(&red_off, PA_6);
     hold_channel_off(&green_off, PA_13);
     hold_channel_off(&blue_off, PA_4);
+    gpio_write(&red_off, LED_RGB_ON_LEVEL);
     pins_prepared = 1;
 }
 
 static int init_channel_off(pwmout_t *channel, gpio_t *off_gpio, PinName pin)
 {
+    /* First return the boot-red GPIO to the off level. PWM then takes over
+     * only one channel at a time, with the other channels still off. */
+    gpio_write(off_gpio, LED_RGB_OFF_LEVEL);
     gpio_deinit(off_gpio);
     if (pwmout_init_with_duty(channel, pin, 1000, LED_RGB_OFF_DUTY) != 0) {
         hold_channel_off(off_gpio, pin);
@@ -99,11 +104,10 @@ int led_rgb_lp_init(void)
 {
     if (initialized > 0) return 0;
     if (initialized < 0) return -1;
-    led_rgb_lp_prepare_pins_off();
+    led_rgb_lp_prepare_boot_red();
     icc_hal_app_init(); /* Idempotent SDK boot initialization. */
-    /* Keep all channels as off-level GPIOs through startup. The PWM HAL may
-     * change pinmux/output during initialization, so defer it until a color
-     * other than off is actually requested. */
+    /* Keep the startup color on GPIOs. The PWM HAL may change pinmux/output
+     * during initialization, so defer it until a nonzero color is requested. */
     if (hal_icc_hal_cmd_register(&icc_hal_adp, LED_RGB_ICC_SET,
                                  led_rgb_request, 0) != HAL_OK) {
         dbg_printf("[LED_RGB][LP] ICC register failed\r\n");
@@ -134,6 +138,9 @@ void led_rgb_lp_poll(void)
             set_channel(&red, (uint8_t)(payload >> 16));
             set_channel(&green, (uint8_t)(payload >> 8));
             set_channel(&blue, (uint8_t)payload);
+        } else {
+            /* A zero-color request before PWM starts must turn boot red off. */
+            gpio_write(&red_off, LED_RGB_OFF_LEVEL);
         }
         applied_sequence = seq;
         applied_payload = payload;

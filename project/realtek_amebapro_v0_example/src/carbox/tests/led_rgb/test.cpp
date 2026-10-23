@@ -98,16 +98,21 @@ static void expect_duty(float r, float g, float b) {
 }
 int main() {
     assert(led_rgb_get_status() == LED_RGB_NOT_READY);
-    led_rgb_lp_prepare_pins_off();
+    led_rgb_lp_prepare_boot_red();
     assert(red_off.output && green_off.output && blue_off.output);
+    assert(red_off.level == (RGB_LED_ACTIVE_LOW ? 0 : 1));
+    assert(green_off.level == (RGB_LED_ACTIVE_LOW ? 1 : 0));
+    assert(blue_off.level == (RGB_LED_ACTIVE_LOW ? 1 : 0));
     assert(led_rgb_lp_init() == 0);
     assert(!pwm_ready);
     assert(red_off.output && green_off.output && blue_off.output);
+    assert(red_off.level == (RGB_LED_ACTIVE_LOW ? 0 : 1));
     register_status = HAL_NOT_READY;
     led_rgb(1,0,0); assert(led_rgb_get_status() == LED_RGB_NOT_READY);
     register_status = HAL_OK;
     led_rgb(0,0,0); assert(led_rgb_get_status() == LED_RGB_OK);
     assert(!pwm_ready);
+    assert(red_off.level == (RGB_LED_ACTIVE_LOW ? 1 : 0));
     led_rgb(1,0.5f,0); assert(led_rgb_get_status() == LED_RGB_OK);
     expect_duty(1,128.0f/255,0);
     led_rgb(0,0,0); expect_duty(0,0,0);

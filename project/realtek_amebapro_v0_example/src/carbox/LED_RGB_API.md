@@ -69,11 +69,11 @@ off. Other board wiring may require a different setting; change the LP build,
 not only the HP customer application, and rebuild LP after changing polarity.
 
 The LP build uses active-low polarity. Its main function first drives all
-three pins high as GPIOs, before boot logging. Startup leaves PWM disabled;
-an all-off command also leaves the pins as GPIOs. The first nonzero color
+three pins high as GPIOs, then drives only the red pin low, before boot
+logging. Startup therefore shows full red with PWM disabled. An all-off
+command returns red high and leaves the pins as GPIOs. The first nonzero color
 command hands each channel over to PWM with 100% duty configured before PWM
-output is enabled. The logical RGB initial value is `(0, 0, 0)`, matching the
-API's off value. The pin state before LP firmware executes still depends on
+output is enabled. The pin state before LP firmware executes still depends on
 the board's pull-up circuitry.
 The old rainbow/breathing test source is preserved but no longer linked or
 called. Main-loop servicing replaces its infinite animation loop.
