@@ -818,6 +818,9 @@ SRC_C += ../src/carbox/touch_frame_profiler.c
 SRC_C += ../src/carbox/i2c_bitbang_pacing.c
 SRC_C += ../src/carbox/ota_local_upload_page.c
 SRC_C += ../src/carbox/ota/carplay_ota_compat.c
+SRC_C += ../src/carbox/ota/carplay_ota_http.c
+SRC_C += ../src/carbox/ota/wifi_action_protocol.c
+SRC_C += ../src/carbox/ota/wifi_action_ota.c
 SRC_C += ../src/carbox/irq_profiler.c
 SRC_C += ../src/carbox/usb_hcd_profiler.c
 SRC_C += ../src/carbox/usb_rx_priority.c
@@ -964,6 +967,7 @@ GCCFLAGS += -DCARBOX_X264_MEM_DIAG=$(CARBOX_X264_MEM_DIAG)
 
 # Define Macro
 GCCFLAGS += -D__thumb2__ -DCONFIG_PLATFORM_8195B -DCONFIG_PLATFORM_8195BHP -D__FPU_PRESENT -D__ARM_ARCH_7M__=0 -D__ARM_ARCH_7EM__=0 -D__ARM_ARCH_8M_MAIN__=1 -D__ARM_ARCH_8M_BASE__=0 
+GCCFLAGS += -DCONFIG_CARBOX_ACTION_OTA=1
 GCCFLAGS += -DCONFIG_BUILD_RAM=1 -DCONFIG_BUILD_LIB=1
 GCCFLAGS += -DV8M_STKOVF -DARM_MATH_CM7 -DCONFIG_FATFS_WRAPPER=1
 NET_GDMA_COPY ?= 0

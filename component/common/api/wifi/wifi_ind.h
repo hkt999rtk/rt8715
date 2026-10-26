@@ -69,6 +69,14 @@ void init_event_callback_list(void);
   */
 extern void wifi_indication( rtw_event_indicate_t event, char *buf, int buf_len, int flags);
 
+/* Public callback dispatch, matching the Smart SDK API. This does not run
+ * internal STA state transitions; driver events must use wifi_indication(). */
+rtw_result_t rtw_indicate_event_handle(int event_cmd, char *buf, int buf_len, int flags);
+
+/* RT8715 equivalent of the Smart SDK's join-status internal handler.
+ * Accepts RT8715 events, not Smart event IDs or enum join-status values. */
+void wifi_event_sta_internal_hdl(rtw_event_indicate_t event, char *buf, int buf_len, int flags);
+
 /** 
  * @brief  Register the event listener.
  * @param[in] event_cmds : The event command number indicated.

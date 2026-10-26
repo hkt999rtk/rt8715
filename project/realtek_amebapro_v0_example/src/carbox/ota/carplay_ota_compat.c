@@ -1,11 +1,11 @@
 /*
- * Smart OTA compatibility for the standalone CarPlay link probe.
+ * Smart OTA package compatibility for Pro1 HTTP upload and Action OTA.
  *
  * Smart lib_usbdev.a exposes an HTTPD OTA path that feeds firmware chunks into
  * ota_update_init/download_fw_program/ota_update_deinit. Pro1 does not export
  * those Smart names, but it does provide alternate-slot discovery and flash
- * programming primitives. This wrapper keeps the Smart ABI names and routes the
- * chunk-writing path to Pro1 flash APIs for dependency discovery.
+ * programming primitives. Keep the Smart ABI names and route both HTTP GET
+ * and upload chunks through the Pro1 package validator and flash writer.
  *
  * Supports single-image (ota_app.bin / ota_fatfs.bin) and multi-image
  * (ota_all.bin with FW + FATFS) Smart OTA packages.
@@ -17,6 +17,8 @@
 #include <string.h>
 
 #include "carbox_flash_layout.h"
+#include "carplay_ota_compat.h"
+#include "carplay_ota_http.h"
 
 #define CARPLAY_OTA_RET_ERR (-1)
 #define CARPLAY_OTA_RET_OK 0
@@ -66,25 +68,9 @@ extern void device_mutex_unlock(RT_DEV_LOCK_E device);
 extern void flash_erase_sector(flash_t *obj, uint32_t address);
 extern int flash_burst_write(flash_t *obj, uint32_t address, uint32_t Length, uint8_t *data);
 extern int flash_stream_read(flash_t *obj, uint32_t address, uint32_t len, uint8_t *data);
-extern int http_update_ota(char *host, int port, char *resource);
 extern uint32_t update_ota_prepare_addr(void);
 extern uint32_t update_ota_get_curr_fw_start_offset(void);
 extern int update_ota_signature(unsigned char *sig_backup, uint32_t NewFWAddr);
-
-typedef struct {
-	char *host;
-	int port;
-	char *resource;
-	int fd;
-	uint8_t type;
-	void *tls;
-	void *otactrl;
-	void *redirect;
-	void *otaTargetHdr;
-	void (*progress_cb)(int percent);
-	uint8_t *firmware_buffer;
-	uint32_t firmware_buffer_size;
-} carplay_ota_context_t;
 
 typedef struct {
 	flash_t flash;
@@ -364,7 +350,7 @@ static int carplay_complete_image(carplay_pro1_ota_state_t *state, uint8_t idx)
 
 static int carplay_parse_smart_header(carplay_pro1_ota_state_t *state)
 {
-	carplay_smart_file_hdr_t *file_hdr;
+	carplay_smart_file_hdr_t file_hdr;
 	uint32_t collected;
 	uint32_t expected_offset;
 	uint8_t i;
@@ -375,19 +361,20 @@ static int carplay_parse_smart_header(carplay_pro1_ota_state_t *state)
 		return CARPLAY_OTA_RET_OK;
 	}
 
-	file_hdr = (carplay_smart_file_hdr_t *)state->smart_header_buf;
+	/* smart_header_buf follows byte fields and need not be word aligned. */
+	memcpy(&file_hdr, state->smart_header_buf, sizeof(file_hdr));
 
 	if (state->smart_header_needed == 0U) {
-		if (file_hdr->HdrNum == 0U || file_hdr->HdrNum > CARPLAY_SMART_MAX_IMG_NUM) {
+		if (file_hdr.HdrNum == 0U || file_hdr.HdrNum > CARPLAY_SMART_MAX_IMG_NUM) {
 			printf("[carplay_ota] bad Smart HdrNum=%lu\n",
-			       (unsigned long)file_hdr->HdrNum);
+			       (unsigned long)file_hdr.HdrNum);
 			return CARPLAY_OTA_RET_ERR;
 		}
-		state->smart_hdr_num = (uint8_t)file_hdr->HdrNum;
+		state->smart_hdr_num = (uint8_t)file_hdr.HdrNum;
 		state->smart_header_needed = CARPLAY_SMART_FILE_HDR_LEN +
 			(uint32_t)state->smart_hdr_num * CARPLAY_SMART_IMG_HDR_LEN;
 		printf("[carplay_ota] Smart hdr: FwVer=%lu HdrNum=%u need=%lu bytes\n",
-		       (unsigned long)file_hdr->FwVer,
+		       (unsigned long)file_hdr.FwVer,
 		       (unsigned int)state->smart_hdr_num,
 		       (unsigned long)state->smart_header_needed);
 	}
@@ -401,7 +388,7 @@ static int carplay_parse_smart_header(carplay_pro1_ota_state_t *state)
 	expected_offset = state->smart_header_needed;
 	for (i = 0U; i < state->smart_hdr_num; i++) {
 		carplay_smart_img_hdr_t *dst = &state->smart_img_hdrs[i];
-		carplay_smart_img_hdr_t *src = (carplay_smart_img_hdr_t *)
+		const uint8_t *src =
 			(state->smart_header_buf + CARPLAY_SMART_FILE_HDR_LEN +
 			 (uint32_t)i * CARPLAY_SMART_IMG_HDR_LEN);
 
@@ -458,7 +445,7 @@ static int carplay_parse_smart_header(carplay_pro1_ota_state_t *state)
 	state->smart_package_end = expected_offset;
 	if (state->buffered_post_mode != 0U && state->expected_input_len > 0U &&
 	    state->expected_input_len != state->smart_package_end) {
-		printf("[carplay_ota] POST length mismatch content=%lu package=%lu\n",
+		printf("[carplay_ota] HTTP length mismatch content=%lu package=%lu\n",
 		       (unsigned long)state->expected_input_len,
 		       (unsigned long)state->smart_package_end);
 		return CARPLAY_OTA_RET_ERR;
@@ -682,18 +669,38 @@ int ota_update_init(carplay_ota_context_t *ctx, char *host, int port, char *reso
 	return CARPLAY_OTA_RET_OK;
 }
 
+static int carplay_http_begin(void *arg, uint32_t length)
+{
+    carplay_ota_context_t *ctx = arg;
+    carplay_pro1_ota_state_t *state = ctx->otactrl;
+    if (!length || length > state->target_fw_size + state->fatfs_size + CARPLAY_SMART_HEADER_MAX)
+        return -1;
+    state->expected_input_len = length;
+    state->buffered_post_mode = 1; /* Require HTTP length to match the package. */
+    return 0;
+}
+
+static int carplay_http_data(void *arg, const uint8_t *buf, uint32_t len)
+{
+    carplay_ota_context_t *ctx = arg;
+    int ret = download_fw_program(ctx, buf, len);
+    if (ret < 0) return -1;
+    if (ctx->progress_cb) ctx->progress_cb(get_flash_percentage());
+    return 0;
+}
+
 int ota_update_start(carplay_ota_context_t *ctx)
 {
-	if (ctx == NULL || ctx->host == NULL || ctx->resource == NULL) {
-		return CARPLAY_OTA_RET_ERR;
-	}
-
-	printf("[carplay_ota] ota_update_start HTTP OTA path is not verified yet; "
-			"using native http_update_ota(host=%s, port=%d, resource=%s)\n",
-			ctx->host, ctx->port, ctx->resource);
-
-	return (http_update_ota(ctx->host, ctx->port, ctx->resource) == 0) ?
-		   CARPLAY_OTA_RET_OK : CARPLAY_OTA_RET_ERR;
+    carplay_pro1_ota_state_t *state;
+    int ret;
+    if (!ctx || !ctx->host || !ctx->resource || !ctx->otactrl) return -1;
+    state = ctx->otactrl;
+    ret = carbox_ota_http_get(ctx->host, ctx->port, ctx->resource,
+                            carplay_http_begin, carplay_http_data, ctx);
+    if (ret == 0 && state->finalized) return 0;
+    /* Never let deinit commit a failed/truncated HTTP transfer. */
+    state->failed = 1;
+    return -1;
 }
 
 int ota_update_deinit(carplay_ota_context_t *ctx)

@@ -330,14 +330,29 @@ void wifi_rx_beacon_hdl( char* buf, int buf_len, int flags, void* userdata) {
 }
 
 
+static void wifi_sta_link_up(void)
+{
+#if CONFIG_LWIP_LAYER && !defined(CONFIG_MBED_ENABLED) && !defined(CONFIG_PLATFOMR_CUSTOMER_RTOS)
+	if ((wifi_mode == RTW_MODE_STA || wifi_mode == RTW_MODE_STA_AP) &&
+	    !netif_is_link_up(&xnetif[0]))
+		netif_set_link_up(&xnetif[0]);
+#endif
+}
+
 static void wifi_no_network_hdl(char* buf, int buf_len, int flags, void* userdata)
 {
-  if(join_user_data!=NULL)
- 	 rtw_join_status = JOIN_NO_NETWORKS | JOIN_CONNECTING;
+	if (join_user_data != NULL) {
+		rtw_join_status = JOIN_NO_NETWORKS | JOIN_CONNECTING;
+		error_flag = RTW_NONE_NETWORK;
+		/* A terminal scan failure must release a synchronous join waiter. */
+		rtw_up_sema(&join_user_data->join_sema);
+	}
 }
 
 static void wifi_connected_hdl( char* buf, int buf_len, int flags, void* userdata)
 {
+	if (buf == NULL || buf_len < ETH_ALEN)
+		return;
 	rtw_memcpy(ap_bssid, buf, ETH_ALEN);
 	
 #ifdef CONFIG_ENABLE_EAP	
@@ -351,6 +366,7 @@ static void wifi_connected_hdl( char* buf, int buf_len, int flags, void* userdat
 		(join_user_data->network_info.security_type == RTW_SECURITY_WEP_PSK) ||
 		(join_user_data->network_info.security_type == RTW_SECURITY_WEP_SHARED))){
 		rtw_join_status = JOIN_COMPLETE | JOIN_SECURITY_COMPLETE | JOIN_ASSOCIATED | JOIN_AUTHENTICATED | JOIN_LINK_READY | JOIN_CONNECTING;
+		wifi_sta_link_up();
 		rtw_up_sema(&join_user_data->join_sema);
 	}else if((join_user_data!=NULL)&&((join_user_data->network_info.security_type == RTW_SECURITY_WPA2_AES_PSK) ||
 	                                  (join_user_data->network_info.security_type == RTW_SECURITY_WPA2_TKIP_PSK) ||
@@ -371,7 +387,14 @@ static void wifi_connected_hdl( char* buf, int buf_len, int flags, void* userdat
 }
 static void wifi_handshake_done_hdl( char* buf, int buf_len, int flags, void* userdata)
 {
-	rtw_join_status = JOIN_COMPLETE | JOIN_SECURITY_COMPLETE | JOIN_ASSOCIATED | JOIN_AUTHENTICATED | JOIN_LINK_READY|JOIN_HANDSHAKE_DONE | JOIN_CONNECTING;
+	/* Ignore a late handshake event after disconnect. A rekey without a
+	 * pending wifi_connect() must not leave JOIN_CONNECTING set forever. */
+	if (join_user_data == NULL && !(rtw_join_status & JOIN_ASSOCIATED))
+		return;
+	rtw_join_status = JOIN_COMPLETE | JOIN_SECURITY_COMPLETE | JOIN_ASSOCIATED |
+	                  JOIN_AUTHENTICATED | JOIN_LINK_READY | JOIN_HANDSHAKE_DONE |
+	                  (join_user_data != NULL ? JOIN_CONNECTING : 0);
+	wifi_sta_link_up();
 	if(join_user_data != NULL)
 		rtw_up_sema(&join_user_data->join_sema);
 }
@@ -433,10 +456,11 @@ extern void dhcp6_stop(struct netif *netif);
 static void wifi_disconn_hdl( char* buf, int buf_len, int flags, void* userdata)
 {
 #define REASON_4WAY_HNDSHK_TIMEOUT 15
-	u16 disconn_reason;
-	if (buf != NULL){
-		/* buf detail: mac addr + disconn_reason, buf_len = ETH_ALEN+2*/
-		disconn_reason =*(u16*)(buf+6);
+	u16 disconn_reason = 0;
+	if (buf != NULL && buf_len >= ETH_ALEN + 2) {
+		/* MAC + little-endian reason; the event buffer need not be aligned. */
+		disconn_reason = (u16)(u8)buf[ETH_ALEN] |
+		                 ((u16)(u8)buf[ETH_ALEN + 1] << 8);
 	}
 	if(join_user_data != NULL){
 		if(join_user_data->network_info.security_type == RTW_SECURITY_OPEN){
@@ -496,10 +520,16 @@ static void wifi_disconn_hdl( char* buf, int buf_len, int flags, void* userdata)
 #if LWIP_IPV6
 	dhcp6_stop(&xnetif[0]);
 #endif
-#endif	
+#endif
+	netif_set_link_down(&xnetif[0]);
 #endif
 #endif
 
+	/* Keep JOIN_CONNECTING until its owner exits wifi_connect(), but clear
+	 * stale success bits before application callbacks observe this event. */
+	rtw_join_status &= ~(JOIN_ASSOCIATED | JOIN_AUTHENTICATED | JOIN_LINK_READY |
+	                     JOIN_SECURITY_COMPLETE | JOIN_COMPLETE | JOIN_HANDSHAKE_DONE);
+	rtw_memset(ap_bssid, 0, sizeof(ap_bssid));
 	if(join_user_data != NULL)
 		rtw_up_sema(&join_user_data->join_sema);
 	//RTW_API_INFO("\r\nWiFi Disconnect. Error flag is %d.\n", error_flag);
@@ -510,6 +540,31 @@ static void wifi_disconn_hdl( char* buf, int buf_len, int flags, void* userdata)
 		rtw_up_sema(&disconnect_sema);
 	}
 #endif
+}
+
+/* Internal processing cannot consume a public callback slot or be skipped
+ * when a customer's callback table is full. Smart does the same before its
+ * JOIN_STATUS callbacks; RT8715 retains its separate legacy driver events. */
+void wifi_event_sta_internal_hdl(rtw_event_indicate_t event, char *buf, int buf_len, int flags)
+{
+	if (wifi_mode != RTW_MODE_STA && wifi_mode != RTW_MODE_STA_AP)
+		return;
+	switch (event) {
+	case WIFI_EVENT_NO_NETWORK:
+		wifi_no_network_hdl(buf, buf_len, flags, NULL);
+		break;
+	case WIFI_EVENT_CONNECT:
+		wifi_connected_hdl(buf, buf_len, flags, NULL);
+		break;
+	case WIFI_EVENT_FOURWAY_HANDSHAKE_DONE:
+		wifi_handshake_done_hdl(buf, buf_len, flags, NULL);
+		break;
+	case WIFI_EVENT_DISCONNECT:
+		wifi_disconn_hdl(buf, buf_len, flags, NULL);
+		break;
+	default:
+		break;
+	}
 }
 
 #if CONFIG_EXAMPLE_WLAN_FAST_CONNECT || CONFIG_JD_SMART
@@ -745,10 +800,7 @@ int wifi_connect(
 	} else {
 		join_result->join_sema = semaphore;
 	}
-	wifi_reg_event_handler(WIFI_EVENT_NO_NETWORK,wifi_no_network_hdl,NULL);
-	wifi_reg_event_handler(WIFI_EVENT_CONNECT, wifi_connected_hdl, NULL);
-	wifi_reg_event_handler(WIFI_EVENT_DISCONNECT, wifi_disconn_hdl, NULL);
-	wifi_reg_event_handler(WIFI_EVENT_FOURWAY_HANDSHAKE_DONE, wifi_handshake_done_hdl, NULL);
+	/* STA events are handled internally before public callbacks. */
 
 // if is connected to ap, would trigger disconn_hdl but need to make sure it is invoked before setting join_user_data
 #if CONFIG_WIFI_IND_USE_THREAD
@@ -773,6 +825,7 @@ int wifi_connect(
 #ifdef CONFIG_ENABLE_EAP
 		if(get_eap_phase()){
 			if(rtw_down_timeout_sema( &join_result->join_sema, 60000 ) == RTW_FALSE) {
+				join_user_data = NULL;
 				RTW_API_INFO("RTW API: Join bss timeout\r\n");
 				if(password_len) {
 					rtw_free(join_result->network_info.password);
@@ -780,7 +833,8 @@ int wifi_connect(
 				result = RTW_TIMEOUT;
 				goto error;
 			} else {
-				if(wifi_is_connected_to_ap( ) != RTW_SUCCESS) {
+				join_user_data = NULL;
+				if((rtw_join_status & JOIN_NO_NETWORKS) || wifi_is_connected_to_ap( ) != RTW_SUCCESS) {
 					result = RTW_ERROR;
 					goto error;
 				}
@@ -789,6 +843,7 @@ int wifi_connect(
 		else
 #endif
 		if(rtw_down_timeout_sema( &join_result->join_sema, RTW_JOIN_TIMEOUT ) == RTW_FALSE) {
+			join_user_data = NULL;
 			RTW_API_INFO("RTW API: Join bss timeout\r\n");
 			if(password_len) {
 				rtw_free(join_result->network_info.password);
@@ -796,10 +851,11 @@ int wifi_connect(
 			result = RTW_TIMEOUT;
 			goto error;
 		} else {
+			join_user_data = NULL;
 			if(join_result->network_info.password_len) {
 				rtw_free(join_result->network_info.password);
 			}
-			if(wifi_is_connected_to_ap( ) != RTW_SUCCESS) {
+			if((rtw_join_status & JOIN_NO_NETWORKS) || wifi_is_connected_to_ap( ) != RTW_SUCCESS) {
 				result = RTW_ERROR;
 				goto error;
 			}
@@ -824,14 +880,13 @@ int wifi_connect(
 #endif
 
 error:
+	/* Detach before freeing memory reachable from internal event handling. */
+	join_user_data = NULL;
 	if(semaphore == NULL){		
 		rtw_free_sema( &join_semaphore);
 	}
-	join_user_data = NULL;
 	rtw_free((u8*)join_result);
-	wifi_unreg_event_handler(WIFI_EVENT_CONNECT, wifi_connected_hdl);
-	wifi_unreg_event_handler(WIFI_EVENT_NO_NETWORK,wifi_no_network_hdl);
-	wifi_unreg_event_handler(WIFI_EVENT_FOURWAY_HANDSHAKE_DONE, wifi_handshake_done_hdl);
+	/* Internal STA handlers remain available after this join completes. */
 	rtw_join_status &= ~JOIN_CONNECTING;
 	return result;
 }
@@ -961,10 +1016,7 @@ int wifi_connect_bssid(
 	} else {
 		join_result->join_sema = semaphore;
 	}
-	wifi_reg_event_handler(WIFI_EVENT_NO_NETWORK,wifi_no_network_hdl,NULL);
-	wifi_reg_event_handler(WIFI_EVENT_CONNECT, wifi_connected_hdl, NULL);
-	wifi_reg_event_handler(WIFI_EVENT_DISCONNECT, wifi_disconn_hdl, NULL);
-	wifi_reg_event_handler(WIFI_EVENT_FOURWAY_HANDSHAKE_DONE, wifi_handshake_done_hdl, NULL);
+	/* STA events are handled internally before public callbacks. */
 
 	wifi_connect_bssid_local(&join_result->network_info);
 
@@ -972,6 +1024,7 @@ int wifi_connect_bssid(
 
 	if(semaphore == NULL) {
 		if(rtw_down_timeout_sema( &join_result->join_sema, RTW_JOIN_TIMEOUT ) == RTW_FALSE) {
+			join_user_data = NULL;
 			RTW_API_INFO("RTW API: Join bss timeout\r\n");
 			if(password_len) {
 				rtw_free(join_result->network_info.password);
@@ -981,12 +1034,13 @@ int wifi_connect_bssid(
 			result = RTW_TIMEOUT;
 			goto error;
 		} else {
+			join_user_data = NULL;
 			rtw_free_sema( &join_semaphore );
 			if(join_result->network_info.password_len) {
 				rtw_free(join_result->network_info.password);
 			}
 			rtw_free((u8*)join_result);
-			if( wifi_is_connected_to_ap( ) != RTW_SUCCESS) {
+			if((rtw_join_status & JOIN_NO_NETWORKS) || wifi_is_connected_to_ap( ) != RTW_SUCCESS) {
 				result = RTW_ERROR;
 				goto error;
 			}
@@ -1014,9 +1068,7 @@ int wifi_connect_bssid(
 
 error:
 	join_user_data = NULL;
-	wifi_unreg_event_handler(WIFI_EVENT_CONNECT, wifi_connected_hdl);
-	wifi_unreg_event_handler(WIFI_EVENT_NO_NETWORK,wifi_no_network_hdl);
-	wifi_unreg_event_handler(WIFI_EVENT_FOURWAY_HANDSHAKE_DONE, wifi_handshake_done_hdl);
+	/* Internal STA handlers remain available after this join completes. */
 	rtw_join_status &= ~JOIN_CONNECTING;
 	return result;
 }
@@ -1445,6 +1497,12 @@ int wifi_on(rtw_mode_t mode)
 	inic_start();
 #endif
 
+#if CONFIG_CARBOX_ACTION_OTA
+	if (ret == 0 && timeout > 0) {
+		extern void carbox_wifi_action_ota_init(void);
+		carbox_wifi_action_ota_init();
+	}
+#endif
 	return ret;
 }
 
