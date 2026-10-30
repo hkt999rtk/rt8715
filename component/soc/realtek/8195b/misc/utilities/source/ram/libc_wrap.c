@@ -319,14 +319,26 @@ SemaphoreHandle_t printf_lock_handle(void)
 	return printf_mutex;
 }
 
-/*
- * ISR-safe printf lock:
- * - Task context: use mutex (if initialised) or critical section (fallback).
- * - ISR context:  skip locking — the underlying UART putc path is
- *   single-byte and the worst case is interleaved characters, which is
- *   acceptable compared to a hard fault / assertion.
- */
-static inline void printf_lock(void)
+typedef enum {
+	PRINTF_GUARD_NONE,
+	PRINTF_GUARD_CRITICAL,
+	PRINTF_GUARD_MUTEX
+} printf_lock_guard_t;
+
+static inline uint32_t printf_irq_mask(void)
+{
+	uint32_t primask, basepri, faultmask;
+	__asm volatile("mrs %0, primask" : "=r" (primask));
+	__asm volatile("mrs %0, basepri" : "=r" (basepri));
+	__asm volatile("mrs %0, faultmask" : "=r" (faultmask));
+	return primask | basepri | faultmask;
+}
+
+/* Only a schedulable task can wait for another logger. ISR, critical-section
+ * and suspended-scheduler output may interleave, but must never wait for a
+ * mutex owner that cannot run. Keep the acquired mode for the matching unlock.
+ * This also preserves the existing pre-initialization critical-section path. */
+static inline printf_lock_guard_t printf_lock(void)
 {
 	/* Read ICSR VECTACTIVE to detect ISR context (same method as
 	 * vPortEnterCritical in port.c). */
@@ -334,31 +346,30 @@ static inline void printf_lock(void)
 
 	/* ISR context — return immediately, no locking support here. */
 	if (vectactive != 0) {
-		return;
+		return PRINTF_GUARD_NONE;
 	}
 
 	if (printf_mutex != NULL) {
-		xSemaphoreTake(printf_mutex, portMAX_DELAY);
+		if (printf_irq_mask() != 0U ||
+		    xTaskGetSchedulerState() != taskSCHEDULER_RUNNING)
+			return PRINTF_GUARD_NONE;
+		if (xSemaphoreTake(printf_mutex, portMAX_DELAY) == pdPASS)
+			return PRINTF_GUARD_MUTEX;
+		return PRINTF_GUARD_NONE;
 	} else {
 		/* mutex not initialised yet (early boot / pre-scheduler) —
 		 * fall back to critical section for compatibility.
 		 * Safe because ISR path already returned above. */
 		taskENTER_CRITICAL();
+		return PRINTF_GUARD_CRITICAL;
 	}
 }
 
-static inline void printf_unlock(void)
+static inline void printf_unlock(printf_lock_guard_t guard)
 {
-	uint32_t vectactive = (*(volatile uint32_t *)0xE000ED04) & 0x1FFU;
-
-	/* ISR context — printf_lock returned early, nothing to unlock. */
-	if (vectactive != 0) {
-		return;
-	}
-
-	if (printf_mutex != NULL) {
+	if (guard == PRINTF_GUARD_MUTEX) {
 		xSemaphoreGive(printf_mutex);
-	} else {
+	} else if (guard == PRINTF_GUARD_CRITICAL) {
 		taskEXIT_CRITICAL();
 	}
 }
@@ -394,7 +405,7 @@ int __wrap_printf(const char * fmt,...)
 	int count;
 	va_list list;
 
-	printf_lock();
+	printf_lock_guard_t guard = printf_lock();
 
 	va_start(list, fmt);	
 #if defined(CONFIG_BUILD_SECURE)	
@@ -404,7 +415,7 @@ int __wrap_printf(const char * fmt,...)
 #endif
 	va_end(list);
 
-	printf_unlock();
+	printf_unlock(guard);
 
 	return count;
 }
@@ -413,7 +424,7 @@ int __wrap_vprintf(const char *fmt, va_list args)
 {
 	int count;
 
-	printf_lock();
+	printf_lock_guard_t guard = printf_lock();
 
 #if defined(CONFIG_BUILD_SECURE)     
 	count = stdio_printf_stubs.printf_corel(_sputc_cr, (void*)NULL, fmt, args);
@@ -421,7 +432,7 @@ int __wrap_vprintf(const char *fmt, va_list args)
 	count = stdio_printf_stubs.printf_core(_sputc_cr, (void*)NULL, fmt, args);
 #endif
 
-	printf_unlock();
+	printf_unlock(guard);
 
 	return count;	
 }
@@ -1203,11 +1214,11 @@ long int __wrap_ftell(FILE *stream) { return carbox_littlefs_tell(carbox_lfs_str
 int __wrap_fputc ( int character, FILE * stream )
 {
 	if(stream == stdout || stream == stderr){
-		printf_lock();
+		printf_lock_guard_t guard = printf_lock();
 		stdio_port_putc(character);
 		if(character=='\n')
 			stdio_port_putc('\r');
-		printf_unlock();
+		printf_unlock(guard);
 		return character;
 	}
 	

@@ -982,6 +982,15 @@ WLAN_RX_RING_SWAP ?= 0
 # Source-recovered rtl8195b_recv.o uses ordinary skb-backed DMA buffers.
 # This is independent of the retired rtw_memcpy/kfree symbol-hook path.
 WLAN_RX_DMA_SKB ?= 1
+# Opt-in pool diagnostics; the A-MSDU ownership repair is always in the derived archive.
+RX_HANDOVER_DIAG ?= 0
+GCCFLAGS += -DCONFIG_RX_HANDOVER_DIAG=$(RX_HANDOVER_DIAG)
+RX_HANDOVER_DIAG_STAMP := $(OBJ_DIR)/.rx_handover_diag_$(RX_HANDOVER_DIAG)
+$(RX_HANDOVER_DIAG_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.rx_handover_diag_*
+	@touch $@
+../src/carbox/wlan_recvframe_diag.o: $(RX_HANDOVER_DIAG_STAMP)
 ifeq ($(WLAN_RX_DMA_SKB),1)
 SRC_C += ../src/carbox/wlan_recvframe_diag.c
 endif
@@ -1242,14 +1251,23 @@ AUDIO_DECODE_PROFILE_WINDOW_MS ?= 10000
 AUDIO_DECODE_PROFILE_SLOW_US ?= 10000
 # Label navigation-tone status 20/21 and compare MainAltAudio RTP sequence
 # at UDP input (before lwIP validation) and at SocketRecvFrom.
-AUDIO_STREAM_DIAG ?= 1
+AUDIO_STREAM_DIAG ?= 0
+AUDIO_STREAM_DIAG_STAMP := $(OBJ_DIR)/.audio_stream_diag_$(AUDIO_STREAM_DIAG)
+$(AUDIO_STREAM_DIAG_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.audio_stream_diag_*
+	@touch $@
+../src/carbox/audio_stream_diag.o ../src/carbox/aac_decoder_router.o \
+	../src/carbox/touch_path_profiler.o \
+	../../../component/common/network/lwip/lwip_v2.1.2/port/realtek/freertos/ethernetif.o: \
+	$(AUDIO_STREAM_DIAG_STAMP)
 ifeq ($(AUDIO_STREAM_DIAG),1)
 SRC_C += ../src/carbox/audio_stream_diag.c
 endif
 # Only decoder calls are routed; all AAC encoder symbols remain on FDK.
 # 0: FDK only. 1: Helix for supported raw AAC-LC, automatic FDK fallback.
 AAC_DECODER_MODE ?= 1
-AAC_ELD_DIAG ?= 1
+AAC_ELD_DIAG ?= 0
 AAC_DECODER_ROUTE_PROFILE ?= 0
 AAC_DECODER_ROUTE_PROFILE_WINDOW_MS ?= 10000
 AAC_DECODER_MODE_STAMP := $(OBJ_DIR)/.aac_decoder_mode_$(AAC_DECODER_MODE)-profile$(AAC_DECODER_ROUTE_PROFILE)-eld$(AAC_ELD_DIAG)
@@ -1985,7 +2003,10 @@ CPPFLAGS += -Wall -Wpointer-arith -Wundef -Wno-write-strings -Wno-maybe-uninitia
 
 LFLAGS = 
 ifeq ($(WLAN_RX_DMA_SKB),1)
+AMSDU_CHILD_VERIFY := python3 ../../../component/common/drivers/wlan/realtek/wlan_rx_gdma/src/verify_amsdu_child_adapter.py --prefix $(CROSS_COMPILE)
+ifeq ($(RX_HANDOVER_DIAG),1)
 LFLAGS += -Wl,--wrap=rtw_queue_empty
+endif
 endif
 ifeq ($(AUDIO_STREAM_DIAG),1)
 LFLAGS += -Wl,--wrap=CAccessory_StatusNotify -Wl,--wrap=SocketRecvFrom \
@@ -2794,6 +2815,9 @@ application: prerequirement $(SRC_O) $(ERAM_O) $(SRAM_O) $(CINIT_O) $(ASM_O) $(I
 	done
 	@echo "  LD   linking..."
 	@$(LD) $(LFLAGS) -o $(BIN_DIR)/$(TARGET).axf  $(OBJ_LIST) $(ROMIMG) $(LIBFLAGS) -T$(LDSCRIPT)
+ifneq ($(AMSDU_CHILD_VERIFY),)
+	@$(AMSDU_CHILD_VERIFY) --archive $(WLAN_RX_HOOK_ARCHIVE) --elf $(BIN_DIR)/$(TARGET).axf
+endif
 	@for sym in $(CLOCK_CRITICAL_SYMBOLS); do \
 		addr=$$($(NM) -an $(BIN_DIR)/$(TARGET).axf | awk -v s=$$sym '$$3 == s { print $$1; exit }'); \
 		case "$$addr" in \

@@ -27,6 +27,10 @@ DMA_MANAGER_SOURCE := $(RECOVERED_DIR)/wlan_rx_dma_mgr.c
 DMA_MANAGER_HEADER := $(RECOVERED_DIR)/wlan_rx_dma_mgr.h
 AMSDU_ALLOC_PATCH := $(RECOVERED_DIR)/patch_amsdu_alloc_failure.py
 RECVFRAME_POOL_PATCH := $(RECOVERED_DIR)/patch_recvframe_pool.py
+AMSDU_CHILD_PATCH := $(RECOVERED_DIR)/patch_amsdu_child_adapter.py
+AMSDU_CHILD_VERIFY := $(RECOVERED_DIR)/verify_amsdu_child_adapter.py
+AMSDU_CHILD_SOURCE := $(RECOVERED_DIR)/wlan_amsdu_child_init.S
+AMSDU_CHILD_OBJECT := $(BUILD_DIR)/wlan_amsdu_child_init.o
 RECOVERED_RX_OBJECT := $(BUILD_DIR)/rtl8195b_recv.o
 COPY_PARITY_RX_OBJECT := $(BUILD_DIR)/copy_parity/rtl8195b_recv.o
 RECOVERED_SKBUFF_OBJECT := $(BUILD_DIR)/freertos_skbuff.o
@@ -63,6 +67,7 @@ OBJECT_DEPS := $(RECOVERED_RX_OBJECT:.o=.d) \
 	$(RECOVERED_SKBUFF_OBJECT:.o=.d) \
 	$(VENDOR_PARITY_SKBUFF_OBJECT:.o=.d) \
 	$(DMA_MANAGER_OBJECT:.o=.d)
+OBJECT_DEPS += $(AMSDU_CHILD_OBJECT:.o=.d)
 
 CFLAGS := -march=armv8-m.main+dsp -mthumb -mcmse -mfloat-abi=softfp
 CFLAGS += -mfpu=fpv5-sp-d16 -Os -c -ffunction-sections -fdata-sections
@@ -110,6 +115,10 @@ $(BUILD_DIR):
 $(RECOVERED_RX_OBJECT): $(RECOVERED_RX_SOURCE) $(DMA_MANAGER_HEADER) | $(BUILD_DIR)
 	@echo "  CC    recovered rtl8195b_recv.c"
 	@$(CC) $(CFLAGS) $(RX_EXTRA_CFLAGS) $< -o $@
+
+$(AMSDU_CHILD_OBJECT): $(AMSDU_CHILD_SOURCE) | $(BUILD_DIR)
+	@echo "  AS    A-MSDU child adapter bridge"
+	@$(CC) $(CFLAGS) $< -o $@
 
 $(COPY_PARITY_RX_OBJECT): $(RECOVERED_RX_SOURCE) $(DMA_MANAGER_HEADER) | $(BUILD_DIR)
 	@echo "  CC    recovered rtl8195b_recv.c (vendor-copy parity)"
@@ -173,8 +182,8 @@ $(DMA_MANAGER_OBJECT): $(DMA_MANAGER_SOURCE) $(DMA_MANAGER_HEADER) \
 # A-MSDU allocation-failure exit, replace the two source-recovered members,
 # and append the source-built DMA manager. Preserve vendor member order.
 $(ARCHIVE_STAGE_STAMP): $(ORIGINAL_ARCHIVE) $(RECOVERED_RX_OBJECT) \
-		$(RECOVERED_SKBUFF_OBJECT) $(DMA_MANAGER_OBJECT) \
-		$(AMSDU_ALLOC_PATCH) $(RECVFRAME_POOL_PATCH) Makefile | $(BUILD_DIR)
+		$(RECOVERED_SKBUFF_OBJECT) $(DMA_MANAGER_OBJECT) $(AMSDU_CHILD_OBJECT) \
+		$(AMSDU_ALLOC_PATCH) $(RECVFRAME_POOL_PATCH) $(AMSDU_CHILD_PATCH) Makefile | $(BUILD_DIR)
 	@echo "  EXTRACT vendor lib_wlan.a -> $(ARCHIVE_STAGE_DIR)"
 	@$(RM) -r $(ARCHIVE_STAGE_DIR)
 	@mkdir -p $(ARCHIVE_STAGE_DIR)
@@ -187,11 +196,14 @@ $(ARCHIVE_STAGE_STAMP): $(ORIGINAL_ARCHIVE) $(RECOVERED_RX_OBJECT) \
 	@cd $(ARCHIVE_STAGE_DIR) && $(AR) x $(abspath $(ORIGINAL_ARCHIVE))
 	@python3 $(AMSDU_ALLOC_PATCH) $(ARCHIVE_STAGE_DIR)/rtw_recv.o
 	@python3 $(RECVFRAME_POOL_PATCH) $(ARCHIVE_STAGE_DIR)/rtw_recv.o
+	@python3 $(AMSDU_CHILD_PATCH) $(ARCHIVE_STAGE_DIR)/rtw_recv.o
 	@cp $(RECOVERED_RX_OBJECT) $(ARCHIVE_STAGE_DIR)/rtl8195b_recv.o
 	@cp $(RECOVERED_SKBUFF_OBJECT) $(ARCHIVE_STAGE_DIR)/freertos_skbuff.o
 	@cp $(DMA_MANAGER_OBJECT) $(ARCHIVE_STAGE_DIR)/wlan_rx_dma_mgr.o
+	@cp $(AMSDU_CHILD_OBJECT) $(ARCHIVE_STAGE_DIR)/wlan_amsdu_child_init.o
 	@cp $(VENDOR_MEMBER_LIST) $(MIXED_MEMBER_LIST)
 	@echo wlan_rx_dma_mgr.o >> $(MIXED_MEMBER_LIST)
+	@echo wlan_amsdu_child_init.o >> $(MIXED_MEMBER_LIST)
 	@touch $@
 
 $(ZERO_COPY_ARCHIVE): $(ARCHIVE_STAGE_STAMP) Makefile
@@ -230,11 +242,11 @@ $(DROPIN_ARCHIVE): verify
 verify: $(ZERO_COPY_ARCHIVE)
 	@$(AR) p $(ORIGINAL_ARCHIVE) rtl8195b_recv.o > $(VENDOR_RX_OBJECT)
 	@$(AR) p $(ORIGINAL_ARCHIVE) freertos_skbuff.o > $(VENDOR_SKBUFF_OBJECT)
-	@{ $(AR) t $(ORIGINAL_ARCHIVE); echo wlan_rx_dma_mgr.o; } | \
+	@{ $(AR) t $(ORIGINAL_ARCHIVE); echo wlan_rx_dma_mgr.o; echo wlan_amsdu_child_init.o; } | \
 		sort | uniq -c > $(EXPECTED_ARCHIVE_MEMBERS)
 	@$(AR) t $(ZERO_COPY_ARCHIVE) | sort | uniq -c > $(RECOVERED_ARCHIVE_MEMBERS)
 	@cmp -s $(EXPECTED_ARCHIVE_MEMBERS) $(RECOVERED_ARCHIVE_MEMBERS) || \
-		{ echo "ERROR: zero-copy archive member inventory differs from vendor plus DMA manager"; \
+		{ echo "ERROR: archive member inventory differs from vendor plus DMA manager and A-MSDU bridge"; \
 		  diff -u $(EXPECTED_ARCHIVE_MEMBERS) $(RECOVERED_ARCHIVE_MEMBERS); exit 1; }
 	@test "$$($(AR) p $(ZERO_COPY_ARCHIVE) rtl8195b_recv.o | sha256sum | cut -d' ' -f1)" = \
 		"$$(sha256sum $(RECOVERED_RX_OBJECT) | cut -d' ' -f1)" || \
@@ -245,6 +257,9 @@ verify: $(ZERO_COPY_ARCHIVE)
 	@test "$$($(AR) p $(ZERO_COPY_ARCHIVE) wlan_rx_dma_mgr.o | sha256sum | cut -d' ' -f1)" = \
 		"$$(sha256sum $(DMA_MANAGER_OBJECT) | cut -d' ' -f1)" || \
 		{ echo "ERROR: archived wlan_rx_dma_mgr.o differs from compiled DMA manager"; exit 1; }
+	@test "$$($(AR) p $(ZERO_COPY_ARCHIVE) wlan_amsdu_child_init.o | sha256sum | cut -d' ' -f1)" = \
+		"$$(sha256sum $(AMSDU_CHILD_OBJECT) | cut -d' ' -f1)" || \
+		{ echo "ERROR: archived A-MSDU bridge differs from compiled object"; exit 1; }
 	@$(NM) -g --defined-only -P $(VENDOR_RX_OBJECT) | \
 		cut -d' ' -f1,2 | sort -u > $(VENDOR_RX_GLOBALS)
 	@$(NM) -g --defined-only -P $(RECOVERED_RX_OBJECT) | \
@@ -291,7 +306,7 @@ verify: $(ZERO_COPY_ARCHIVE)
 		{ echo "ERROR: zero-copy archive lost vendor global symbols"; \
 		  comm -23 $(VENDOR_ARCHIVE_GLOBALS) $(RECOVERED_ARCHIVE_GLOBALS); exit 1; }
 	@test "$$(comm -13 $(VENDOR_ARCHIVE_GLOBALS) $(RECOVERED_ARCHIVE_GLOBALS) | tr '\n' ' ')" = \
-		"wlan_rx_dma_deinit wlan_rx_dma_get_stats wlan_rx_dma_invalidate_completed wlan_rx_dma_rotate " || \
+		"wlan_amsdu_child_init wlan_rx_dma_deinit wlan_rx_dma_get_stats wlan_rx_dma_invalidate_completed wlan_rx_dma_rotate " || \
 		{ echo "ERROR: unexpected zero-copy archive global-symbol additions"; \
 		  comm -13 $(VENDOR_ARCHIVE_GLOBALS) $(RECOVERED_ARCHIVE_GLOBALS); exit 1; }
 	@$(NM) -g -u -P $(ORIGINAL_ARCHIVE) 2>/dev/null | \
@@ -329,6 +344,7 @@ verify: $(ZERO_COPY_ARCHIVE)
 		{ echo "ERROR: DMA manager member missing or duplicated"; exit 1; }
 	@python3 $(AMSDU_ALLOC_PATCH) --check $(ARCHIVE_STAGE_DIR)/rtw_recv.o
 	@python3 $(RECVFRAME_POOL_PATCH) --check $(ARCHIVE_STAGE_DIR)/rtw_recv.o
+	@python3 $(AMSDU_CHILD_VERIFY) --prefix $(CROSS_COMPILE) --archive $(ZERO_COPY_ARCHIVE)
 	@test "$$($(AR) p $(ZERO_COPY_ARCHIVE) rtw_recv.o | sha256sum | cut -d' ' -f1)" = \
 		"$$(sha256sum $(ARCHIVE_STAGE_DIR)/rtw_recv.o | cut -d' ' -f1)" || \
 		{ echo "ERROR: archived rtw_recv.o differs from verified patch"; exit 1; }
@@ -349,6 +365,7 @@ clean:
 		$(COPY_PARITY_RX_OBJECT) \
 		$(RECOVERED_SKBUFF_OBJECT) $(VENDOR_PARITY_SKBUFF_OBJECT) \
 		$(DMA_MANAGER_OBJECT) \
+		$(AMSDU_CHILD_OBJECT) \
 		$(VENDOR_RX_OBJECT) $(VENDOR_SKBUFF_OBJECT) \
 		$(VENDOR_RX_GLOBALS) $(RECOVERED_RX_GLOBALS) \
 		$(VENDOR_SKBUFF_GLOBALS) $(RECOVERED_SKBUFF_GLOBALS) \

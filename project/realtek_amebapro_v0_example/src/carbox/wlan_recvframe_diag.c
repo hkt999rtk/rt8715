@@ -5,6 +5,13 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
+#ifndef CONFIG_RX_HANDOVER_DIAG
+#define CONFIG_RX_HANDOVER_DIAG 0
+#endif
+
+extern void printf_lock_init(void);
+
+#if CONFIG_RX_HANDOVER_DIAG
 #define WLAN_RECVFRAME_POOL_SIZE 32U
 #define WLAN_RECVFRAME_SLOTS 4U
 #define WLAN_RECVFRAME_REPORT_MS 2000U
@@ -115,12 +122,18 @@ int __wrap_rtw_queue_empty(void *queue)
 	return empty;
 }
 
+#endif /* CONFIG_RX_HANDOVER_DIAG */
+
 static void wlan_recvframe_diag_task(void *argument)
 {
+#if CONFIG_RX_HANDOVER_DIAG
 	uint32_t quiet_windows[WLAN_RECVFRAME_SLOTS] = { 0U };
 	uint8_t report_after_event[WLAN_RECVFRAME_SLOTS] = { 0U };
+#endif
 	(void)argument;
+	printf_lock_init();
 
+#if CONFIG_RX_HANDOVER_DIAG
 	for (;;) {
 		uint32_t i;
 		vTaskDelay(pdMS_TO_TICKS(WLAN_RECVFRAME_REPORT_MS));
@@ -185,6 +198,10 @@ static void wlan_recvframe_diag_task(void *argument)
 			       (unsigned long)count);
 		}
 	}
+#else
+	/* Keep UART serialization, then release this startup task and its stack. */
+	vTaskDelete(NULL);
+#endif
 }
 
 void carbox_wlan_recvframe_diag_start(void)
