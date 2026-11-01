@@ -43,6 +43,7 @@
 
 #include "lwip/timeouts.h"
 #include "lwip/priv/tcp_priv.h"
+#include "lwip/priv/tcp_recovery.h"
 
 #include "lwip/def.h"
 #include "lwip/memp.h"
@@ -137,6 +138,12 @@ sys_timeouts_get_next_timeout(void)
 #if LWIP_TCP
 /** global variable that shows if the tcp timer is currently scheduled or not */
 static int tcpip_tcp_timer_active;
+#if LWIP_TCP_RECOVERY
+static u32_t tcp_maintenance_ms;
+#define TCP_CHECK_INTERVAL TCP_RECOVERY_INTERVAL
+#else
+#define TCP_CHECK_INTERVAL TCP_TMR_INTERVAL
+#endif
 
 /**
  * Timer callback function that calls tcp_tmr() and reschedules itself.
@@ -148,12 +155,20 @@ tcpip_tcp_timer(void *arg)
 {
   LWIP_UNUSED_ARG(arg);
 
-  /* call TCP timer handler */
+  /* Keep maintenance at 250/500ms; only recovery deadlines run at 50ms. */
+#if LWIP_TCP_RECOVERY
+  if ((u32_t)(sys_now() - tcp_maintenance_ms) >= TCP_TMR_INTERVAL) {
+    tcp_maintenance_ms = sys_now();
+    tcp_tmr();
+  }
+  tcp_recovery_tmr();
+#else
   tcp_tmr();
+#endif
   /* timer still needed? */
   if (tcp_active_pcbs || tcp_tw_pcbs) {
     /* restart timer */
-    sys_timeout(TCP_TMR_INTERVAL, tcpip_tcp_timer, NULL);
+    sys_timeout(TCP_CHECK_INTERVAL, tcpip_tcp_timer, NULL);
   } else {
     /* disable timer */
     tcpip_tcp_timer_active = 0;
@@ -174,7 +189,10 @@ tcp_timer_needed(void)
   if (!tcpip_tcp_timer_active && (tcp_active_pcbs || tcp_tw_pcbs)) {
     /* enable and start timer */
     tcpip_tcp_timer_active = 1;
-    sys_timeout(TCP_TMR_INTERVAL, tcpip_tcp_timer, NULL);
+#if LWIP_TCP_RECOVERY
+    tcp_maintenance_ms = sys_now();
+#endif
+    sys_timeout(TCP_CHECK_INTERVAL, tcpip_tcp_timer, NULL);
   }
 }
 #endif /* LWIP_TCP */

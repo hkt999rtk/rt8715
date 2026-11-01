@@ -44,6 +44,13 @@
  */
 
 #include "lwip/opt.h"
+#if CONFIG_RX_HANDOVER_DIAG
+#include "rx_handover_diag.h"
+#else
+#define RXHD_INC(id) ((void)0)
+#define RXHD_ADD(id, n) ((void)0)
+#endif
+
 #include "lwip/def.h"
 #include "lwip/mem.h"
 #include "lwip/pbuf.h"
@@ -97,6 +104,11 @@
 
 
 struct netif eth_netif;
+
+#if defined(CONFIG_PLATFORM_8195BHP) && defined(CONFIG_AUDIO_STREAM_DIAG) && CONFIG_AUDIO_STREAM_DIAG
+extern int carbox_audio_diag_wlan_packet(const struct pbuf *p);
+extern void carbox_audio_diag_wlan_input_reject(int slot_index);
+#endif
 
 #if CONFIG_WLAN && CONFIG_WLAN_RX_ZERO_COPY && LWIP_SUPPORT_CUSTOM_PBUF
 
@@ -1306,6 +1318,7 @@ static volatile u32_t g_ncm_tx_coalesce_timer_available;
 static volatile u32_t g_ncm_tx_coalesce_timer_generation;
 static volatile u32_t g_ncm_tx_coalesce_timer_due_us;
 static volatile u32_t g_ncm_tx_usb_busy;
+static volatile u32_t g_ncm_tx_usb_start_us;
 static volatile u32_t g_ncm_tx_arrival_last_us;
 static volatile u32_t g_ncm_tx_arrival_gap_ewma_us;
 #endif
@@ -1421,6 +1434,8 @@ void rltk_ncm_tx_pipeline_report(u32 sequence)
 	u32_t ready_now;
 	u32_t free_now;
 	u32_t input_now;
+	u32_t usb_busy_now;
+	u32_t usb_busy_age_us;
 
 	taskENTER_CRITICAL();
 	stats = g_ncm_tx_pipeline_stats;
@@ -1436,10 +1451,14 @@ void rltk_ncm_tx_pipeline_report(u32 sequence)
 		(u32_t)uxQueueMessagesWaiting(g_ncm_tx_free_queue) : 0U;
 	input_now = g_ncm_tx_async_queue != NULL ?
 		(u32_t)uxQueueMessagesWaiting(g_ncm_tx_async_queue) : 0U;
+	usb_busy_now = g_ncm_tx_usb_busy;
+	usb_busy_age_us = usb_busy_now != 0U ?
+		hal_read_curtime_us() - g_ncm_tx_usb_start_us : 0U;
 	printf("[NCMTXPIPE][%u] slots=%u build ntb/frames/bytes=%u/%u/%u "
 	       "us avg/max=%u/%u usb complete/error=%u/%u us avg/max=%u/%u "
 	       "completion ready/underrun/idle=%u/%u/%u handoff_us avg/max=%u/%u "
-	       "depth input/ready/free/max_ready=%u/%u/%u/%u free_wait=%u\n",
+	       "depth input/ready/free/max_ready=%u/%u/%u/%u free_wait=%u "
+	       "usb_busy/age_us=%u/%u\n",
 	       (unsigned int)sequence, (unsigned int)NCM_TX_PIPELINE_SLOTS,
 	       (unsigned int)stats.built_ntbs,
 	       (unsigned int)stats.built_frames,
@@ -1460,7 +1479,9 @@ void rltk_ncm_tx_pipeline_report(u32 sequence)
 	       (unsigned int)stats.handoff_us_max,
 	       (unsigned int)input_now, (unsigned int)ready_now,
 	       (unsigned int)free_now, (unsigned int)stats.ready_depth_max,
-	       (unsigned int)stats.free_waits);
+	       (unsigned int)stats.free_waits,
+	       (unsigned int)usb_busy_now,
+	       (unsigned int)usb_busy_age_us);
 	printf("[NCMTXBATCH][%u] target/range/deadline avg/max/last="
 	       "%u/%u-%u/%u/%u/%uus "
 	       "arm/target/timeout/idle/no_timer=%u/%u/%u/%u/%u "
@@ -1633,6 +1654,7 @@ static void ncm_tx_usb_worker(void *arg)
 			if (handoff_us > g_ncm_tx_pipeline_stats.handoff_us_max)
 				g_ncm_tx_pipeline_stats.handoff_us_max = handoff_us;
 		}
+		g_ncm_tx_usb_start_us = start_us;
 		g_ncm_tx_usb_busy = 1U;
 #if CONFIG_CAR_ACK_TIMESTAMP
 		car_ack_timestamp_usb_begin(slot->ack_trace, slot->buffer);
@@ -1643,6 +1665,7 @@ static void ncm_tx_usb_worker(void *arg)
 		slot->ack_trace = 0U;
 #endif
 		g_ncm_tx_usb_busy = 0U;
+		g_ncm_tx_usb_start_us = 0U;
 		end_us = hal_read_curtime_us();
 		elapsed_us = end_us - start_us;
 		g_ncm_tx_pipeline_stats.usb_completions++;
@@ -2491,13 +2514,26 @@ void ethernetif_recv(struct netif *netif, int total_len)
 	struct pbuf *p, *q;
 	int sg_len = 0;
 	int idx = netif_get_idx(netif);
+#if defined(CONFIG_PLATFORM_8195BHP) && defined(CONFIG_AUDIO_STREAM_DIAG) && CONFIG_AUDIO_STREAM_DIAG
+	int audio_diag_slot;
+#endif
+
+	RXHD_INC(RXHD_WLAN_IN);
 
 #if CONFIG_WLAN && CONFIG_WLAN_RX_ZERO_COPY && LWIP_SUPPORT_CUSTOM_PBUF
 	wlan_rx_zc_report();
 	p = wlan_rx_zc_try(idx, total_len);
 	if (p != NULL) {
+		RXHD_INC(RXHD_ZC);
 		rltk_wlan_rx_callback_complete(idx);
+#if defined(CONFIG_PLATFORM_8195BHP) && defined(CONFIG_AUDIO_STREAM_DIAG) && CONFIG_AUDIO_STREAM_DIAG
+		audio_diag_slot = carbox_audio_diag_wlan_packet(p);
+#endif
 		if (ERR_OK != netif->input(p, netif)) {
+			RXHD_INC(RXHD_INPUT_REJECT);
+#if defined(CONFIG_PLATFORM_8195BHP) && defined(CONFIG_AUDIO_STREAM_DIAG) && CONFIG_AUDIO_STREAM_DIAG
+			carbox_audio_diag_wlan_input_reject(audio_diag_slot);
+#endif
 			pbuf_free(p);
 		}
 		return;
@@ -2507,6 +2543,7 @@ void ethernetif_recv(struct netif *netif, int total_len)
 	// Allocate buffer to store received packet
 	p = pbuf_alloc(PBUF_RAW, total_len, PBUF_POOL);
 	if (p == NULL) {
+		RXHD_INC(RXHD_PBUF_FAIL);
 		rltk_wlan_rx_callback_complete(idx);
 		return;
 	}
@@ -2517,6 +2554,7 @@ void ethernetif_recv(struct netif *netif, int total_len)
 		sg_list[sg_len++].len = q->len;
 	}
 	if (rltk_wlan_recv(idx, sg_list, sg_len) != 0) {
+		RXHD_INC(RXHD_COPY_FAIL);
 		/* A timed-out GDMA destination may contain only part of the frame. */
 		pbuf_free(p);
 		rltk_wlan_rx_callback_complete(idx);
@@ -2524,8 +2562,16 @@ void ethernetif_recv(struct netif *netif, int total_len)
 	}
 	rltk_wlan_rx_callback_complete(idx);
 
+	RXHD_INC(RXHD_COPY);
 	// Pass received packet to the interface
+#if defined(CONFIG_PLATFORM_8195BHP) && defined(CONFIG_AUDIO_STREAM_DIAG) && CONFIG_AUDIO_STREAM_DIAG
+	audio_diag_slot = carbox_audio_diag_wlan_packet(p);
+#endif
 	if (ERR_OK != netif->input(p, netif)) {
+		RXHD_INC(RXHD_INPUT_REJECT);
+#if defined(CONFIG_PLATFORM_8195BHP) && defined(CONFIG_AUDIO_STREAM_DIAG) && CONFIG_AUDIO_STREAM_DIAG
+		carbox_audio_diag_wlan_input_reject(audio_diag_slot);
+#endif
 		pbuf_free(p);
 	}
 }
@@ -2537,3 +2583,18 @@ void lwip_PRE_SLEEP_PROCESSING(void)
 void lwip_POST_SLEEP_PROCESSING(void)
 {
 }
+
+#if CONFIG_RX_HANDOVER_DIAG
+uint32_t carbox_rxhd_zc_outstanding(void)
+{
+#if CONFIG_WLAN && CONFIG_WLAN_RX_ZERO_COPY && LWIP_SUPPORT_CUSTOM_PBUF
+    uint32_t outstanding;
+    taskENTER_CRITICAL();
+    outstanding = g_wlan_rx_zc_stats.outstanding;
+    taskEXIT_CRITICAL();
+    return outstanding;
+#else
+    return 0U;
+#endif
+}
+#endif

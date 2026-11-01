@@ -65,6 +65,7 @@
 #if LWIP_TCP /* don't build if not configured for use in lwipopts.h */
 
 #include "lwip/priv/tcp_priv.h"
+#include "lwip/priv/tcp_recovery.h"
 #include "lwip/def.h"
 #include "lwip/mem.h"
 #include "lwip/memp.h"
@@ -1615,7 +1616,11 @@ tcp_output(struct tcp_pcb *pcb)
     TCP_OUTPUT_PROFILE_RETURN(ERR_OK, RLTK_TCP_OUTPUT_DEFERRED);
   }
 
+#if LWIP_TCP_RECOVERY
+  wnd = tcp_recovery_output_window(pcb);
+#else
   wnd = LWIP_MIN(pcb->snd_wnd, pcb->cwnd);
+#endif
 
   seg = pcb->unsent;
 #if defined(CONFIG_PLATFORM_8195BHP) && CONFIG_TCP_OUTPUT_PROFILE
@@ -1718,6 +1723,9 @@ tcp_output(struct tcp_pcb *pcb)
 
     err = tcp_output_segment(seg, pcb, netif);
     if (err != ERR_OK) {
+#if LWIP_TCP_RECOVERY
+      tcp_recovery_output_error(pcb);
+#endif
       /* segment could not be sent, for whatever reason */
       tcp_set_flags(pcb, TF_NAGLEMEMERR);
       TCP_OUTPUT_PROFILE_RETURN(err, RLTK_TCP_OUTPUT_ERROR);
@@ -1729,6 +1737,9 @@ tcp_output(struct tcp_pcb *pcb)
 #if TCP_OVERSIZE_DBGCHECK
     seg->oversize_left = 0;
 #endif /* TCP_OVERSIZE_DBGCHECK */
+#if LWIP_TCP_RECOVERY
+    tcp_recovery_sent(pcb, seg);
+#endif
     pcb->unsent = seg->next;
     if (pcb->state != SYN_SENT) {
       tcp_clear_flags(pcb, TF_ACK_DELAY | TF_ACK_NOW);
@@ -1769,6 +1780,9 @@ tcp_output(struct tcp_pcb *pcb)
       tcp_seg_free(seg);
     }
     seg = pcb->unsent;
+#if LWIP_TCP_RECOVERY
+    wnd = tcp_recovery_output_window(pcb);
+#endif
   }
 #if TCP_OVERSIZE
   if (pcb->unsent == NULL) {
@@ -1849,7 +1863,12 @@ tcp_output_segment(struct tcp_seg *seg, struct tcp_pcb *pcb, struct netif *netif
     /* This should not happen: rexmit functions should have checked this.
        However, since this function modifies p->len, we must not continue in this case. */
     LWIP_DEBUGF(TCP_RTO_DEBUG | LWIP_DBG_LEVEL_SERIOUS, ("tcp_output_segment: segment busy\n"));
+#if LWIP_TCP_RECOVERY
+    tcp_recovery_busy(pcb);
+    return ERR_MEM; /* keep on unsent: no transmission took place */
+#else
     return ERR_OK;
+#endif
   }
 
   /* The TCP header has already been constructed, but the ackno and
@@ -1913,14 +1932,19 @@ tcp_output_segment(struct tcp_seg *seg, struct tcp_pcb *pcb, struct netif *netif
      This must be set before checking the route. */
   if (pcb->rtime < 0) {
     pcb->rtime = 0;
+#if LWIP_TCP_RECOVERY
+    pcb->recovery.timer_started_ms = sys_now();
+#endif
   }
 
+#if !LWIP_TCP_RECOVERY
   if (pcb->rttest == 0) {
     pcb->rttest = tcp_ticks;
     pcb->rtseq = lwip_ntohl(seg->tcphdr->seqno);
 
     LWIP_DEBUGF(TCP_RTO_DEBUG, ("tcp_output_segment: rtseq %"U32_F"\n", pcb->rtseq));
   }
+#endif /* !LWIP_TCP_RECOVERY */
   LWIP_DEBUGF(TCP_OUTPUT_DEBUG, ("tcp_output_segment: %"U32_F":%"U32_F"\n",
                                  lwip_htonl(seg->tcphdr->seqno), lwip_htonl(seg->tcphdr->seqno) +
                                  seg->len));
@@ -2067,6 +2091,9 @@ tcp_rexmit_rto_prepare(struct tcp_pcb *pcb)
   pcb->rto_end = lwip_ntohl(seg->tcphdr->seqno) + TCP_TCPLEN(seg);
   /* Don't take any RTT measurements after retransmitting. */
   pcb->rttest = 0;
+#if LWIP_TCP_RECOVERY
+  tcp_recovery_retransmitted(pcb);
+#endif
 
   return ERR_OK;
 }
@@ -2161,6 +2188,9 @@ tcp_rexmit(struct tcp_pcb *pcb)
 
   /* Don't take any rtt measurements after retransmitting. */
   pcb->rttest = 0;
+#if LWIP_TCP_RECOVERY
+  tcp_recovery_retransmitted(pcb);
+#endif
 
   /* Do the actual retransmission. */
   MIB2_STATS_INC(mib2.tcpretranssegs);
@@ -2180,6 +2210,9 @@ tcp_rexmit_fast(struct tcp_pcb *pcb)
 {
   LWIP_ASSERT("tcp_rexmit_fast: invalid pcb", pcb != NULL);
 
+#if LWIP_TCP_RECOVERY
+  tcp_recovery_fast(pcb);
+#else
   if (pcb->unacked != NULL && !(pcb->flags & TF_INFR)) {
     /* This is fast retransmit. Retransmit the first unacked segment. */
     LWIP_DEBUGF(TCP_FR_DEBUG,
@@ -2208,6 +2241,7 @@ tcp_rexmit_fast(struct tcp_pcb *pcb)
       pcb->rtime = 0;
     }
   }
+#endif
 }
 
 static struct pbuf *

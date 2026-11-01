@@ -1,26 +1,28 @@
 /* Observe each vendor RX frame pool without printing in the RX critical section. */
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "FreeRTOS.h"
 #include "task.h"
-
-#ifndef CONFIG_RX_HANDOVER_DIAG
-#define CONFIG_RX_HANDOVER_DIAG 0
-#endif
+#include "rx_handover_diag.h"
 
 extern void printf_lock_init(void);
+#define WLAN_RECVFRAME_REPORT_MS 2000U
+
+#if CONFIG_AUDIO_STREAM_DIAG
+extern void carbox_audio_pcm_tx_report(void);
+#endif
 
 #if CONFIG_RX_HANDOVER_DIAG
 #define WLAN_RECVFRAME_POOL_SIZE 32U
 #define WLAN_RECVFRAME_SLOTS 4U
-#define WLAN_RECVFRAME_REPORT_MS 2000U
 
 extern int __real_rtw_queue_empty(void *queue);
 extern void *_rtw_alloc_recvframe(void *queue);
-
 typedef struct {
 	void *queue;
+	uint32_t epoch;
 	uint32_t checks;
 	uint32_t empty;
 	uint32_t total_empty;
@@ -32,9 +34,11 @@ typedef struct {
 	uint32_t invalid_count;
 	uint32_t rx_drop;
 	uint32_t skb_drop;
+	uint32_t reorder_runs;
 	uint32_t counter_resets;
 	uint16_t rx_counter;
 	uint16_t skb_counter;
+	uint16_t reorder_counter;
 	uint8_t counter_valid;
 } recvframe_stats_t;
 
@@ -60,38 +64,54 @@ int __wrap_rtw_queue_empty(void *queue)
 	volatile recvframe_stats_t *stats = NULL;
 	uint32_t i;
 	uint32_t free_count;
-	uint16_t rx_counter, skb_counter;
+	uint32_t epoch;
+	uint16_t rx_counter, skb_counter, reorder_counter;
 
 	/* Verified vendor object: this call returns at _rtw_alloc_recvframe+0x08.
-	 * The queue is at adapter+0xc44; free count is queue+0x2c. The recovered
+	 * Only a registered free queue is at adapter+0xc44; this same allocator
+	 * also dequeues pending decrypt frames. Never read pool fields from that
+	 * second queue. Free count is queue+0x2c. The recovered
 	 * tasklet increments adapter+0xca0 when it drops a packet for lack of a
 	 * recvframe, or adapter+0xca2 when its skb allocation fails. The latter
 	 * counters are sampled on the next allocation attempt, so their report
 	 * may lag the actual failure by one RX packet.
+	 * rtw_reordering_ctrl_timeout_handler increments adapter+0xca6 after
+	 * acquiring its reorder lock, before flushing. This counts starts, not
+	 * completed callbacks; compare it with RX_TIMERQ's callback age/progress.
 	 */
 	if (caller != alloc + 0x08U)
 		return empty;
+	taskENTER_CRITICAL();
+	epoch = carbox_recvframe_trace_epoch(queue);
+	if (epoch == 0U) {
+		taskEXIT_CRITICAL();
+		return empty;
+	}
 	for (i = 0U; i < WLAN_RECVFRAME_SLOTS; ++i) {
 		if (recvframe_stats[i].queue == queue) {
 			stats = &recvframe_stats[i];
 			break;
 		}
-		if (stats == NULL && recvframe_stats[i].queue == NULL)
+		if (stats == NULL && carbox_recvframe_trace_epoch(recvframe_stats[i].queue) == 0U)
 			stats = &recvframe_stats[i];
 	}
 	if (i == WLAN_RECVFRAME_SLOTS &&
-	    (stats == NULL || stats->queue != NULL)) {
+	    (stats == NULL || carbox_recvframe_trace_epoch(stats->queue) != 0U)) {
 		untracked_checks++;
+		taskEXIT_CRITICAL();
 		return empty;
 	}
-	if (stats->queue == NULL) {
+	if (stats->queue != queue || stats->epoch != epoch) {
+		memset((void *)stats, 0, sizeof(*stats));
 		stats->queue = queue;
+		stats->epoch = epoch;
 		stats->free_min = WLAN_RECVFRAME_POOL_SIZE;
 	}
 
 	free_count = *(volatile uint32_t *)((uintptr_t)queue + 0x2cU);
 	rx_counter = *(volatile uint16_t *)((uintptr_t)queue + 0x5cU);
 	skb_counter = *(volatile uint16_t *)((uintptr_t)queue + 0x5eU);
+	reorder_counter = *(volatile uint16_t *)((uintptr_t)queue + 0x62U);
 	stats->checks++;
 	if (free_count <= WLAN_RECVFRAME_POOL_SIZE) {
 		stats->free_last = free_count;
@@ -115,10 +135,14 @@ int __wrap_rtw_queue_empty(void *queue)
 						 &stats->counter_resets);
 		stats->skb_drop += counter_delta(skb_counter, stats->skb_counter,
 						  &stats->counter_resets);
+		stats->reorder_runs += counter_delta(reorder_counter,
+			stats->reorder_counter, &stats->counter_resets);
 	}
 	stats->rx_counter = rx_counter;
 	stats->skb_counter = skb_counter;
+	stats->reorder_counter = reorder_counter;
 	stats->counter_valid = 1U;
+	taskEXIT_CRITICAL();
 	return empty;
 }
 
@@ -131,18 +155,28 @@ static void wlan_recvframe_diag_task(void *argument)
 	uint8_t report_after_event[WLAN_RECVFRAME_SLOTS] = { 0U };
 #endif
 	(void)argument;
+	/* One initialization site, in task context after scheduler startup. Without
+	 * this, the nonblocking RX reporter always sees a NULL mutex and skips. */
 	printf_lock_init();
 
-#if CONFIG_RX_HANDOVER_DIAG
+#if CONFIG_RX_HANDOVER_DIAG || CONFIG_AUDIO_STREAM_DIAG
 	for (;;) {
+#if CONFIG_RX_HANDOVER_DIAG
 		uint32_t i;
+#endif
 		vTaskDelay(pdMS_TO_TICKS(WLAN_RECVFRAME_REPORT_MS));
+#if CONFIG_AUDIO_STREAM_DIAG
+		carbox_audio_pcm_tx_report();
+#endif
+#if CONFIG_RX_HANDOVER_DIAG
+		carbox_rxhd_report();
+		carbox_recvframe_trace_report();
 		for (i = 0U; i < WLAN_RECVFRAME_SLOTS; ++i) {
 			volatile recvframe_stats_t *stats = &recvframe_stats[i];
 			void *queue;
 			uint32_t checks, empty, total_empty, recovered;
 			uint32_t empty_run_max, free_min, free_last, invalid_count;
-			uint32_t rx_drop, skb_drop, counter_resets;
+			uint32_t rx_drop, skb_drop, reorder_runs, counter_resets;
 			uint8_t event;
 
 			taskENTER_CRITICAL();
@@ -157,6 +191,7 @@ static void wlan_recvframe_diag_task(void *argument)
 			invalid_count = stats->invalid_count;
 			rx_drop = stats->rx_drop;
 			skb_drop = stats->skb_drop;
+			reorder_runs = stats->reorder_runs;
 			counter_resets = stats->counter_resets;
 			stats->checks = 0U;
 			stats->empty = 0U;
@@ -165,6 +200,7 @@ static void wlan_recvframe_diag_task(void *argument)
 			stats->invalid_count = 0U;
 			stats->rx_drop = 0U;
 			stats->skb_drop = 0U;
+			stats->reorder_runs = 0U;
 			stats->counter_resets = 0U;
 			stats->free_min = WLAN_RECVFRAME_POOL_SIZE;
 			taskEXIT_CRITICAL();
@@ -174,7 +210,7 @@ static void wlan_recvframe_diag_task(void *argument)
 			event = (empty != 0U || free_min <= 4U || rx_drop != 0U ||
 				 skb_drop != 0U || invalid_count != 0U);
 			if (event || report_after_event[i] || ++quiet_windows[i] >= 5U) {
-				printf("[WLAN_RECVFRAME] tick=%lu queue=%p 2s checks=%lu free_min=%lu free_last=%lu empty=%lu total=%lu empty_run_max=%lu recovered=%lu rx_drop=%lu skb_drop=%lu invalid=%lu counter_resets=%lu pool=32\n",
+				carbox_rxhd_log("[WLAN_RECVFRAME] tick=%lu queue=%p 2s checks=%lu free_min=%lu free_last=%lu empty=%lu total=%lu empty_run_max=%lu recovered=%lu rx_drop=%lu skb_drop=%lu reorder_runs=%lu invalid=%lu counter_resets=%lu pool=32\n",
 				       (unsigned long)xTaskGetTickCount(), queue,
 				       (unsigned long)checks, (unsigned long)free_min,
 				       (unsigned long)free_last, (unsigned long)empty,
@@ -182,6 +218,7 @@ static void wlan_recvframe_diag_task(void *argument)
 				       (unsigned long)empty_run_max,
 				       (unsigned long)recovered,
 				       (unsigned long)rx_drop, (unsigned long)skb_drop,
+				       (unsigned long)reorder_runs,
 				       (unsigned long)invalid_count,
 				       (unsigned long)counter_resets);
 				quiet_windows[i] = 0U;
@@ -194,9 +231,11 @@ static void wlan_recvframe_diag_task(void *argument)
 			count = untracked_checks;
 			untracked_checks = 0U;
 			taskEXIT_CRITICAL();
-			printf("[WLAN_RECVFRAME] untracked_queue_checks=%lu\n",
+			carbox_rxhd_log("[WLAN_RECVFRAME] tick=%lu untracked_queue_checks=%lu\n",
+			       (unsigned long)xTaskGetTickCount(),
 			       (unsigned long)count);
 		}
+#endif
 	}
 #else
 	/* Keep UART serialization, then release this startup task and its stack. */

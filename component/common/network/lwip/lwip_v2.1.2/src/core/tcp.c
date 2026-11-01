@@ -106,6 +106,7 @@
 #include "lwip/memp.h"
 #include "lwip/tcp.h"
 #include "lwip/priv/tcp_priv.h"
+#include "lwip/priv/tcp_recovery.h"
 #include "lwip/debug.h"
 #include "lwip/stats.h"
 #include "lwip/ip6.h"
@@ -1683,6 +1684,11 @@ tcp_slowtmr_start:
           }
         }
       } else {
+#if LWIP_TCP_RECOVERY
+        /* Established/closing connections use the 50ms deadline checker.
+         * Keep SYN, persist, keepalive and TIME_WAIT on the legacy cadence. */
+        if (!tcp_recovery_fine_timer(pcb)) {
+#endif
         /* Increase the retransmission timer if it is running */
         if ((pcb->rtime >= 0) && (pcb->rtime < 0x7FFF)) {
           ++pcb->rtime;
@@ -1740,6 +1746,9 @@ tcp_slowtmr_start:
 #endif
           }
         }
+#if LWIP_TCP_RECOVERY
+        }
+#endif
       }
     }
     /* Check if this PCB has stayed too long in FIN-WAIT-2 */
@@ -2339,6 +2348,9 @@ tcp_alloc(u8_t prio)
     #endif
     pcb->sv = 3000 / TCP_SLOW_INTERVAL;
     pcb->rtime = -1;
+#if LWIP_TCP_RECOVERY
+    pcb->recovery.rto_ms = 3000U;
+#endif
     pcb->cwnd = 10;
     pcb->tmr = tcp_ticks;
     pcb->last_timer = tcp_timer_ctr;

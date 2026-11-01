@@ -46,6 +46,7 @@
 #if LWIP_TCP /* don't build if not configured for use in lwipopts.h */
 
 #include "lwip/priv/tcp_priv.h"
+#include "lwip/priv/tcp_recovery.h"
 #include "lwip/def.h"
 #include "lwip/ip_addr.h"
 #include "lwip/netif.h"
@@ -379,6 +380,39 @@ lwip_diag_screen_tcp_ack_report(unsigned int sequence)
   if (primask == 0U) {
     __enable_irq();
   }
+#if LWIP_TCP_RECOVERY
+  {
+    struct tcp_recovery_stats r;
+    static u8_t configuration_reported;
+    tcp_recovery_snapshot(&r);
+    if (!configuration_reported) {
+      configuration_reported = 1;
+      rt_printf("[TCPREC][CONFIG] limited_transmit=1 newreno=1 rtt_clock=ms "
+                "check_ms=%u rto_min/max_ms=%u/%u initial_ms=3000 scope=all_tcp\r\n",
+                TCP_RECOVERY_INTERVAL, TCP_RECOVERY_RTO_MIN, TCP_RECOVERY_RTO_MAX);
+    }
+    if (r.lt_opportunities || r.fast || r.partial || r.full || r.busy || r.rto ||
+        r.output_error || r.rtt_samples) {
+      rt_printf("[TCPREC][%u] scope=all_tcp lt_opportunity/sent=%lu/%lu "
+                "fast/partial/full=%lu/%lu/%lu rto=%lu busy_retry=%lu output_error=%lu "
+                "recovery_max_ms=%lu deadline_late_max_ms=%lu\r\n",
+                sequence, (unsigned long)r.lt_opportunities, (unsigned long)r.lt_sent,
+                (unsigned long)r.fast, (unsigned long)r.partial, (unsigned long)r.full,
+                (unsigned long)r.rto, (unsigned long)r.busy, (unsigned long)r.output_error,
+                (unsigned long)r.recovery_max_ms, (unsigned long)r.deadline_late_max_ms);
+      rt_printf("[TCPREC][%u] rtt_samples/avg/max_ms=%lu/%lu/%lu "
+                "srtt/rto_ms=%lu/%lu last_event/kind_ms=%u/%lu last_local/remote=%u/%u seq/ack=%lu/%lu cwnd/flight=%lu/%lu event_rto_ms=%lu\r\n",
+                sequence, (unsigned long)r.rtt_samples,
+                (unsigned long)(r.rtt_samples ? r.rtt_sum_ms / r.rtt_samples : 0U),
+                (unsigned long)r.rtt_max_ms, (unsigned long)r.srtt_current_ms,
+                (unsigned long)r.rto_current_ms, r.last_event, (unsigned long)r.last_event_ms,
+                r.local_port, r.remote_port,
+                (unsigned long)r.last_seq, (unsigned long)r.last_ack,
+                (unsigned long)r.last_cwnd, (unsigned long)r.last_flight,
+                (unsigned long)r.last_rto_ms);
+    }
+  }
+#endif
   if (s.ack_packets == 0U) {
     return;
   }
@@ -1862,7 +1896,9 @@ tcp_free_acked_segments(struct tcp_pcb *pcb, struct tcp_seg *seg_list, const cha
 static void
 tcp_receive(struct tcp_pcb *pcb)
 {
+  #if !LWIP_TCP_RECOVERY
   s16_t m;
+  #endif
   u32_t right_wnd_edge;
   int found_dupack = 0;
 #if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
@@ -1939,7 +1975,16 @@ tcp_receive(struct tcp_pcb *pcb)
               if ((u8_t)(pcb->dupacks + 1) > pcb->dupacks) {
                 ++pcb->dupacks;
               }
+#if LWIP_TCP_RECOVERY
+              tcp_recovery_dupack(pcb);
+#endif
+#if LWIP_TCP_RECOVERY
+              /* A partial ACK resets dupacks but keeps NewReno active.
+               * Every subsequent duplicate ACK still clocks one MSS out. */
+              if (pcb->flags & TF_INFR) {
+#else
               if (pcb->dupacks > 3) {
+#endif
                 /* Inflate the congestion window */
                 TCP_WND_INC(pcb->cwnd, pcb->mss);
               }
@@ -1955,11 +2000,18 @@ tcp_receive(struct tcp_pcb *pcb)
        * count of consecutive duplicate acks */
       if (!found_dupack) {
         pcb->dupacks = 0;
+#if LWIP_TCP_RECOVERY
+        pcb->recovery.lt_credit = 0;
+        pcb->recovery.fast_pending = 0;
+#endif
       }
     } else if (TCP_SEQ_BETWEEN(ackno, pcb->lastack + 1, pcb->snd_nxt)) {
       /* We come here when the ACK acknowledges new data. */
       tcpwnd_size_t acked;
 
+#if LWIP_TCP_RECOVERY
+      const u8_t was_in_recovery = (pcb->flags & TF_INFR) != 0;
+#else
       /* Reset the "IN Fast Retransmit" flag, since we are no longer
          in fast retransmit. Also reset the congestion window to the
          slow start threshold. */
@@ -1977,6 +2029,8 @@ tcp_receive(struct tcp_pcb *pcb)
       pcb->rto = (s16_t)((pcb->sa >> 3) + pcb->sv);
       #endif
 
+#endif
+
       /* Record how much data this ACK acks */
       acked = (tcpwnd_size_t)(ackno - pcb->lastack);
 #if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
@@ -1989,7 +2043,11 @@ tcp_receive(struct tcp_pcb *pcb)
 
       /* Update the congestion control variables (cwnd and
          ssthresh). */
-      if (pcb->state >= ESTABLISHED) {
+      if (pcb->state >= ESTABLISHED
+#if LWIP_TCP_RECOVERY
+          && !was_in_recovery
+#endif
+         ) {
         if (pcb->cwnd < pcb->ssthresh) {
           tcpwnd_size_t increase;
           /* limit to 1 SMSS segment during period following RTO */
@@ -2034,6 +2092,9 @@ tcp_receive(struct tcp_pcb *pcb)
         pcb->rtime = 0;
       }
 
+#if LWIP_TCP_RECOVERY
+      tcp_recovery_ack(pcb, acked, was_in_recovery);
+#endif
       pcb->polltmr = 0;
 
 #if TCP_OVERSIZE
@@ -2077,6 +2138,16 @@ tcp_receive(struct tcp_pcb *pcb)
     /* RTT estimation calculations. This is done by checking if the
        incoming segment acknowledges the segment we use to take a
        round-trip time measurement. */
+#if LWIP_TCP_RECOVERY
+    {
+      u32_t sample_ms = tcp_recovery_rtt_ack(pcb, ackno);
+#if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
+      screen_ack_rtt_ms = sample_ms;
+#else
+      LWIP_UNUSED_ARG(sample_ms);
+#endif
+    }
+#else
     if (pcb->rttest && TCP_SEQ_LT(pcb->rtseq, ackno)) {
       /* diff between this shouldn't exceed 32K since this are tcp timer ticks
          and a round-trip shouldn't be that long... */
@@ -2105,6 +2176,7 @@ tcp_receive(struct tcp_pcb *pcb)
 
       pcb->rttest = 0;
     }
+#endif /* LWIP_TCP_RECOVERY */
 #if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
     tcp_screen_ack_profile_record(pcb, screen_ack_acked,
                                   screen_ack_old_window,

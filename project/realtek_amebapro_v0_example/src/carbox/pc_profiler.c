@@ -20,6 +20,7 @@
 #include "irq_profiler.h"
 #include "video_handover_zero_copy.h"
 #include "screen_tx_direct_crypto.h"
+#include "screen_tx_probe.h"
 #include "screen_queue_wait.h"
 #include "screen_rx_stage_profiler.h"
 #include "screen_tcp_write_profiler.h"
@@ -1787,6 +1788,11 @@ static void pcprof_task(void *arg)
 	defined(CONFIG_NCM_TX_ASYNC_PROFILE) && CONFIG_NCM_TX_ASYNC_PROFILE
 		rltk_ncm_tx_pipeline_report(sequence);
 #endif
+#if defined(CONFIG_SCREEN_BLOCK_PROFILE) && CONFIG_SCREEN_BLOCK_PROFILE && \
+	defined(CONFIG_NCM_TX_PIPELINE) && CONFIG_NCM_TX_PIPELINE && \
+	!CONFIG_NCM_TX_ASYNC_PROFILE
+		rltk_ncm_tx_pipeline_report(sequence);
+#endif
 #if defined(CONFIG_CRYPTO_ENGINE_PROFILE) && CONFIG_CRYPTO_ENGINE_PROFILE
 		carbox_crypto_irq_controller_report(sequence);
 #endif
@@ -1858,6 +1864,10 @@ static void pcprof_task(void *arg)
 #endif
 #if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
 		lwip_diag_screen_tcp_ack_report(sequence);
+#endif
+#if defined(CONFIG_SCREEN_BLOCK_PROFILE) && CONFIG_SCREEN_BLOCK_PROFILE && \
+	!CONFIG_SCREEN_TX_DIRECT_CRYPTO && !CONFIG_SCREEN_QUEUE_PROFILE
+		carbox_screen_tx_probe_report(sequence);
 #endif
 #if defined(CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE) && \
 	CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE

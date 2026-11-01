@@ -37,6 +37,13 @@
  */
 
 #include "lwip/opt.h"
+#if CONFIG_RX_HANDOVER_DIAG
+#include "rx_handover_diag.h"
+#else
+#define RXHD_INC(id) ((void)0)
+#define RXHD_ADD(id, n) ((void)0)
+#endif
+
 
 #if !NO_SYS /* don't build if not configured for use in lwipopts.h */
 
@@ -115,6 +122,11 @@
 static tcpip_init_done_fn tcpip_init_done;
 static void *tcpip_init_done_arg;
 static sys_mbox_t tcpip_mbox;
+#if CONFIG_RX_HANDOVER_DIAG
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+#endif
 
 #if CONFIG_TCPIP_NCM_RX_PRIORITY && !LWIP_TCPIP_CORE_LOCKING_INPUT
 #define TCPIP_NCM_RX_POOL_SIZE 128U
@@ -178,11 +190,13 @@ tcpip_ncm_rx_drain(void *arg)
     taskEXIT_CRITICAL();
 
     if (input_fn(p, netif) != ERR_OK) {
+      RXHD_INC(RXHD_STACK_REJECT);
       pbuf_free(p);
     }
 
     taskENTER_CRITICAL();
     tcpip_ncm_rx_free_locked(index);
+    RXHD_INC(RXHD_NCM_DONE);
     taskEXIT_CRITICAL();
   }
 }
@@ -198,6 +212,7 @@ tcpip_ncm_rx_enqueue(struct pbuf *p, struct netif *inp,
   taskENTER_CRITICAL();
   index = tcpip_ncm_rx_free_head;
   if (index == TCPIP_NCM_RX_INVALID_INDEX) {
+    RXHD_INC(RXHD_NCM_POOL_FAIL);
     taskEXIT_CRITICAL();
     return ERR_MEM;
   }
@@ -218,6 +233,7 @@ tcpip_ncm_rx_enqueue(struct pbuf *p, struct netif *inp,
   if (tcpip_ncm_rx_marker_pending == 0U) {
     tcpip_ncm_rx_marker_pending = 1U;
     if (xQueueSendToFront(tcpip_mbox, &marker, 0) != pdPASS) {
+      RXHD_INC(RXHD_NCM_POST_FAIL);
       tcpip_ncm_rx_pending_head = TCPIP_NCM_RX_INVALID_INDEX;
       tcpip_ncm_rx_pending_tail = TCPIP_NCM_RX_INVALID_INDEX;
       tcpip_ncm_rx_marker_pending = 0U;
@@ -226,6 +242,7 @@ tcpip_ncm_rx_enqueue(struct pbuf *p, struct netif *inp,
       return ERR_MEM;
     }
   }
+  RXHD_INC(RXHD_NCM_IN);
   taskEXIT_CRITICAL();
   return ERR_OK;
 }
@@ -283,6 +300,9 @@ static struct tcpip_rx_stage1_msg
 static u16_t tcpip_rx_stage1_free_head = TCPIP_RX_STAGE1_INVALID_INDEX;
 static u32_t tcpip_rx_stage1_sequence;
 static u32_t tcpip_rx_stage1_in_use;
+#if CONFIG_RX_HANDOVER_DIAG
+static u32_t rxhd_max_batch;
+#endif
 #if CONFIG_TCPIP_RX_BATCH_STAGE3
 static u16_t tcpip_rx_batch_head = TCPIP_RX_STAGE1_INVALID_INDEX;
 static u16_t tcpip_rx_batch_tail = TCPIP_RX_STAGE1_INVALID_INDEX;
@@ -309,6 +329,7 @@ tcpip_rx_batch_post_task_locked(u32_t trigger)
   tcpip_rx_batch_tail = TCPIP_RX_STAGE1_INVALID_INDEX;
   tcpip_rx_batch_count = 0U;
   if (xQueueSend(tcpip_mbox, &msg, 0) != pdPASS) {
+    RXHD_INC(RXHD_BATCH_TASK_FAIL);
     tcpip_rx_batch_head = head;
     tcpip_rx_batch_tail = tail;
     tcpip_rx_batch_count = count;
@@ -382,6 +403,7 @@ tcpip_rx_timer_probe_callback(void *arg)
       tcpip_rx_batch_head = head;
       tcpip_rx_batch_tail = tail;
       tcpip_rx_batch_count = count;
+      RXHD_INC(RXHD_BATCH_ISR_FAIL);
 #if CONFIG_TCPIP_RX_BATCH_PROFILE
       net_queue_profiler_rx_batch_post_fail(1U);
 #endif
@@ -483,6 +505,7 @@ tcpip_rx_stage1_alloc_locked(void)
   u16_t index = tcpip_rx_stage1_free_head;
 
   if (index == TCPIP_RX_STAGE1_INVALID_INDEX) {
+    RXHD_INC(RXHD_POOL_EMPTY);
     return NULL;
   }
   entry = &tcpip_rx_stage1_pool[index];
@@ -528,6 +551,30 @@ tcpip_rx_stage1_init(void)
   LWIP_PLATFORM_DIAG(("[RXBATCH1] enabled mode=single-immediate pool=%u; no aggregation, delay, or timer\n",
                       (unsigned)TCPIP_RX_STAGE1_POOL_SIZE));
 #endif
+}
+#endif
+
+#if CONFIG_RX_HANDOVER_DIAG
+void carbox_rxhd_stack_snapshot(struct rxhd_stack_state *out)
+{
+  memset(out, 0, sizeof(*out));
+  taskENTER_CRITICAL();
+  if (tcpip_mbox != NULL) out->mbox = uxQueueMessagesWaiting(tcpip_mbox);
+#if CONFIG_TCPIP_RX_BATCH_STAGE1 && !LWIP_TCPIP_CORE_LOCKING_INPUT
+  out->in_use = tcpip_rx_stage1_in_use;
+  out->max_batch = rxhd_max_batch;
+#if CONFIG_TCPIP_RX_BATCH_STAGE3
+  out->pending = tcpip_rx_batch_count;
+#endif
+#if CONFIG_TCPIP_RX_BATCH_TIMER_PROBE
+  out->timer_armed = tcpip_rx_timer_probe_armed;
+  out->timer_available = tcpip_rx_timer_probe_available;
+#endif
+#endif
+#if CONFIG_TCPIP_NCM_RX_PRIORITY && !LWIP_TCPIP_CORE_LOCKING_INPUT
+  out->ncm_marker = tcpip_ncm_rx_marker_pending;
+#endif
+  taskEXIT_CRITICAL();
 }
 #endif
 
@@ -722,15 +769,25 @@ tcpip_thread_handle_msg(struct tcpip_msg *msg)
 #if CONFIG_TCPIP_RX_BATCH_PROFILE
         net_queue_profiler_rx_stage1_state_error();
 #endif
+        RXHD_INC(RXHD_BATCH_BAD);
         LWIP_ASSERT("Invalid sealed RX batch", 0);
         break;
       }
       index = (u16_t)(head_entry - tcpip_rx_stage1_pool);
       packets = head_entry->batch_count;
-      if (packets == 0U || packets > CONFIG_TCPIP_RX_BATCH_MAX_PACKETS) {
+#if CONFIG_RX_HANDOVER_DIAG
+      if (packets > rxhd_max_batch) rxhd_max_batch = packets;
+#endif
+      /* MAX_PACKETS is the normal flush threshold, not a hard batch size.
+       * If tcpip_mbox is full, posting fails and producers can append more
+       * entries before a later post succeeds. The pool size is the actual
+       * upper bound. Rejecting a valid larger batch would strand every pbuf
+       * and pool entry in it (this port's LWIP_PLATFORM_ASSERT is a no-op). */
+      if (packets == 0U || packets > TCPIP_RX_STAGE1_POOL_SIZE) {
 #if CONFIG_TCPIP_RX_BATCH_PROFILE
         net_queue_profiler_rx_stage1_state_error();
 #endif
+        RXHD_INC(RXHD_BATCH_BAD);
         LWIP_ASSERT("Invalid sealed RX batch count", 0);
         break;
       }
@@ -766,6 +823,7 @@ tcpip_thread_handle_msg(struct tcpip_msg *msg)
 #if CONFIG_TCPIP_RX_BATCH_PROFILE
           net_queue_profiler_rx_stage1_state_error();
 #endif
+          RXHD_INC(RXHD_BATCH_BAD);
           LWIP_ASSERT("Invalid sealed RX entry state", 0);
           break;
         }
@@ -776,6 +834,7 @@ tcpip_thread_handle_msg(struct tcpip_msg *msg)
                                       uxQueueMessagesWaiting(tcpip_mbox));
 #endif
         if (entry->input_fn(p, netif) != ERR_OK) {
+          RXHD_INC(RXHD_STACK_REJECT);
           pbuf_free(p);
         }
         taskENTER_CRITICAL();
@@ -791,10 +850,12 @@ tcpip_thread_handle_msg(struct tcpip_msg *msg)
         index = next;
         processed++;
       }
+      RXHD_ADD(RXHD_WLAN_DONE, processed);
       if (processed != packets || index != TCPIP_RX_STAGE1_INVALID_INDEX) {
 #if CONFIG_TCPIP_RX_BATCH_PROFILE
         net_queue_profiler_rx_stage1_state_error();
 #endif
+        RXHD_INC(RXHD_BATCH_BAD);
         LWIP_ASSERT("Sealed RX batch length mismatch", 0);
       }
       break;
@@ -832,6 +893,7 @@ tcpip_thread_handle_msg(struct tcpip_msg *msg)
 #if CONFIG_TCPIP_RX_BATCH_PROFILE
         net_queue_profiler_rx_stage1_state_error();
 #endif
+        RXHD_INC(RXHD_BATCH_BAD);
         LWIP_ASSERT("Invalid stage-1 RX message", 0);
         break;
       }
@@ -845,10 +907,12 @@ tcpip_thread_handle_msg(struct tcpip_msg *msg)
                                     uxQueueMessagesWaiting(tcpip_mbox));
 #endif
       if (input_fn(p, netif) != ERR_OK) {
+        RXHD_INC(RXHD_STACK_REJECT);
         pbuf_free(p);
       }
       taskENTER_CRITICAL();
       tcpip_rx_stage1_free_locked(entry);
+      RXHD_INC(RXHD_WLAN_DONE);
       in_use = tcpip_rx_stage1_in_use;
       taskEXIT_CRITICAL();
 #if CONFIG_TCPIP_RX_BATCH_PROFILE
@@ -873,8 +937,15 @@ tcpip_thread_handle_msg(struct tcpip_msg *msg)
                                     uxQueueMessagesWaiting(tcpip_mbox));
 #endif
       if (msg->msg.inp.input_fn(msg->msg.inp.p, msg->msg.inp.netif) != ERR_OK) {
+        RXHD_INC(RXHD_STACK_REJECT);
         pbuf_free(msg->msg.inp.p);
       }
+#if CONFIG_RX_HANDOVER_DIAG
+      if ((msg->msg.inp.netif->name[0] == 'w' && msg->msg.inp.netif->name[1] == 'l') ||
+          (msg->msg.inp.netif->name[0] == 'a' && msg->msg.inp.netif->name[1] == 'p')) {
+        RXHD_INC(RXHD_WLAN_DONE);
+      }
+#endif
       memp_free(MEMP_TCPIP_MSG_INPKT, msg);
       break;
 #endif /* !LWIP_TCPIP_CORE_LOCKING_INPUT */
@@ -908,6 +979,22 @@ tcpip_thread_handle_msg(struct tcpip_msg *msg)
       LWIP_ASSERT("tcpip_thread: invalid message", 0);
       break;
   }
+  RXHD_INC(RXHD_MSG_DONE);
+#if CONFIG_TCPIP_RX_BATCH_STAGE3 && !LWIP_TCPIP_CORE_LOCKING_INPUT
+  /* A full mailbox can reject the one-shot timer's batch post. Those pbufs
+   * have already been accepted, but no timer remains to submit them. Retry
+   * after consuming a mailbox message so recovery does not require new RX.
+   * If another producer refills the mailbox, the next consumed message will
+   * retry again. Preserve normal batching while its timer is still armed. */
+  taskENTER_CRITICAL();
+  if (tcpip_rx_batch_count != 0U && tcpip_rx_timer_probe_armed == 0U) {
+    RXHD_INC(RXHD_BATCH_RETRY);
+    if (tcpip_rx_batch_post_task_locked(1U)) {
+      RXHD_INC(RXHD_BATCH_RECOVER);
+    }
+  }
+  taskEXIT_CRITICAL();
+#endif
 }
 
 #ifdef TCPIP_THREAD_TEST
@@ -1045,6 +1132,7 @@ tcpip_inpkt(struct pbuf *p, struct netif *inp, netif_input_fn input_fn)
       /* The producer is still inside the critical section, so no later
        * stage-1 message can have consumed this sequence value yet.  Reclaim
        * it to keep a queue-full failure from looking like message loss. */
+      RXHD_INC(RXHD_MBOX_FAIL);
       tcpip_rx_stage1_sequence--;
       tcpip_rx_stage1_free_locked(entry);
       taskEXIT_CRITICAL();
@@ -1072,6 +1160,7 @@ tcpip_inpkt(struct pbuf *p, struct netif *inp, netif_input_fn input_fn)
 
   msg = (struct tcpip_msg *)memp_malloc(MEMP_TCPIP_MSG_INPKT);
   if (msg == NULL) {
+    RXHD_INC(RXHD_MEMP_FAIL);
 #if CONFIG_NET_QUEUE_PROFILE
     net_queue_profiler_rx_alloc_fail(netq_if_id);
 #endif
@@ -1086,6 +1175,7 @@ tcpip_inpkt(struct pbuf *p, struct netif *inp, netif_input_fn input_fn)
   net_queue_profiler_rx_post_begin(netq_if_id);
 #endif
   if (sys_mbox_trypost(&tcpip_mbox, msg) != ERR_OK) {
+    RXHD_INC(RXHD_MBOX_FAIL);
 #if CONFIG_NET_QUEUE_PROFILE
     net_queue_profiler_rx_post_abort(netq_if_id);
 #endif

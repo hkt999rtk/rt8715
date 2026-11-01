@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 10 ] && [ "$#" -ne 11 ]; then
-	echo "usage: $0 MODE AR OBJCOPY INPUT OUTPUT MEMBERS SCREEN_WAIT ACK_CACHE EVENT_READAHEAD_FIX IAP2_WAIT_FIX [ACK_TIMING_PRINTS]" >&2
+if [ "$#" -ne 10 ] && [ "$#" -ne 11 ] && [ "$#" -ne 12 ] && [ "$#" -ne 13 ]; then
+	echo "usage: $0 MODE AR OBJCOPY INPUT OUTPUT MEMBERS SCREEN_WAIT ACK_CACHE EVENT_READAHEAD_FIX IAP2_WAIT_FIX [ACK_TIMING_PRINTS] [SCREEN_TX_POLL_WAIT] [SCREEN_FRAME_ID_PROFILE]" >&2
 	exit 2
 fi
 
@@ -17,6 +17,8 @@ ack_cache=$8
 event_readahead_fix=$9
 iap2_wait_fix=${10}
 ack_timing_prints=${11:-0}
+screen_tx_poll_wait=${12:-0}
+screen_frame_id_profile=${13:-0}
 script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 screen_wait_patcher=$script_directory/../../src/carbox/tools/patch_screen_wait_relocation.py
 redundant_copy_patcher=$script_directory/../../src/carbox/tools/patch_airplay_redundant_copy.py
@@ -62,6 +64,22 @@ case "$screen_wait" in
 	0|1) ;;
 	*)
 		echo "SCREEN_WAIT must be 0 or 1: $screen_wait" >&2
+		exit 2
+		;;
+esac
+
+case "$screen_tx_poll_wait" in
+	0|1) ;;
+	*)
+		echo "SCREEN_TX_POLL_WAIT must be 0 or 1: $screen_tx_poll_wait" >&2
+		exit 2
+		;;
+esac
+
+case "$screen_frame_id_profile" in
+	0|1) ;;
+	*)
+		echo "SCREEN_FRAME_ID_PROFILE must be 0 or 1: $screen_frame_id_profile" >&2
 		exit 2
 		;;
 esac
@@ -127,6 +145,33 @@ cp "$input_archive" "$output_archive"
 				"patched.o" "patched-with-screen-wait.o"
 			mv "patched-with-screen-wait.o" "patched.o"
 			python3 "$screen_wait_patcher" "patched.o"
+		fi
+		if [ "$screen_tx_poll_wait" = 1 ] && [ "$member" = AirPlayScreen.o ]; then
+			# Redirect only the normal-frame EAGAIN delay; pass sockScreen
+			# instead of the old 10-tick constant to the poll wait helper.
+			"$objcopy_tool" --add-symbol \
+				carbox_screen_tx_poll_wait=0,global \
+				"patched.o" "patched-with-tx-poll.o"
+			mv "patched-with-tx-poll.o" "patched.o"
+			python3 "$screen_wait_patcher" "patched.o" tx-poll
+		fi
+		if [ "$screen_frame_id_profile" = 1 ] && [ "$member" = AirPlayScreen.o ]; then
+			# Keep the customer frame sender intact.  Redirect only normal-frame
+			# entry and its EAGAIN print in the derived archive.
+			"$objcopy_tool" \
+				--add-symbol carbox_screen_normal_frame_probe=0,global \
+				--add-symbol carbox_screen_block_note=0,global \
+				"patched.o" "patched-with-frame-id.o"
+			mv "patched-with-frame-id.o" "patched.o"
+			python3 "$screen_wait_patcher" "patched.o" frame-dispatch
+			python3 "$screen_wait_patcher" "patched.o" frame-block
+		elif [ "$screen_tx_poll_wait" = 1 ] && [ "$member" = AirPlayScreen.o ]; then
+			# Silence only the EAGAIN "screen block" print in release builds.
+			# Other sender errors and the partial-write retry loop stay intact.
+			"$objcopy_tool" --add-symbol carbox_screen_block_quiet=0,global \
+				"patched.o" "patched-with-block-quiet.o"
+			mv "patched-with-block-quiet.o" "patched.o"
+			python3 "$screen_wait_patcher" "patched.o" frame-block-quiet
 		fi
 		if [ "$ack_cache" = 1 ] && [ "$member" = AirPlayEvent.o ]; then
 			# Redirect only DealWithSendHIDReport's no-body response.  Other

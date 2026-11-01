@@ -32,6 +32,10 @@
 #ifndef LWIP_HDR_LWIPOPTS_H
 #define LWIP_HDR_LWIPOPTS_H
 
+#ifndef LWIP_TCP_RECOVERY
+#define LWIP_TCP_RECOVERY 1
+#endif
+
 #include <platform/platform_stdlib.h>
 #include "platform_opts.h"
 

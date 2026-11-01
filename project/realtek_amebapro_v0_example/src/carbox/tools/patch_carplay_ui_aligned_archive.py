@@ -19,6 +19,9 @@ import tempfile
 ACCESSORY_SHA256S = {
     "4f1b417b43f19b3bb70d41f312fd11a206f416ccbf4b19a914462a1de6c4fc45",
     "e0fc401a62a2a9a51548b259038d93f6945896785a8d9e96dc05d7db6f27434d",
+    # Release 13 changes the CreateUi diagnostic string only; aligned input
+    # instructions and the lib_x264_init relocation retain the audited layout.
+    "1655c6a094eeb95837c75e724de7444b8d6c368d236354d24786ffbaae4e1e6a",
 }
 SECTION_NAME = b".text.CAccessory_CreateUi"
 CALL_OFFSET = 0x502

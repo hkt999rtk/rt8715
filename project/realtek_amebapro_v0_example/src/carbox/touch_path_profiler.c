@@ -2332,6 +2332,14 @@ int32_t __wrap_AirPlayReceiverSessionSendHIDReport(
 			end_us - event_start_us);
 	}
 	taskEXIT_CRITICAL();
+#if CONFIG_AUDIO_STREAM_DIAG
+	if (is_touch) {
+		extern void carbox_audio_lag_touch_record(uint32_t elapsed_us,
+			uint32_t start_us);
+		carbox_audio_lag_touch_record(hal_read_curtime_us() - start_us,
+			start_us);
+	}
+#endif
 	return result;
 }
 

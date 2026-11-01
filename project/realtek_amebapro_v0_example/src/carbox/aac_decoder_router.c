@@ -313,6 +313,9 @@ static void aac_router_nav_decode_report(aac_router_t *router,
 	const char *event, uint32_t now_us)
 {
 	uint32_t window_ms;
+#if CONFIG_AUDIO_STREAM_DIAG
+	extern void carbox_audio_lag_report(uint32_t now_us);
+#endif
 
 	if (!router->nav_eld || router->nav_decode_calls == 0U) {
 		return;
@@ -328,6 +331,9 @@ static void aac_router_nav_decode_report(aac_router_t *router,
 		(unsigned long)router->nav_max_us,
 		(unsigned long)router->nav_over_budget,
 		(unsigned long)router->nav_frame_budget_us);
+#if CONFIG_AUDIO_STREAM_DIAG
+	carbox_audio_lag_report(now_us);
+#endif
 	router->nav_window_start_us = 0U;
 	router->nav_decode_calls = 0U;
 	router->nav_decode_errors = 0U;

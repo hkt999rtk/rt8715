@@ -37,6 +37,9 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
+#if CONFIG_RX_HANDOVER_DIAG
+#include "rx_handover_diag.h"
+#endif
 
 #if ( configUSE_CO_ROUTINES == 1 )
     #include "croutine.h"
@@ -1004,6 +1007,9 @@ BaseType_t xQueueGenericSend( QueueHandle_t xQueue,
         {
             if( prvIsQueueFull( pxQueue ) != pdFALSE )
             {
+#if CONFIG_RX_HANDOVER_DIAG
+                carbox_rxhd_timer_block(pxQueue, pvItemToQueue, xTicksToWait);
+#endif
                 traceBLOCKING_ON_QUEUE_SEND( pxQueue );
                 vTaskPlaceOnEventList( &( pxQueue->xTasksWaitingToSend ), xTicksToWait );
 

@@ -240,6 +240,18 @@ struct tcp_pcb_listen {
 
 
 /** the TCP protocol control block */
+#if LWIP_TCP_RECOVERY
+/* Appended to preserve all existing tcp_pcb member offsets used by archives. */
+struct tcp_recovery_state {
+  u32_t recover_end, recovery_started_ms;
+  u32_t lt_bytes;
+  u32_t timer_started_ms, rto_ms, srtt_x8, rttvar_x4;
+  u32_t sample_started_ms, sample_end, karn_end;
+  u8_t recover_valid, partial_seen, partial_pending, fast_pending;
+  u8_t lt_credit, sample_valid, karn_blocked, output_pending;
+};
+#endif
+
 struct tcp_pcb {
 /** common PCB members */
   IP_PCB;
@@ -386,6 +398,9 @@ struct tcp_pcb {
 #if LWIP_WND_SCALE
   u8_t snd_scale;
   u8_t rcv_scale;
+#endif
+#if LWIP_TCP_RECOVERY
+  struct tcp_recovery_state recovery;
 #endif
 };
 

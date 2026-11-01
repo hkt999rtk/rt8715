@@ -104,6 +104,13 @@ carbox_memprof_finish(const carbox_memprof_guard_t *guard,
 #define CARBOX_X264_MEM_DIAG 0
 #endif
 
+#ifndef CARBOX_UI_HEAP_TRACE
+#define CARBOX_UI_HEAP_TRACE 0
+#endif
+#if CARBOX_UI_HEAP_TRACE
+extern void carbox_ui_heap_trace_retag(void *ptr, void *caller);
+#endif
+
 #if CARBOX_X264_MEM_DIAG
 #define CARBOX_LARGE_MALLOC_THRESHOLD (4U * 1024U * 1024U)
 extern void vPortGetHeapFragmentationStatsExt(int idx, size_t *free_bytes,
@@ -163,6 +170,9 @@ static void set_reent_errno(struct _reent *reent, int error)
 void* __wrap_malloc( size_t size )
 {
 	void *ptr = pvPortMalloc(size);
+#if CARBOX_UI_HEAP_TRACE
+	carbox_ui_heap_trace_retag(ptr, __builtin_return_address(0));
+#endif
 #if CARBOX_X264_MEM_DIAG
 	if (size >= CARBOX_LARGE_MALLOC_THRESHOLD) {
 		size_t free_bytes, largest, blocks;
@@ -186,7 +196,11 @@ void* __wrap_realloc( void *p, size_t size )
 
 void* __wrap_calloc( size_t n, size_t size )
 {
-	return freertos_calloc(n, size);
+	void *ptr = freertos_calloc(n, size);
+#if CARBOX_UI_HEAP_TRACE
+	carbox_ui_heap_trace_retag(ptr, __builtin_return_address(0));
+#endif
+	return ptr;
 }
 
 void __wrap_free( void *p )
@@ -198,6 +212,9 @@ void __wrap_free( void *p )
 void *__wrap__malloc_r(struct _reent *reent, size_t size)
 {
 	void *ptr = pvPortMalloc(size);
+#if CARBOX_UI_HEAP_TRACE
+	carbox_ui_heap_trace_retag(ptr, __builtin_return_address(0));
+#endif
 
 	if ((ptr == NULL) && (size != 0U)) {
 		set_reent_errno(reent, ENOMEM);

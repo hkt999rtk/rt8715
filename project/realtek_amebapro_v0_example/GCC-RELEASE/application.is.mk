@@ -246,6 +246,7 @@ CARBOX_USB_BUILD ?= 1
 # -------------------------------------------------------------------
 
 SRC_ASM = 
+SRC_ASM += ../src/carbox/wlan_recvframe_entry.S
 SRC_C =
 SRAM_C =
 ERAM_C =
@@ -450,6 +451,7 @@ ITCM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/sys.c
 ITCM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp.c
 ITCM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_in.c
 ITCM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_out.c
+ITCM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_recovery.c
 ITCM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/timeouts.c
 ITCM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/udp.c
 ##ITMC -> DTCM
@@ -839,6 +841,10 @@ SRC_C += ../src/carbox/screen_tcp_write_profiler.c
 SRC_C += ../src/carbox/screen_rx_rate_limit.c
 SRC_C += ../src/carbox/audio_decode_profiler.c
 SRC_C += ../src/carbox/memcheck.c
+CARBOX_UI_HEAP_TRACE ?= 0
+ifeq ($(CARBOX_UI_HEAP_TRACE),1)
+SRC_C += ../src/carbox/ui_heap_trace.c
+endif
 ifeq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK)$(CARBOX_CUSTOMER_UI_INTEGRATED),11)
 # CABAC skip writer comes from the customer's lib_x264.a.
 SRC_C += ../src/carbox/ui_x264_align_compat.c
@@ -901,6 +907,11 @@ SRAM_C += ../src/carbox/large_memcpy_gdma.c
 SRAM_C += ../src/carbox/video_handover_zero_copy.c
 SRAM_C += ../src/carbox/screen_rx_poly_buffer.c
 SRAM_C += ../src/carbox/screen_queue_wait.c
+SCREEN_TX_POLL_WAIT ?= 1
+SCREEN_TX_POLL_TIMEOUT_MS ?= 250
+ifeq ($(SCREEN_TX_POLL_WAIT),1)
+SRAM_C += ../src/carbox/screen_tx_poll_wait.c
+endif
 SRAM_C += ../src/carbox/screen_tx_direct_crypto.c
 # The current customer USB archive contains ncm_tx.o and ncm_tx_async.o.
 # Do not also compile the local NCM TX replacement into this image.
@@ -962,8 +973,9 @@ GCCFLAGS += -march=armv8-m.main+dsp -mthumb -mcmse -mfloat-abi=softfp -mfpu=fpv5
 GCCFLAGS += -nostartfiles -nodefaultlibs -nostdlib -fstack-usage -fdata-sections -ffunction-sections -fno-common
 CARBOX_USB_RX_BOOST_LEVEL ?= -1
 GCCFLAGS += -DCARBOX_USB_RX_BOOST_LEVEL=$(CARBOX_USB_RX_BOOST_LEVEL)
-CARBOX_X264_MEM_DIAG ?= 1
+CARBOX_X264_MEM_DIAG ?= 0
 GCCFLAGS += -DCARBOX_X264_MEM_DIAG=$(CARBOX_X264_MEM_DIAG)
+GCCFLAGS += -DCARBOX_UI_HEAP_TRACE=$(CARBOX_UI_HEAP_TRACE)
 
 # Define Macro
 GCCFLAGS += -D__thumb2__ -DCONFIG_PLATFORM_8195B -DCONFIG_PLATFORM_8195BHP -D__FPU_PRESENT -D__ARM_ARCH_7M__=0 -D__ARM_ARCH_7EM__=0 -D__ARM_ARCH_8M_MAIN__=1 -D__ARM_ARCH_8M_BASE__=0 
@@ -982,17 +994,10 @@ WLAN_RX_RING_SWAP ?= 0
 # Source-recovered rtl8195b_recv.o uses ordinary skb-backed DMA buffers.
 # This is independent of the retired rtw_memcpy/kfree symbol-hook path.
 WLAN_RX_DMA_SKB ?= 1
-# Opt-in pool diagnostics; the A-MSDU ownership repair is always in the derived archive.
-RX_HANDOVER_DIAG ?= 0
-GCCFLAGS += -DCONFIG_RX_HANDOVER_DIAG=$(RX_HANDOVER_DIAG)
-RX_HANDOVER_DIAG_STAMP := $(OBJ_DIR)/.rx_handover_diag_$(RX_HANDOVER_DIAG)
-$(RX_HANDOVER_DIAG_STAMP):
-	@mkdir -p $(OBJ_DIR)
-	@rm -f $(OBJ_DIR)/.rx_handover_diag_*
-	@touch $@
-../src/carbox/wlan_recvframe_diag.o: $(RX_HANDOVER_DIAG_STAMP)
 ifeq ($(WLAN_RX_DMA_SKB),1)
 SRC_C += ../src/carbox/wlan_recvframe_diag.c
+SRC_C += ../src/carbox/wlan_recvframe_trace.c
+SRC_C += ../src/carbox/rx_handover_diag.c
 endif
 # Periodic zero-copy counters are useful during bring-up but add UART/printf
 # disturbance. Keep the implementation available and default it off for soak.
@@ -1059,10 +1064,9 @@ $(NCM_TX_PROFILE_STAMP):
 	@rm -f $(OBJ_DIR)/.ncm_tx_profile_*
 	@touch $@
 ../../../component/common/network/lwip/lwip_v2.1.2/port/realtek/freertos/ethernetif.o: $(NCM_TX_PROFILE_STAMP)
-# Keep the recurring 10-second reporter disabled for the 400 MHz test build.
+# Opt-in CPU sampling and subsystem reports for diagnostic builds.
 PC_PROFILER ?= 0
-# Keep the 10-second reporter task as the common clock for focused subsystem
-# reports, but suppress its own CPU/task table after scheduler diagnosis.
+# Enable the task CPU table separately when collecting diagnostic evidence.
 PC_PROFILER_SELF_REPORT ?= 0
 # Keep task CPU utilization and the active subsystem report, but suppress the
 # already-validated recurring clock/PLL/SPIC, I2C pacing, and firmware-slot
@@ -1249,9 +1253,21 @@ SCREEN_TCP_ACK_PROFILE ?= 0
 AUDIO_DECODE_PROFILE ?= 0
 AUDIO_DECODE_PROFILE_WINDOW_MS ?= 10000
 AUDIO_DECODE_PROFILE_SLOW_US ?= 10000
-# Label navigation-tone status 20/21 and compare MainAltAudio RTP sequence
-# at UDP input (before lwIP validation) and at SocketRecvFrom.
+# Opt-in comparison of navigation RTP at WLAN, UDP input, and SocketRecvFrom.
 AUDIO_STREAM_DIAG ?= 0
+AUDIO_JITTER_ADAPTIVE ?= 0
+AUDIO_JITTER_STAMP := $(OBJ_DIR)/.audio_jitter_adaptive_$(AUDIO_JITTER_ADAPTIVE)
+$(AUDIO_JITTER_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.audio_jitter_adaptive_*
+	@touch $@
+../src/carbox/audio_stream_diag.o: $(AUDIO_JITTER_STAMP)
+ifeq ($(AUDIO_JITTER_ADAPTIVE),1)
+ifneq ($(AUDIO_STREAM_DIAG),1)
+$(error AUDIO_JITTER_ADAPTIVE requires AUDIO_STREAM_DIAG=1)
+endif
+SRC_C += ../src/carbox/audio_jitter_diag.c
+endif
 AUDIO_STREAM_DIAG_STAMP := $(OBJ_DIR)/.audio_stream_diag_$(AUDIO_STREAM_DIAG)
 $(AUDIO_STREAM_DIAG_STAMP):
 	@mkdir -p $(OBJ_DIR)
@@ -1263,6 +1279,7 @@ $(AUDIO_STREAM_DIAG_STAMP):
 	$(AUDIO_STREAM_DIAG_STAMP)
 ifeq ($(AUDIO_STREAM_DIAG),1)
 SRC_C += ../src/carbox/audio_stream_diag.c
+SRC_C += ../src/carbox/audio_pcm_tx_diag.c
 endif
 # Only decoder calls are routed; all AAC encoder symbols remain on FDK.
 # 0: FDK only. 1: Helix for supported raw AAC-LC, automatic FDK fallback.
@@ -1397,6 +1414,11 @@ VIDEO_HANDOVER_MAX_INFLIGHT ?= 2
 # The customer's new AirPlayScreen.o is used without that rewrite.
 SCREEN_TX_DIRECT_CRYPTO ?= 0
 SCREEN_TX_DIRECT_CRYPTO_MIN_BYTES ?= 4096
+# The regular customer sender needs its own observer: the direct-crypto
+# profiler is compiled to no-ops when SCREEN_TX_DIRECT_CRYPTO=0.
+ifeq ($(SCREEN_BLOCK_PROFILE)$(SCREEN_TX_DIRECT_CRYPTO)$(SCREEN_QUEUE_PROFILE),100)
+SRAM_C += ../src/carbox/screen_tx_probe.c
+endif
 # AES and ChaCha use the same mode numbering: 0=software only,
 # 1=software-authoritative with hardware shadow comparison, 2=hardware only.
 AES_MODE ?= 2
@@ -1498,8 +1520,8 @@ endif
 # response still uses the vendor HTTPMessage writer and encrypted transport;
 # only GetLocalTime/date formatting/header construction leave the request path.
 CAR_ACK_RESPONSE_CACHE ?= 1
-# Release 12 AirPlayEvent.o retries buffered bytes after HTTPMessageReset.
-# Keep the archive patch available only for older customer releases.
+# Release 13 AirPlayEvent.o calls the cached responder itself and retries
+# buffered bytes after HTTPMessageReset. Keep the older read-ahead patch off.
 CAR_EVENT_READAHEAD_FIX ?= 0
 # Split the iPhone HID HTTP response latency at the lwIP recvmbox boundary.
 # This identifies whether a slow 200 response was late on the wire or whether
@@ -1592,6 +1614,7 @@ $(SCREEN_FLOW_PROFILE_STAMP):
 	../src/carbox/screen_rx_rate_limit.o \
 	../src/carbox/screen_rx_stage_profiler.o \
 	../src/carbox/screen_tx_direct_crypto.o \
+	../src/carbox/screen_tx_probe.o \
 	../src/carbox/video_handover_zero_copy.o \
 	../src/carbox/chacha_key_alias_fix.o \
 	../src/carbox/screen_hw_timestamp.o \
@@ -1679,6 +1702,28 @@ TCPIP_RX_BATCH_MAX_PACKETS ?= 8
 TCPIP_RX_BATCH_TIMEOUT_US ?= 1000
 # Diagnostic counters/logs only; aggregation remains enabled when this is 0.
 TCPIP_RX_BATCH_PROFILE ?= 0
+# Opt-in bounded RX/timer counters via the existing priority-1 task.
+# Report every 10 s (2 s on anomalies); no hot-path UART or payload copies.
+RX_HANDOVER_DIAG ?= 0
+ifeq ($(RX_HANDOVER_DIAG),1)
+ifneq ($(WLAN_RX_DMA_SKB),1)
+$(error RX_HANDOVER_DIAG=1 requires WLAN_RX_DMA_SKB=1 for the verified driver ABI and common reporter)
+endif
+endif
+RX_HANDOVER_DIAG_STAMP := $(OBJ_DIR)/.rx_handover_diag_$(RX_HANDOVER_DIAG)
+$(RX_HANDOVER_DIAG_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.rx_handover_diag_*
+	@touch $@
+../src/carbox/rx_handover_diag.o ../src/carbox/wlan_recvframe_diag.o \
+	../src/carbox/wlan_recvframe_trace.o \
+	../src/carbox/wlan_recvframe_entry.o \
+	../../../component/common/network/lwip/lwip_v2.1.2/src/api/tcpip.o \
+	../../../component/common/network/lwip/lwip_v2.1.2/port/realtek/freertos/ethernetif.o \
+	../../../component/os/freertos/freertos_v10.0.0/timers.o \
+	../../../component/os/freertos/freertos_v10.0.0/tasks.o \
+	../../../component/os/freertos/freertos_v10.0.0/queue.o: \
+	$(RX_HANDOVER_DIAG_STAMP) ../src/carbox/rx_handover_diag.h
 # Keep vehicle USB-NCM RX packets in their own FIFO and place one drain marker
 # at the front of the TCP_IP mailbox. This prioritizes RX without reversing a
 # burst, as inserting every packet at the mailbox front would do.
@@ -1891,6 +1936,7 @@ GCCFLAGS += -DCONFIG_SCREEN_TX_PRESSURE_FEEDBACK=$(SCREEN_TX_PRESSURE_FEEDBACK)
 GCCFLAGS += -DCONFIG_SCREEN_TX_PRESSURE_TRIGGER_MS=$(SCREEN_TX_PRESSURE_TRIGGER_MS)
 GCCFLAGS += -DCONFIG_SCREEN_TX_PRESSURE_CLEAN_MS=$(SCREEN_TX_PRESSURE_CLEAN_MS)
 GCCFLAGS += -DCONFIG_SCREEN_BLOCK_PROFILE=$(SCREEN_BLOCK_PROFILE)
+GCCFLAGS += -DCONFIG_SCREEN_TX_POLL_TIMEOUT_MS=$(SCREEN_TX_POLL_TIMEOUT_MS)
 GCCFLAGS += -DCONFIG_SCREEN_USB_PROBE=$(SCREEN_USB_PROBE)
 GCCFLAGS += -DCONFIG_SCREEN_TCP_ACK_PROFILE=$(SCREEN_TCP_ACK_PROFILE)
 GCCFLAGS += -DCONFIG_AUDIO_DECODE_PROFILE=$(AUDIO_DECODE_PROFILE)
@@ -1898,6 +1944,7 @@ GCCFLAGS += -DAUDIO_DECODE_PROFILE_WINDOW_MS=$(AUDIO_DECODE_PROFILE_WINDOW_MS)
 GCCFLAGS += -DAUDIO_DECODE_PROFILE_SLOW_US=$(AUDIO_DECODE_PROFILE_SLOW_US)
 GCCFLAGS += -DCARBOX_AAC_DECODER_MODE=$(AAC_DECODER_MODE)
 GCCFLAGS += -DCONFIG_AAC_ELD_DIAG=$(AAC_ELD_DIAG)
+GCCFLAGS += -DCONFIG_AUDIO_STREAM_DIAG=$(AUDIO_STREAM_DIAG)
 GCCFLAGS += -DCONFIG_AAC_DECODER_ROUTE_PROFILE=$(AAC_DECODER_ROUTE_PROFILE)
 GCCFLAGS += -DAAC_DECODER_ROUTE_PROFILE_WINDOW_MS=$(AAC_DECODER_ROUTE_PROFILE_WINDOW_MS)
 GCCFLAGS += -DCONFIG_AAC_DECODER_BENCHMARK=$(AAC_DECODER_BENCHMARK)
@@ -1948,6 +1995,7 @@ GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_STAGE1=$(TCPIP_RX_BATCH_STAGE1)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_TIMER_PROBE=$(TCPIP_RX_BATCH_TIMER_PROBE)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_TIMER_MBOX_PROBE=$(TCPIP_RX_BATCH_TIMER_MBOX_PROBE)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_STAGE3=$(TCPIP_RX_BATCH_STAGE3)
+GCCFLAGS += -DCONFIG_RX_HANDOVER_DIAG=$(RX_HANDOVER_DIAG)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_MAX_PACKETS=$(TCPIP_RX_BATCH_MAX_PACKETS)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_TIMEOUT_US=$(TCPIP_RX_BATCH_TIMEOUT_US)
 GCCFLAGS += -DCONFIG_TCPIP_RX_BATCH_PROFILE=$(TCPIP_RX_BATCH_PROFILE)
@@ -2002,15 +2050,28 @@ CPPFLAGS += -w
 CPPFLAGS += -Wall -Wpointer-arith -Wundef -Wno-write-strings -Wno-maybe-uninitialized
 
 LFLAGS = 
+ifeq ($(CARBOX_UI_HEAP_TRACE),1)
+LFLAGS += -Wl,--wrap=pvPortMalloc -Wl,--wrap=pvPortMallocExt \
+	-Wl,--wrap=vPortFree -Wl,--wrap=x264_malloc
+endif
 ifeq ($(WLAN_RX_DMA_SKB),1)
 AMSDU_CHILD_VERIFY := python3 ../../../component/common/drivers/wlan/realtek/wlan_rx_gdma/src/verify_amsdu_child_adapter.py --prefix $(CROSS_COMPILE)
 ifeq ($(RX_HANDOVER_DIAG),1)
 LFLAGS += -Wl,--wrap=rtw_queue_empty
+LFLAGS += -Wl,--wrap=rtw_list_insert_tail -Wl,--wrap=rtw_list_delete \
+	-Wl,--wrap=rtw_recv_indicatepkt -Wl,--wrap=rtw_vmfree -Wl,--wrap=rtw_recv_entry
+RECVFRAME_TRACE_VERIFY := python3 ../src/carbox/tools/verify_recvframe_trace.py --prefix $(CROSS_COMPILE)
 endif
 endif
 ifeq ($(AUDIO_STREAM_DIAG),1)
 LFLAGS += -Wl,--wrap=CAccessory_StatusNotify -Wl,--wrap=SocketRecvFrom \
-	-Wl,--wrap=udp_input
+	-Wl,--wrap=udp_input -Wl,--wrap=RTPJitterBufferGetFreeNode \
+	-Wl,--wrap=RTPJitterBufferPutBusyNode
+endif
+GCCFLAGS += -DCONFIG_AUDIO_JITTER_ADAPTIVE=$(AUDIO_JITTER_ADAPTIVE)
+ifeq ($(AUDIO_JITTER_ADAPTIVE),1)
+LFLAGS += -Wl,--wrap=RTPJitterBufferInit -Wl,--wrap=RTPJitterBufferRead \
+	-Wl,--wrap=RTPJitterBufferFree
 endif
 ifeq ($(UI_H264_DIAG),1)
 LFLAGS += -Wl,--wrap=IsFileExist -Wl,--wrap=lib_x264_encode \
@@ -2169,6 +2230,9 @@ ifeq ($(SCREEN_TX_DIRECT_CRYPTO),1)
 ifeq ($(SCREEN_QUEUE_PROFILE),0)
 LFLAGS += -Wl,--wrap=lwip_write
 endif
+endif
+ifeq ($(SCREEN_BLOCK_PROFILE)$(SCREEN_TX_DIRECT_CRYPTO)$(SCREEN_QUEUE_PROFILE),100)
+LFLAGS += -Wl,--wrap=lwip_write
 endif
 ifeq ($(USB_HCD_PROFILE),1)
 LFLAGS += -Wl,--wrap=usbh_hcd_hc_submit_request
@@ -2425,7 +2489,7 @@ CARBOX_SCREEN_WAIT_RELOC_PATCH := ../src/carbox/tools/patch_screen_wait_relocati
 CARBOX_REDUNDANT_COPY_PATCH := ../src/carbox/tools/patch_airplay_redundant_copy.py
 CARBOX_EVENT_RESPONSE_PATCH := ../src/carbox/tools/patch_airplay_event_response.py
 CARBOX_EVENT_READAHEAD_PATCH := ../src/carbox/tools/patch_airplay_event_readahead.py
-CARBOX_ACCESSORY_PATCH_STAMP := $(OBJ_DIR)/.accessory_patch_v7-zc$(VIDEO_HANDOVER_ZERO_COPY)-direct$(SCREEN_TX_DIRECT_CRYPTO)-wait$(SCREEN_QUEUE_EVENT_WAIT)-ackcache$(CAR_ACK_RESPONSE_CACHE)-readahead$(CAR_EVENT_READAHEAD_FIX)-iap2wait$(IAP2_COND_TIMEDWAIT_FIX)-ackts$(CAR_ACK_TIMESTAMP)
+CARBOX_ACCESSORY_PATCH_STAMP := $(OBJ_DIR)/.accessory_patch_v16-zc$(VIDEO_HANDOVER_ZERO_COPY)-direct$(SCREEN_TX_DIRECT_CRYPTO)-wait$(SCREEN_QUEUE_EVENT_WAIT)-txpoll$(SCREEN_TX_POLL_WAIT)-block$(SCREEN_BLOCK_PROFILE)-readahead$(CAR_EVENT_READAHEAD_FIX)-iap2wait$(IAP2_COND_TIMEDWAIT_FIX)-ackts$(CAR_ACK_TIMESTAMP)
 $(CARBOX_ACCESSORY_PATCH_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.accessory_patch_*
@@ -2445,6 +2509,8 @@ endif
 CARBOX_ACCESSORY2_HANDOVER_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2_handover.a
 CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_Accessory2_resource450.a
 CARBOX_RESOURCE450_PATCH := ../src/carbox/tools/patch_carplay_resource_450.py
+CARBOX_ACCESSORY2_PCM_TX_DIAG_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/lib_Accessory2_pcm_tx_diag.a
+CARBOX_PCM_TX_DIAG_PATCH := ../src/carbox/tools/patch_airplay_pcm_tx_diag.py
 CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/lib_Accessory2_vendor_private_mem.a
 CARBOX_SYSTEMLIB_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_SystemLib.a
 CARBOX_SYSTEMLIB_ALIGNED_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/lib_SystemLib_ui_aligned.a
@@ -2456,6 +2522,8 @@ CARBOX_SYSTEMLIB_UI565_PATCH := ../src/carbox/tools/patch_carplay_ui565_archive.
 CARBOX_UILIB_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_UiLib.a
 CARBOX_UILIB_PRIVATE_MEM_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/lib_UiLib_vendor_private_mem.a
 CARBOX_CARPLAY_HANDOVER_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/lib_CarPlay_chacha_m33_handover.a
+CARBOX_CARPLAY_JITTER_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/lib_CarPlay_jitter_adaptive.a
+CARBOX_CARPLAY_JITTER_BASE := $(if $(filter 1,$(VIDEO_HANDOVER_ZERO_COPY)),$(CARBOX_CARPLAY_HANDOVER_ARCHIVE),$(CARBOX_CARPLAY_ARCHIVE))
 $(CARBOX_CARPLAY_DERIVED_DIR):
 	@mkdir -p $@
 $(CARBOX_CARPLAY_LOCAL_ARCHIVE) $(CARBOX_CHACHA_VENDOR_PRE_RX_ARCHIVE) \
@@ -2466,7 +2534,7 @@ $(CARBOX_CARPLAY_LOCAL_ARCHIVE) $(CARBOX_CHACHA_VENDOR_PRE_RX_ARCHIVE) \
 		$(CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE) \
 		$(CARBOX_SYSTEMLIB_UI565_ARCHIVE) $(CARBOX_UI_X264_ARCHIVE) \
 		$(CARBOX_UILIB_PRIVATE_MEM_ARCHIVE) \
-		$(CARBOX_CARPLAY_HANDOVER_ARCHIVE): | $(CARBOX_CARPLAY_DERIVED_DIR)
+		$(CARBOX_CARPLAY_HANDOVER_ARCHIVE) $(CARBOX_CARPLAY_JITTER_ARCHIVE): | $(CARBOX_CARPLAY_DERIVED_DIR)
 # The vendor archive remains available for an immediate A/B fallback.  The O3
 # archive is rebuilt from upstream FDK AAC v0.1.6 with the RTL8195B/M33 DSP ISA.
 CARBOX_FDK_AAC_OPTIMIZED ?= 1
@@ -2547,10 +2615,9 @@ $(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE): $(CARBOX_CARPLAY_VENDOR_ARCHIVE) \
 		OUTPUT_DIR=$(abspath $(CARBOX_CARPLAY_DERIVED_DIR))
 application: $(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE)
 endif
-# The customer owns the screen frame buffer and queue. Keep the independent
-# AirPlay event and iAP2 fixes in a derived archive, leaving AirPlayScreen.o
-# byte-for-byte as supplied by the customer.
-ifneq ($(filter 1,$(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX)),)
+# The customer owns the screen frame buffer and queue. Release 13 integrates
+# the cached HID response call; derive an archive only for optional older fixes.
+ifneq ($(filter 1,$(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX) $(SCREEN_TX_POLL_WAIT)),)
 $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH) $(CARBOX_SCREEN_WAIT_RELOC_PATCH) \
 		$(CARBOX_REDUNDANT_COPY_PATCH) $(CARBOX_EVENT_RESPONSE_PATCH) \
@@ -2563,8 +2630,8 @@ $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
 		sh $(CARBOX_VIDEO_HANDOVER_PATCH) \
 			accessory-wait \
 			$(AR) $(OBJCOPY) $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) "$$tmp_archive" \
-			"$(if $(filter 1,$(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX)),AirPlayEvent.o) $(if $(filter 1,$(IAP2_COND_TIMEDWAIT_FIX)),iAP2Ctrl.o)" \
-			0 $(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX) $(CAR_ACK_TIMESTAMP); \
+			"$(if $(filter 1,$(SCREEN_TX_POLL_WAIT)),AirPlayScreen.o) $(if $(filter 1,$(CAR_EVENT_READAHEAD_FIX)),AirPlayEvent.o) $(if $(filter 1,$(IAP2_COND_TIMEDWAIT_FIX)),iAP2Ctrl.o)" \
+			0 0 $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX) $(CAR_ACK_TIMESTAMP) $(SCREEN_TX_POLL_WAIT) $(if $(filter 100,$(SCREEN_BLOCK_PROFILE)$(SCREEN_TX_DIRECT_CRYPTO)$(SCREEN_QUEUE_PROFILE)),1,0); \
 		if [ "$(CARBOX_PAIR_VERIFY_FASTPATH)" = 1 ]; then \
 			python3 $(CARBOX_PAIR_VERIFY_PATCH) $(AR) $(OBJCOPY) "$$tmp_archive" "$$tmp_archive"; \
 		fi; \
@@ -2575,10 +2642,25 @@ ifeq ($(CARBOX_RESOURCE_450_COMPAT),1)
 ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
 $(error CARBOX_RESOURCE_450_COMPAT requires the production CarPlay archive)
 endif
-CARBOX_RESOURCE450_BASE := $(if $(filter 1,$(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX)),$(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE),$(CARBOX_ACCESSORY2_VENDOR_ARCHIVE))
+CARBOX_RESOURCE450_BASE := $(if $(filter 1,$(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX) $(SCREEN_TX_POLL_WAIT)),$(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE),$(CARBOX_ACCESSORY2_VENDOR_ARCHIVE))
 $(CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE): $(CARBOX_RESOURCE450_BASE) $(CARBOX_RESOURCE450_PATCH)
 	python3 $(CARBOX_RESOURCE450_PATCH) $(AR) $(OBJCOPY) $< $@
 application: $(CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE)
+endif
+ifeq ($(AUDIO_STREAM_DIAG),1)
+ifeq ($(CARBOX_RESOURCE_450_COMPAT),1)
+CARBOX_PCM_TX_DIAG_BASE := $(CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE)
+else ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
+CARBOX_PCM_TX_DIAG_BASE := $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE)
+else ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO) $(SCREEN_QUEUE_EVENT_WAIT) $(IAP2_COND_TIMEDWAIT_FIX) $(SCREEN_TX_POLL_WAIT)),)
+CARBOX_PCM_TX_DIAG_BASE := $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
+else
+CARBOX_PCM_TX_DIAG_BASE := $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE)
+endif
+$(CARBOX_ACCESSORY2_PCM_TX_DIAG_ARCHIVE): $(CARBOX_PCM_TX_DIAG_BASE) \
+		$(CARBOX_PCM_TX_DIAG_PATCH) | $(CARBOX_CARPLAY_DERIVED_DIR)
+	python3 $(CARBOX_PCM_TX_DIAG_PATCH) $(AR) $(OBJCOPY) $< $@
+application: $(CARBOX_ACCESSORY2_PCM_TX_DIAG_ARCHIVE)
 endif
 ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
 $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
@@ -2587,8 +2669,8 @@ $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
 		$(CARBOX_ACCESSORY_PATCH_STAMP)
 	sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
 		$(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) $@ \
-		"AirPlayScreen.o $(if $(filter 1,$(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX)),AirPlayEvent.o) $(if $(filter 1,$(IAP2_COND_TIMEDWAIT_FIX)),iAP2Ctrl.o)" \
-		$(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX) $(CAR_ACK_TIMESTAMP)
+		"AirPlayScreen.o $(if $(filter 1,$(CAR_EVENT_READAHEAD_FIX)),AirPlayEvent.o) $(if $(filter 1,$(IAP2_COND_TIMEDWAIT_FIX)),iAP2Ctrl.o)" \
+		$(SCREEN_QUEUE_EVENT_WAIT) 0 $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX) $(CAR_ACK_TIMESTAMP) $(SCREEN_TX_POLL_WAIT)
 application: $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE)
 endif
 ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW)),)
@@ -2650,6 +2732,13 @@ $(CARBOX_CARPLAY_HANDOVER_ARCHIVE): $(CARBOX_CARPLAY_ARCHIVE) \
 
 application: $(CARBOX_CARPLAY_HANDOVER_ARCHIVE)
 endif
+ifeq ($(AUDIO_JITTER_ADAPTIVE),1)
+$(CARBOX_CARPLAY_JITTER_ARCHIVE): $(CARBOX_CARPLAY_JITTER_BASE) \
+		../src/carbox/tools/patch_carplay_jitter_archive.py
+	python3 ../src/carbox/tools/patch_carplay_jitter_archive.py \
+		$(AR) $(OBJCOPY) $< $@
+application: $(CARBOX_CARPLAY_JITTER_ARCHIVE)
+endif
 LFLAGS += -Wl,--no-warn-mismatch
 LIBFLAGS += -Wl,--whole-archive
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_link.a
@@ -2679,11 +2768,13 @@ LIBFLAGS += $(CARBOX_FDK_AAC_ARCHIVE)
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_init.a
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_zlib.a
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_AndroidAuto.a
-ifeq ($(CARBOX_RESOURCE_450_COMPAT),1)
+ifeq ($(AUDIO_STREAM_DIAG),1)
+LIBFLAGS += $(CARBOX_ACCESSORY2_PCM_TX_DIAG_ARCHIVE)
+else ifeq ($(CARBOX_RESOURCE_450_COMPAT),1)
 LIBFLAGS += $(CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE)
 else ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
 LIBFLAGS += $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE)
-else ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO) $(SCREEN_QUEUE_EVENT_WAIT) $(IAP2_COND_TIMEDWAIT_FIX)),)
+else ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO) $(SCREEN_QUEUE_EVENT_WAIT) $(IAP2_COND_TIMEDWAIT_FIX) $(SCREEN_TX_POLL_WAIT)),)
 LIBFLAGS += $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
 else
 LIBFLAGS += $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE)
@@ -2703,11 +2794,19 @@ LIBFLAGS += $(CARBOX_CHACHA_VENDOR_PRIVATE_SW_ARCHIVE)
 else ifeq ($(CHACHA_VENDOR_PRIVATE_MEM),1)
 LIBFLAGS += $(CARBOX_CHACHA_VENDOR_PRIVATE_MEM_ARCHIVE)
 else ifeq ($(VIDEO_HANDOVER_ZERO_COPY),1)
+ifeq ($(AUDIO_JITTER_ADAPTIVE),1)
+LIBFLAGS += $(CARBOX_CARPLAY_JITTER_ARCHIVE)
+else
 LIBFLAGS += $(CARBOX_CARPLAY_HANDOVER_ARCHIVE)
+endif
 else ifeq ($(CHACHA_VENDOR_TRACE),1)
 LIBFLAGS += $(CARBOX_CARPLAY_VENDOR_ARCHIVE)
 else
+ifeq ($(AUDIO_JITTER_ADAPTIVE),1)
+LIBFLAGS += $(CARBOX_CARPLAY_JITTER_ARCHIVE)
+else
 LIBFLAGS += $(CARBOX_CARPLAY_ARCHIVE)
+endif
 endif
 ifeq ($(CHACHA_PRE_RX_VENDOR),1)
 LIBFLAGS += $(CARBOX_CHACHA_VENDOR_PRE_RX_ARCHIVE)
@@ -2813,8 +2912,14 @@ application: prerequirement $(SRC_O) $(ERAM_O) $(SRAM_O) $(CINIT_O) $(ASM_O) $(I
 			fi; \
 		fi; \
 	done
+ifneq ($(RECVFRAME_TRACE_VERIFY),)
+	@$(RECVFRAME_TRACE_VERIFY) --archive $(WLAN_RX_HOOK_ARCHIVE)
+endif
 	@echo "  LD   linking..."
 	@$(LD) $(LFLAGS) -o $(BIN_DIR)/$(TARGET).axf  $(OBJ_LIST) $(ROMIMG) $(LIBFLAGS) -T$(LDSCRIPT)
+ifneq ($(RECVFRAME_TRACE_VERIFY),)
+	@$(RECVFRAME_TRACE_VERIFY) --elf $(BIN_DIR)/$(TARGET).axf
+endif
 ifneq ($(AMSDU_CHILD_VERIFY),)
 	@$(AMSDU_CHILD_VERIFY) --archive $(WLAN_RX_HOOK_ARCHIVE) --elf $(BIN_DIR)/$(TARGET).axf
 endif

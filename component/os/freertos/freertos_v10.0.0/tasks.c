@@ -40,6 +40,10 @@ task.h is included from an application file. */
 #include "timers.h"
 #include "stack_macros.h"
 
+#if CONFIG_RX_HANDOVER_DIAG
+#include "rx_handover_diag.h"
+#endif
+
 /* Lint e961 and e750 are suppressed as a MISRA exception justified because the
 MPU ports require MPU_WRAPPERS_INCLUDED_FROM_API_FILE to be defined for the
 header files above, but not in this file, in order to generate the correct
@@ -1211,6 +1215,10 @@ static void prvAddNewTaskToReadyList( TCB_t *pxNewTCB )
 			/* If null is passed in here then it is the calling task that is
 			being deleted. */
 			pxTCB = prvGetTCBFromHandle( xTaskToDelete );
+#if CONFIG_RX_HANDOVER_DIAG
+            /* A deleted queue sender never returns to clear its wait record. */
+            carbox_rxhd_timer_task_deleted(pxTCB);
+#endif
 
 			/* Remove task from the ready list. */
 			if( uxListRemove( &( pxTCB->xStateListItem ) ) == ( UBaseType_t ) 0 )
