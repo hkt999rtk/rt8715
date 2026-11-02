@@ -151,9 +151,13 @@ cp "$input_archive" "$output_archive"
 			# instead of the old 10-tick constant to the poll wait helper.
 			"$objcopy_tool" --add-symbol \
 				carbox_screen_tx_poll_wait=0,global \
+				--add-symbol carbox_screen_tcp_write=0,global \
 				"patched.o" "patched-with-tx-poll.o"
 			mv "patched-with-tx-poll.o" "patched.o"
 			python3 "$screen_wait_patcher" "patched.o" tx-poll
+			# Enable the tested USB RTO policy before the first write, even
+			# when the diagnostic write wrapper is compiled out.
+			python3 "$screen_wait_patcher" "patched.o" tx-write
 		fi
 		if [ "$screen_frame_id_profile" = 1 ] && [ "$member" = AirPlayScreen.o ]; then
 			# Keep the customer frame sender intact.  Redirect only normal-frame

@@ -11,6 +11,7 @@
 #include "diag.h"
 #include "hal_timer.h"
 #include "lwip/err.h"
+#include "lwip/priv/tcp_wake_trace.h"
 #include "lwip/sockets.h"
 #include "lwip_intf.h"
 
@@ -87,6 +88,9 @@ void carbox_screen_normal_frame_probe(const void *data, int length)
 		.length = length > 0 ? (uint32_t)length : 0U,
 	};
 	AirPlayScreen_SendScreenNormalFrame(data, length);
+#if CONFIG_SCREEN_WAKE_TRACE
+	tcp_wake_frame_end(screen_tx_socket);
+#endif
 	finished = screen_frame;
 	elapsed_us = hal_read_curtime_us() - finished.started_us;
 	screen_frame.id = 0U;
@@ -165,9 +169,29 @@ ssize_t __wrap_lwip_write(int socket, const void *buffer, size_t bytes)
 	int ncm_ok = -1;
 
 	if (!screen_tx_is_sender()) return __real_lwip_write(socket, buffer, bytes);
+#if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
+	/* Track once per connection, then periodically to handle socket reuse. */
+	if (socket != screen_tx_socket ||
+	    (screen_frame.id != 0U && screen_frame.writes == 0U) ||
+	    (uint32_t)(hal_read_curtime_us() - screen_tx_last_track_us) >=
+	    SCREEN_TX_TRACK_INTERVAL_US) {
+		(void)lwip_diag_screen_tcp_ack_track(socket);
+		screen_tx_socket = socket;
+		screen_tx_last_track_us = hal_read_curtime_us();
+	}
+#else
+	(void)screen_tx_socket;
+	(void)screen_tx_last_track_us;
+#endif
+#if CONFIG_SCREEN_WAKE_TRACE
+	tcp_wake_write_begin(socket, screen_frame.id);
+#endif
 	start_us = hal_read_curtime_us();
 	result = __real_lwip_write(socket, buffer, bytes);
 	error = result < 0 ? lwip_err : 0;
+#if CONFIG_SCREEN_WAKE_TRACE
+	tcp_wake_write_end(socket, (int)result, error);
+#endif
 	now_us = hal_read_curtime_us();
 	write_us = now_us - start_us;
 	if (screen_frame.id != 0U) {
@@ -182,19 +206,7 @@ ssize_t __wrap_lwip_write(int socket, const void *buffer, size_t bytes)
 		}
 	}
 
-#if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
-	/* Track once per connection, then periodically to handle socket reuse. */
-	if (socket != screen_tx_socket ||
-	    (uint32_t)(now_us - screen_tx_last_track_us) >=
-	    SCREEN_TX_TRACK_INTERVAL_US) {
-		(void)lwip_diag_screen_tcp_ack_track(socket);
-		screen_tx_socket = socket;
-		screen_tx_last_track_us = now_us;
-	}
-#else
-	(void)screen_tx_socket;
-	(void)screen_tx_last_track_us;
-#endif
+
 	if (result < 0 && (error == EAGAIN || error == EWOULDBLOCK) &&
 	    (first_stall_id != 0U || screen_tx_last_sample_us == 0U ||
 	     (uint32_t)(now_us - screen_tx_last_sample_us) >=

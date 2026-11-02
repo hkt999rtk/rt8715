@@ -21,6 +21,7 @@
 #include "video_handover_zero_copy.h"
 #include "screen_tx_direct_crypto.h"
 #include "screen_tx_probe.h"
+#include "lwip/priv/tcp_wake_trace.h"
 #include "screen_queue_wait.h"
 #include "screen_rx_stage_profiler.h"
 #include "screen_tcp_write_profiler.h"
@@ -30,6 +31,7 @@
 #include "ncm/usb_boot_profiler.h"
 #include "ncm/ncm_tx_profile.h"
 #include "ethernetif.h"
+#include "lwip/priv/tcp_recovery.h"
 
 /* The customer crypto API no longer needs the legacy alias wrapper that
  * supplied this optional per-record latency report. */
@@ -1655,6 +1657,146 @@ static void pcprof_report(uint32_t sequence, uint32_t buffer, uint32_t count,
 #endif
 }
 
+#if CONFIG_SCREEN_WAKE_TRACE
+static unsigned long pcprof_wake_age(const struct tcp_wake_record *r,
+                                     unsigned flag, uint32_t time)
+{
+	return (r->seen & flag) ? (unsigned long)(time - r->start_ms) : 0xffffffffUL;
+}
+static void pcprof_wake_record(const struct tcp_wake_record *r, int pending)
+{
+	rt_printf("[TCPWAKE] id=%lu conn=%lu frame=%lu fd=%ld ports=%u/%u start_ms=%lu duration_ms=%lu pending=%d end=%u eagain=%lu write_ret/err=%ld/%ld\r\n",
+		(unsigned long)r->id, (unsigned long)r->connection,
+		(unsigned long)r->frame, (long)r->fd, r->local_port, r->remote_port,
+		(unsigned long)r->start_ms, (unsigned long)(r->end_ms-r->start_ms),
+		pending, r->reason, (unsigned long)r->eagain, (long)r->result, (long)r->error);
+	rt_printf("[TCPWAKE_ACK] id=%lu ack/advance/free=%lu/%lu/%lu below/ready=%lu/%lu last_ack/buf/qlen/wnd/cwnd=%lu/%lu/%lu/%lu/%lu first_ms ack/ready/plus/signal=%lu/%lu/%lu/%lu\r\n",
+		(unsigned long)r->id, (unsigned long)r->acks, (unsigned long)r->advanced,
+		(unsigned long)r->freed, (unsigned long)r->below, (unsigned long)r->ready,
+		(unsigned long)r->ackno, (unsigned long)r->sndbuf, (unsigned long)r->qlen,
+		(unsigned long)r->wnd, (unsigned long)r->cwnd,
+		pcprof_wake_age(r, TCP_WAKE_SEEN_ACK, r->ack_first_ms),
+		pcprof_wake_age(r, TCP_WAKE_SEEN_READY, r->ready_first_ms),
+		pcprof_wake_age(r, TCP_WAKE_SEEN_PLUS, r->plus_first_ms),
+		pcprof_wake_age(r, TCP_WAKE_SEEN_SIGNAL, r->signal_first_ms));
+	rt_printf("[TCPWAKE_RUN] id=%lu plus/transition/waiters/signal=%lu/%lu/%u/%lu polls/ready/timeout/error=%lu/%lu/%lu/%lu matched=%lu max_ms signal_poll/poll_write/write=%lu/%lu/%lu last_poll_ret/revents=%ld/%lx\r\n",
+		(unsigned long)r->id, (unsigned long)r->sendplus,
+		(unsigned long)r->transitions, r->waiters, (unsigned long)r->signals,
+		(unsigned long)r->polls, (unsigned long)r->poll_ready,
+		(unsigned long)r->timeouts, (unsigned long)r->poll_errors,
+		(unsigned long)r->matched_signals, (unsigned long)r->signal_to_poll_max_ms,
+		(unsigned long)r->poll_to_write_max_ms, (unsigned long)r->write_max_ms,
+		(long)r->poll_result, (unsigned long)r->revents);
+}
+static void pcprof_tcp_wake_report(void)
+{
+	struct tcp_wake_record r;
+	uint32_t lost = 0;
+	unsigned emitted = 0;
+	static int announced;
+	if (!announced) {
+		announced = 1;
+		rt_printf("[TCPWAKE_CONFIG] slots=%u record_bytes=%u sndlowat=%lu qlowat=%lu unknown_ms=4294967295\r\n",
+			TCP_WAKE_SLOTS, (unsigned)sizeof(r), (unsigned long)TCP_SNDLOWAT,
+			(unsigned long)TCP_SNDQUEUELOWAT);
+	}
+	while (emitted < 16 && tcp_wake_pop(&r, &lost)) {
+		pcprof_wake_record(&r, 0); ++emitted;
+		vTaskDelay(1);
+	}
+	if (tcp_wake_active(&r)) pcprof_wake_record(&r, 1);
+	if (emitted || lost)
+		rt_printf("[TCPWAKE_QUEUE] emitted=%u overwritten_total=%lu\r\n", emitted, (unsigned long)lost);
+}
+#endif
+
+#if LWIP_TCP_RECOVERY && CONFIG_TCP_RECOVERY_TRACE
+static void pcprof_tcp_recovery_causes(void)
+{
+	struct tcp_recovery_cause c;
+	u32_t dropped = 0, evicted = 0;
+	unsigned n;
+	for (n = 0; n < TCP_RECOVERY_CAUSE_SLOTS; ++n) {
+		if (!tcp_recovery_cause_pop(&c, &dropped, &evicted)) break;
+#define CU(x) ((unsigned long)(x))
+		rt_printf("[TCPCAUSE] rto_id=%lu conn=%lu ports=%u/%u full_id=%lu skip_id=%lu full_age_ms=%lu\r\n",
+			CU(c.due.id), CU(c.due.connection), c.due.local_port, c.due.remote_port,
+			CU(c.full.id), CU(c.skip.id), CU(c.full.id ? c.due.ms-c.full.ms : 0xffffffffU));
+		rt_printf("[TCPCAUSE_FULL] rto_id=%lu ms=%lu ack/next/recover=%lu/%lu/%lu cwnd/wnd=%lu/%lu sndbuf/qlen=%lu/%u\r\n",
+			CU(c.due.id), CU(c.full.ms), CU(c.full.lastack), CU(c.full.snd_nxt), CU(c.full.recover_end),
+			CU(c.full.cwnd), CU(c.full.wnd), CU(c.full.sndbuf), c.full.qlen);
+		rt_printf("[TCPCAUSE_SKIP] rto_id=%lu ms=%lu reason_last/all=%lx/%lx count=%lu ack/next/recover=%lu/%lu/%lu flags=%x dup=%u\r\n",
+			CU(c.due.id), CU(c.skip.ms), CU(c.skip.skip_reason), CU(c.skip_mask), CU(c.skips),
+			CU(c.skip.lastack), CU(c.skip.snd_nxt), CU(c.skip.recover_end), c.skip.flags, c.skip.dupacks);
+		rt_printf("[TCPCAUSE_ACK] rto_id=%lu since_full packets/progress/bytes=%lu/%lu/%lu last_progress_ms/ack=%lu/%lu due_ack_age/progress_age=%lu/%lu\r\n",
+			CU(c.due.id), CU(c.ack_packets), CU(c.progress_calls), CU(c.progress_bytes),
+			CU(c.progress_ms), CU(c.progress_ack), CU(c.due.ack_age_ms), CU(c.due.progress_age_ms));
+		rt_printf("[TCPCAUSE_DUE] rto_id=%lu ms=%lu ack/next/recover=%lu/%lu/%lu flags=%x cwnd/wnd=%lu/%lu sndbuf/qlen=%lu/%u timer_age/rto=%lu/%lu last_tx_seq/end/age=%lu/%lu/%lu\r\n",
+			CU(c.due.id), CU(c.due.ms), CU(c.due.lastack), CU(c.due.snd_nxt), CU(c.due.recover_end), c.due.flags,
+			CU(c.due.cwnd), CU(c.due.wnd), CU(c.due.sndbuf), c.due.qlen, CU(c.due.timer_age_ms), CU(c.due.rto_ms),
+			CU(c.due.tx_seq), CU(c.due.tx_end), CU(c.due.tx_age_ms));
+        rt_printf("[TCPCAUSE_HEUR] rto_id=%lu skip_ack_advance/rto_end/reject=%lu/%lu/%x due_ack_advance/rto_end/reject=%lu/%lu/%x\r\n",
+            CU(c.due.id), CU(c.skip.ack_advance), CU(c.skip.rto_end), c.skip.heuristic_reject,
+            CU(c.due.ack_advance), CU(c.due.rto_end), c.due.heuristic_reject);
+
+#undef CU
+		vTaskDelay(1);
+	}
+	if (n || dropped || evicted)
+		rt_printf("[TCPCAUSE_QUEUE] emitted=%u dropped_new_total=%lu history_evicted_total=%lu\r\n",
+			n, (unsigned long)dropped, (unsigned long)evicted);
+}
+
+static void pcprof_tcp_recovery_events(void)
+{
+	static int config_printed;
+	static const char *const names[] = { "invalid", "fast", "partial_first", "full",
+		"fast_skip", "rto_due", "rto_arm", "rto_tx", "rto_ack",
+		"retx", "output_error", "busy", "ack_gap", "ack_heuristic", "heuristic_ack" };
+	struct tcp_recovery_event e;
+	u32_t lost = 0;
+	int urgent;
+	unsigned n;
+	if (!config_printed) {
+		rt_printf("[TCPREC_EVT][CONFIG] slots_normal/rto=%u/%u record_bytes=%u pcb_trace_bytes=%u ages_unknown=4294967295 cause_slots=8 ack_heuristic=1 heuristic_reject_bits=no_progress:1/cwnd:2/large_ack:4/state:8/zero_wnd:16 skip_bits=no_unacked:1/in_recovery:2/in_rto:4/boundary:8\r\n",
+			TCP_RECOVERY_TRACE_SLOTS, TCP_RECOVERY_TRACE_SLOTS,
+			(unsigned)sizeof(e), (unsigned)sizeof(((struct tcp_recovery_state *)0)->trace));
+		config_printed = 1;
+	}
+	pcprof_tcp_recovery_causes();
+	/* RTO evidence first; IDs/timestamps restore chronology across queues.
+	 * Bound work even if the TCP task keeps producing while UART is active. */
+	for (urgent = 1; urgent >= 0; --urgent) {
+		for (n = 0; n < TCP_RECOVERY_TRACE_SLOTS; ++n) {
+			if (!tcp_recovery_trace_pop(urgent, &e, &lost)) break;
+#define EV(x) ((unsigned long)e.x)
+			rt_printf("[TCPREC_EVT] id=%lu conn=%lu ms=%lu event=%s ports=%u/%u state/flags=%u/%x dup/nrtx=%u/%u skip_reason=%x\r\n",
+				EV(id), EV(connection), EV(ms), e.kind < sizeof(names)/sizeof(names[0]) ? names[e.kind] : "invalid",
+				e.local_port, e.remote_port, e.state, e.flags, e.dupacks, e.nrtx, e.skip_reason);
+			rt_printf("[TCPREC_SEQ] id=%lu ack/next/recover=%lu/%lu/%lu valid=%u heads=%u unacked=%lu/%u/%u unsent=%lu/%u/%u\r\n",
+				EV(id), EV(lastack), EV(snd_nxt), EV(recover_end), e.recover_valid, e.heads,
+				EV(unacked_seq), e.unacked_len, e.unacked_ref, EV(unsent_seq), e.unsent_len, e.unsent_ref);
+			rt_printf("[TCPREC_WIN] id=%lu cwnd/ssthresh/wnd=%lu/%lu/%lu sndbuf/qlen=%lu/%u timer_age/rto/srtt_ms=%lu/%lu/%lu pending=%u\r\n",
+				EV(id), EV(cwnd), EV(ssthresh), EV(wnd), EV(sndbuf), e.qlen,
+				EV(timer_age_ms), EV(rto_ms), EV(srtt_ms), e.pending);
+			rt_printf("[TCPREC_IO] id=%lu ack_no/wnd=%lu/%lu ack_age/gap/progress_age_ms=%lu/%lu/%lu tx_seq/end/age_ms=%lu/%lu/%lu partial_count=%lu\r\n",
+				EV(id), EV(ack_no), EV(ack_wnd), EV(ack_age_ms), EV(ack_gap_ms), EV(progress_age_ms),
+				EV(tx_seq), EV(tx_end), EV(tx_age_ms), EV(partial_count));
+            if (e.kind == TCP_TRACE_FAST_SKIP || e.kind == TCP_TRACE_HEURISTIC ||
+                e.kind == TCP_TRACE_HEURISTIC_ACK || e.kind == TCP_TRACE_RTO_DUE) {
+                rt_printf("[TCPHEUR_EVT] id=%lu ack_advance=%lu rto_end=%lu reject=%x first_progress_age_ms=%lu\r\n",
+                    EV(id), EV(ack_advance), EV(rto_end), e.heuristic_reject, EV(heuristic_age_ms));
+            }
+#undef EV
+			/* No locks held while printing or yielding. */
+			vTaskDelay(1);
+		}
+		rt_printf("[TCPREC_EVT][QUEUE] class=%s emitted=%u overwritten_total=%lu\r\n",
+			urgent ? "rto" : "normal", n, (unsigned long)lost);
+	}
+}
+#endif
+
 static void pcprof_task(void *arg)
 {
 	timer_id_t timer_id;
@@ -1865,9 +2007,15 @@ static void pcprof_task(void *arg)
 #if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
 		lwip_diag_screen_tcp_ack_report(sequence);
 #endif
+#if LWIP_TCP_RECOVERY && CONFIG_TCP_RECOVERY_TRACE
+		pcprof_tcp_recovery_events();
+#endif
 #if defined(CONFIG_SCREEN_BLOCK_PROFILE) && CONFIG_SCREEN_BLOCK_PROFILE && \
 	!CONFIG_SCREEN_TX_DIRECT_CRYPTO && !CONFIG_SCREEN_QUEUE_PROFILE
 		carbox_screen_tx_probe_report(sequence);
+#if CONFIG_SCREEN_WAKE_TRACE
+		pcprof_tcp_wake_report();
+#endif
 #endif
 #if defined(CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE) && \
 	CONFIG_SCREEN_RX_RATE_LIMIT_PROFILE

@@ -1,0 +1,98 @@
+Screen ACK -> poll -> write evidence (2026-11-02)
+
+Build, in addition to the usual external CROSS_COMPILE prefix:
+  make -j8 ram_is TCP_RECOVERY_TRACE=1 SCREEN_WAKE_TRACE=1 \
+    PC_PROFILER=1 PC_PROFILER_SELF_REPORT=1 SCREEN_BLOCK_PROFILE=1 \
+    SCREEN_TCP_ACK_PROFILE=1 SCREEN_TX_POLL_WAIT=1 SCREEN_TX_POLL_TIMEOUT_MS=250
+
+SCREEN_WAKE_TRACE defaults to 0. It changes no PCB layout, window, timer,
+priority, socket result, errno or retry policy. Existing frame/ACK/NCM/CPU
+reports and TCPREC_* events remain available. This build still uses the
+vendor AirPlayScreen.o with the poll/frame instrumentation patches.
+
+Collection:
+  Record from boot through the stall and at least 20 seconds afterwards.
+  TCPWAKE_CONFIG proves this observer is present and prints the actual low-water
+  thresholds. Times are sys_now() milliseconds, NOT the microsecond hardware
+  clock used by some other logs. Unsigned subtraction handles one clock wrap.
+
+Correlation:
+  TCPWAKE / TCPWAKE_ACK / TCPWAKE_RUN share id. frame links SCREENFRAME.
+  conn is a connection generation, separate from TCPREC conn identifiers.
+  Use ports and time to join TCPREC. fd/PCB address reuse does not preserve conn.
+  Tracking is refreshed before the first write of each normal frame; tcp_free
+  invalidates the observer. The reporter retains only value copies, no PCB.
+
+An episode begins at SENDMINUS (socket marked not writable), or at the sender's
+first EAGAIN if no SENDMINUS was captured. Only episodes actually containing
+EAGAIN are retained. It ends on the first positive write, terminal write result,
+frame return, PCB destruction or connection replacement. A positive write is
+local TCP acceptance, NOT USB completion/peer ACK/display. Several episodes
+can belong to one frame; one positive partial write ends an episode.
+
+TCPWAKE:
+  start_ms = absolute observer time; duration_ms = end/snapshot minus start.
+  pending=1 is an active snapshot; the same id may appear again when completed.
+  end=1 positive write, 2 terminal result (including zero), 3 frame returned,
+      4 PCB freed, 5 tracked connection replaced; 0 means still active.
+  write_ret/err is the last observed write result/error.
+
+TCPWAKE_ACK:
+  ack = TCP ACK packets observed during this episode.
+  advance = cumulative lastack progression in bytes.
+  free = bytes actually credited from freed segments to snd_buf.
+  advance and free may differ when an ACK does not cover a whole segment.
+  below/ready count ACKs below/above the same byte AND pbuf thresholds used
+  by sent_tcp. This is a snapshot after ACK processing, before sent callback;
+  it is not itself a SENDPLUS notification.
+  last_ack/buf/qlen/wnd/cwnd = last ACK observation; unknown if ack=0.
+  wnd is peer-advertised accepted TCP window, not available window after flight.
+  first_ms ack/ready/plus/signal are OFFSETS from start_ms, not absolute times.
+  4294967295 means that stage was not observed, NOT a long delay.
+
+TCPWAKE_RUN:
+  plus = SENDPLUS notifications; transition = actual sendevent 0 -> 1 cases.
+  waiters = select_waiting value at the LAST SENDPLUS (not the number of tasks
+  necessarily woken); signal = actual writable poll semaphore notifications.
+  polls/ready/timeout/error classify poll returns; raw last result/revents kept.
+  matched = poll calls with a signal observed during that SAME poll call.
+  signal_poll = maximum matched signal-to-poll-return duration, including
+  signaling, scheduling, core-lock acquisition and poll cleanup. It is NOT
+  a pure scheduler latency measurement. Zero with matched=0 means no sample.
+  poll_write = max poll-return-to-next-write-start duration.
+  write = max time spent in a write call during the episode.
+  Each maximum may come from a different retry; DO NOT add these maxima to
+  estimate a single wait. Assumes the existing single ScreenThread poll writer.
+
+Interpretation:
+  ACK absent / free=0: no observed send-credit recovery in this episode.
+  free>0 but below increases: ACK arrived, writable thresholds not yet met.
+  ready observed, plus absent: examine callback/notification path; alone does
+    not prove a lost wake (e.g. an ACK freed no complete segment).
+  plus without signal: may be normal if poll was not waiting yet; poll's second
+    readiness scan prevents losing a transition during registration.
+  matched>0 and signal_poll large: delay between notification and poll return.
+  poll_write large: application-side work/scheduling before retry.
+  write large: examine socket/core execution/lock wait.
+  Combine these with TCPREC FAST_SKIP/RTO_* and NCM/CPU statistics.
+
+Overhead and limits:
+  Fixed 32-record ring plus one active episode, no allocation/UART/list walks
+  in the new hooks. Short SYS_ARCH_PROTECT sections protect counters/copies.
+  Reporter prints at most 16 completed episodes and one active snapshot per
+  existing report cycle, yielding one tick between completed records.
+  Overflow replaces the oldest completed record; overwritten_total is
+  cumulative. It never changes TCP ownership or flow control. Existing older
+  SCREENFRAME/screen block prints are still present in this diagnostic build.
+  All diagnostic output has nonzero overhead; compare repeatable tests.
+
+Host checks:
+  TEST_CFLAGS='-fsanitize=address,undefined' sh run_wake_trace.sh
+  TEST_CFLAGS='-DCONFIG_SCREEN_WAKE_TRACE=1 -DCONFIG_TCP_RECOVERY_TRACE=1' \
+    sh run.sh wake_ack_path trace_evidence trace_fast trace_wrap
+  TEST_CFLAGS='-DCONFIG_SCREEN_WAKE_TRACE=1 -DCONFIG_TCP_RECOVERY_TRACE=1' sh run.sh
+  sh run.sh
+
+The host checks cover observation correlation, threshold crossing, timeout,
+clock wrap, same fd/address reuse, overflow and actual TCP ACK/free hooks.
+They do not reproduce the board's FreeRTOS task scheduling or USB peer timing.

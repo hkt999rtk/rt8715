@@ -51,6 +51,15 @@
  */
 #include "lwipopts.h"
 /* RFC 3042 / 6582 recovery and millisecond RTO clock. */
+/* Bounded TCP recovery evidence; UART output belongs to the reporter task. */
+#ifndef CONFIG_SCREEN_WAKE_TRACE
+#define CONFIG_SCREEN_WAKE_TRACE 0
+#endif
+
+#ifndef CONFIG_TCP_RECOVERY_TRACE
+#define CONFIG_TCP_RECOVERY_TRACE 0
+#endif
+
 #ifndef LWIP_TCP_RECOVERY
 #define LWIP_TCP_RECOVERY 0
 #endif

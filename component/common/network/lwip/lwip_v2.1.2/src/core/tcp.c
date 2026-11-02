@@ -98,6 +98,7 @@
  */
 
 #include "lwip/opt.h"
+#include "lwip/priv/tcp_wake_trace.h"
 
 #if LWIP_TCP /* don't build if not configured for use in lwipopts.h */
 
@@ -605,6 +606,9 @@ void
 tcp_free(struct tcp_pcb *pcb)
 {
   LWIP_ASSERT("tcp_free: LISTEN", pcb->state != LISTEN);
+#if CONFIG_SCREEN_WAKE_TRACE
+  tcp_wake_forget(pcb);
+#endif
 #if defined(CONFIG_SCREEN_RX_RATE_LIMIT) && CONFIG_SCREEN_RX_RATE_LIMIT
   tcp_screen_rx_rate_limit_disable(pcb);
 #endif

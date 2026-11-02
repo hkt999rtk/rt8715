@@ -42,6 +42,10 @@
  */
 
 #include "lwip/opt.h"
+#include "lwip/priv/tcp_wake_trace.h"
+#if CONFIG_SCREEN_WAKE_TRACE
+#include "lwip/sys.h"
+#endif
 
 #if LWIP_TCP /* don't build if not configured for use in lwipopts.h */
 
@@ -387,12 +391,13 @@ lwip_diag_screen_tcp_ack_report(unsigned int sequence)
     tcp_recovery_snapshot(&r);
     if (!configuration_reported) {
       configuration_reported = 1;
-      rt_printf("[TCPREC][CONFIG] limited_transmit=1 newreno=1 rtt_clock=ms "
-                "check_ms=%u rto_min/max_ms=%u/%u initial_ms=3000 scope=all_tcp\r\n",
-                TCP_RECOVERY_INTERVAL, TCP_RECOVERY_RTO_MIN, TCP_RECOVERY_RTO_MAX);
+      rt_printf("[TCPREC][CONFIG] limited_transmit=1 newreno=1 ack_heuristic=1 rtt_clock=ms "
+                "check_ms=%u rto_min/max_ms=%u/%u initial_ms=3000 scope=all_tcp usb_screen_initial/min_ms=%u/%u\r\n",
+                TCP_RECOVERY_INTERVAL, TCP_RECOVERY_RTO_MIN, TCP_RECOVERY_RTO_MAX,
+                TCP_RECOVERY_USB_SCREEN_RTO_MIN, TCP_RECOVERY_USB_SCREEN_RTO_MIN);
     }
     if (r.lt_opportunities || r.fast || r.partial || r.full || r.busy || r.rto ||
-        r.output_error || r.rtt_samples) {
+        r.output_error || r.rtt_samples || r.heuristic_reject || r.heuristic_progress) {
       rt_printf("[TCPREC][%u] scope=all_tcp lt_opportunity/sent=%lu/%lu "
                 "fast/partial/full=%lu/%lu/%lu rto=%lu busy_retry=%lu output_error=%lu "
                 "recovery_max_ms=%lu deadline_late_max_ms=%lu\r\n",
@@ -400,6 +405,11 @@ lwip_diag_screen_tcp_ack_report(unsigned int sequence)
                 (unsigned long)r.fast, (unsigned long)r.partial, (unsigned long)r.full,
                 (unsigned long)r.rto, (unsigned long)r.busy, (unsigned long)r.output_error,
                 (unsigned long)r.recovery_max_ms, (unsigned long)r.deadline_late_max_ms);
+      rt_printf("[TCPHEUR][%u] scope=all_tcp enter/from_rto/reject=%lu/%lu/%lu "
+                "first_progress/rto_before_progress=%lu/%lu first_progress_max_ms=%lu\r\n",
+                sequence, (unsigned long)r.heuristic_enter, (unsigned long)r.heuristic_from_rto,
+                (unsigned long)r.heuristic_reject, (unsigned long)r.heuristic_progress,
+                (unsigned long)r.heuristic_timeout, (unsigned long)r.heuristic_progress_max_ms);
       rt_printf("[TCPREC][%u] rtt_samples/avg/max_ms=%lu/%lu/%lu "
                 "srtt/rto_ms=%lu/%lu last_event/kind_ms=%u/%lu last_local/remote=%u/%u seq/ack=%lu/%lu cwnd/flight=%lu/%lu event_rto_ms=%lu\r\n",
                 sequence, (unsigned long)r.rtt_samples,
@@ -1901,6 +1911,11 @@ tcp_receive(struct tcp_pcb *pcb)
   #endif
   u32_t right_wnd_edge;
   int found_dupack = 0;
+#if CONFIG_SCREEN_WAKE_TRACE
+  u32_t wake_input_ms = sys_now();
+  u32_t wake_freed_before = recv_acked;
+  u32_t wake_lastack_before = pcb->lastack;
+#endif
 #if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
   tcpwnd_size_t screen_ack_acked = 0;
   tcpwnd_size_t screen_ack_old_window = pcb->snd_wnd;
@@ -1912,6 +1927,9 @@ tcp_receive(struct tcp_pcb *pcb)
   LWIP_ASSERT("tcp_receive: wrong state", pcb->state >= ESTABLISHED);
 
   if (flags & TCP_ACK) {
+#if LWIP_TCP_RECOVERY && CONFIG_TCP_RECOVERY_TRACE
+    tcp_recovery_trace_ack(pcb, ackno, SND_WND_SCALE(pcb, tcphdr->wnd));
+#endif
     right_wnd_edge = pcb->snd_wnd + pcb->snd_wl2;
 
     /* Update window. */
@@ -2177,6 +2195,10 @@ tcp_receive(struct tcp_pcb *pcb)
       pcb->rttest = 0;
     }
 #endif /* LWIP_TCP_RECOVERY */
+#if CONFIG_SCREEN_WAKE_TRACE
+    tcp_wake_ack(pcb, ackno, pcb->lastack - wake_lastack_before,
+                 recv_acked - wake_freed_before, wake_input_ms);
+#endif
 #if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
     tcp_screen_ack_profile_record(pcb, screen_ack_acked,
                                   screen_ack_old_window,

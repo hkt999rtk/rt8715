@@ -6,6 +6,7 @@ deliberately strict: it only accepts the validated AirPlayScreen_ScreenThread
 layout and changes the R_ARM_THM_CALL at offset 0xee.  The optional tx-poll
 mode changes only the normal-frame EAGAIN delay at offset 0xe2.  Frame-ID
 modes redirect only the normal-frame dispatch and its EAGAIN print.
+The tx-write mode preserves early USB screen RTO opt-in in quiet builds.
 """
 
 import struct
@@ -136,6 +137,13 @@ def main(path, mode="queue"):
         call_position = 0xE2
         old_name = "vTaskDelay"
         relocation_kind = R_ARM_THM_CALL
+    elif mode == "tx-write":
+        function_name = "AirPlayScreen_SendScreenNormalFrame"
+        new_name = "carbox_screen_tcp_write"
+        function_size = 0x13C
+        call_position = 0xCA
+        old_name = "lwip_write"
+        relocation_kind = R_ARM_THM_CALL
     elif mode == "frame-dispatch":
         function_name = "AirPlayScreen_SendScreenFrame"
         new_name = "carbox_screen_normal_frame_probe"
@@ -228,5 +236,5 @@ def main(path, mode="queue"):
 
 if __name__ == "__main__":
     if len(sys.argv) not in (2, 3):
-        fail("usage: patch_screen_wait_relocation.py AirPlayScreen.o [queue|tx-poll|frame-dispatch|frame-block|frame-block-quiet]")
+        fail("usage: patch_screen_wait_relocation.py AirPlayScreen.o [queue|tx-poll|tx-write|frame-dispatch|frame-block|frame-block-quiet]")
     main(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "queue")

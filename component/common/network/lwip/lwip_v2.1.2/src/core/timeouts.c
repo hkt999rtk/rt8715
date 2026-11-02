@@ -155,7 +155,7 @@ tcpip_tcp_timer(void *arg)
 {
   LWIP_UNUSED_ARG(arg);
 
-  /* Keep maintenance at 250/500ms; only recovery deadlines run at 50ms. */
+  /* Keep maintenance at 250/500ms; only recovery deadlines use TCP_RECOVERY_INTERVAL. */
 #if LWIP_TCP_RECOVERY
   if ((u32_t)(sys_now() - tcp_maintenance_ms) >= TCP_TMR_INTERVAL) {
     tcp_maintenance_ms = sys_now();

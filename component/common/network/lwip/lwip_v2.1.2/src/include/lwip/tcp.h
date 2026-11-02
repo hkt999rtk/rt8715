@@ -249,6 +249,17 @@ struct tcp_recovery_state {
   u32_t sample_started_ms, sample_end, karn_end;
   u8_t recover_valid, partial_seen, partial_pending, fast_pending;
   u8_t lt_credit, sample_valid, karn_blocked, output_pending;
+#if CONFIG_TCP_RECOVERY_TRACE
+  struct {
+    u32_t connection, ack_ms, ack_no, ack_wnd, ack_gap_ms;
+    u32_t progress_ms, tx_ms, tx_seq, tx_end, partial_count;
+    u8_t ack_seen, progress_seen, tx_seen, rto_wait_tx, rto_wait_ack;
+  } trace;
+#endif
+  /* RFC 6582 4.1: zero advance means no eligible post-RTO ACK yet. */
+  u32_t last_ack_advance, heuristic_started_ms;
+  u8_t heuristic_wait_ack;
+  u8_t usb_screen_rto; /* opt-in for established screen TX routed through en */
 };
 #endif
 

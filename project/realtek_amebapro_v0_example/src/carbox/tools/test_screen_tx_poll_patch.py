@@ -43,6 +43,8 @@ class ScreenTxPollPatchTest(unittest.TestCase):
             normal = relocations.split(
                 "Relocation section '.rel.text.AirPlayScreen_SendScreenNormalFrame'", 1
             )[1].split("Relocation section ", 1)[0]
+            self.assertRegex(normal, r"000000ca\s+.*carbox_screen_tcp_write")
+            self.assertNotRegex(normal, r"000000ca\s+.*lwip_write")
             self.assertRegex(normal, r"000000e2\s+.*carbox_screen_tx_poll_wait")
             self.assertNotRegex(normal, r"000000e2\s+.*vTaskDelay")
             self.assertRegex(normal, r"000000dc\s+.*carbox_screen_block_quiet")
@@ -88,6 +90,8 @@ class ScreenTxPollPatchTest(unittest.TestCase):
             self.assertRegex(dispatch, r"00000014\s+.*AirPlayScreen_SendScreenConfigFrame")
             self.assertRegex(normal, r"000000dc\s+.*carbox_screen_block_note")
             self.assertRegex(normal, r"00000012\s+.*puts")
+            self.assertRegex(normal, r"000000ca\s+.*carbox_screen_tcp_write")
+            self.assertNotRegex(normal, r"000000ca\s+.*lwip_write")
             self.assertRegex(normal, r"000000e2\s+.*carbox_screen_tx_poll_wait")
 
 

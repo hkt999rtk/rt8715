@@ -38,6 +38,7 @@
  */
 
 #include "lwip/opt.h"
+#include "lwip/priv/tcp_wake_trace.h"
 
 #if LWIP_SOCKET /* don't build if not configured for use in lwipopts.h */
 
@@ -62,6 +63,7 @@
 #include "lwip/priv/tcp_priv.h"
 #endif
 #include "lwip/mld6.h"
+#include "lwip/priv/tcp_recovery.h"
 #if defined(CONFIG_PLATFORM_8195BHP)
 #include <lwip_intf.h>
 #include "large_memcpy_gdma.h"
@@ -3510,6 +3512,12 @@ event_callback(struct netconn *conn, enum netconn_evt evt, u16_t len)
 
   check_waiters = 1;
   SYS_ARCH_PROTECT(lev);
+  /* Capture notification BEFORE it can wake the screen task. */
+#if CONFIG_SCREEN_WAKE_TRACE
+  if (evt == NETCONN_EVT_SENDPLUS || evt == NETCONN_EVT_SENDMINUS)
+    tcp_wake_socket_event(s, evt == NETCONN_EVT_SENDPLUS,
+                          sock->sendevent != 0, sock->select_waiting);
+#endif
   /* Set event as required */
   switch (evt) {
     case NETCONN_EVT_RCVPLUS:
@@ -3621,6 +3629,11 @@ again:
         /* For !LWIP_TCPIP_CORE_LOCKING, we don't call SYS_ARCH_UNPROTECT() before signaling
            the semaphore, as this might lead to the select thread taking itself off the list,
            invalidating the semaphore. */
+#if CONFIG_SCREEN_WAKE_TRACE
+        if (scb->poll_fds != NULL && has_sendevent &&
+            lwip_poll_should_wake(scb, s, 0, 1, 0))
+          tcp_wake_signal(s);
+#endif
         sys_sem_signal(SELECT_SEM_PTR(scb->sem));
       }
     }
@@ -5207,6 +5220,25 @@ lwip_diag_car_ack_snapshot(int s, struct lwip_car_ack_diag *diag,
 }
 #endif
 
+#if LWIP_TCP && LWIP_TCP_RECOVERY
+/* Screen sender opt-in, independent of profiling. Protect fd/PCB lifetime and
+ * all recovery mutations exactly like the socket's other TCP operations. */
+int
+lwip_usb_screen_rto_enable(int s)
+{
+  struct lwip_sock *sock = get_socket(s);
+  int result = 0;
+  if (sock == NULL) return -1;
+  if (sock->conn != NULL && NETCONNTYPE_GROUP(netconn_type(sock->conn)) == NETCONN_TCP) {
+    LOCK_TCPIP_CORE();
+    result = tcp_recovery_usb_screen(sock->conn->pcb.tcp);
+    UNLOCK_TCPIP_CORE();
+  }
+  done_socket(sock);
+  return result;
+}
+#endif
+
 #if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
 int
 lwip_diag_screen_tcp_ack_track(int s)
@@ -5226,6 +5258,9 @@ lwip_diag_screen_tcp_ack_track(int s)
   pcb = sock->conn->pcb.tcp;
   if (pcb != NULL) {
     tcp_screen_ack_profile_track(pcb);
+#if CONFIG_SCREEN_WAKE_TRACE
+    tcp_wake_track(pcb, s);
+#endif
   }
   UNLOCK_TCPIP_CORE();
   done_socket(sock);

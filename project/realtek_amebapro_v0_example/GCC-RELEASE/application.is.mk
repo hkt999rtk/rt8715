@@ -452,6 +452,7 @@ ITCM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp.c
 ITCM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_in.c
 ITCM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_out.c
 ITCM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_recovery.c
+SRAM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_wake_trace.c
 ITCM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/timeouts.c
 ITCM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/udp.c
 ##ITMC -> DTCM
@@ -1241,6 +1242,7 @@ SCREEN_TX_PRESSURE_CLEAN_MS ?= 500
 # retry.  It samples only failed ScreenThread writes and stays independent of
 # the older, verbose frame/queue profiler.
 SCREEN_BLOCK_PROFILE ?= 0
+SCREEN_WAKE_TRACE ?= 0
 # One-line, low-overhead TCP/NCM/USB backpressure probe for soak testing.
 # Unlike the full profiles, this does not enable PC sampling or histograms.
 SCREEN_USB_PROBE ?= 0
@@ -1248,6 +1250,15 @@ SCREEN_USB_PROBE ?= 0
 # ACK cadence and advertised-window behavior.  This distinguishes a slow peer
 # reader from local USB/NCM queueing without restoring the verbose TCP profile.
 SCREEN_TCP_ACK_PROFILE ?= 0
+# Opt-in event evidence. Keep firmware defaults quiet; enable for customer captures.
+TCP_RECOVERY_TRACE ?= 0
+GCCFLAGS += -DCONFIG_TCP_RECOVERY_TRACE=$(TCP_RECOVERY_TRACE)
+ifeq ($(TCP_RECOVERY_TRACE),1)
+ifneq ($(PC_PROFILER),1)
+$(error TCP_RECOVERY_TRACE=1 requires PC_PROFILER=1 for deferred reporting)
+endif
+endif
+
 # Measure both the closed AirPlay converter call and the nested FDK AAC decode.
 # Reporting is windowed so the probe adds no per-frame UART traffic.
 AUDIO_DECODE_PROFILE ?= 0
@@ -1936,6 +1947,15 @@ GCCFLAGS += -DCONFIG_SCREEN_TX_PRESSURE_FEEDBACK=$(SCREEN_TX_PRESSURE_FEEDBACK)
 GCCFLAGS += -DCONFIG_SCREEN_TX_PRESSURE_TRIGGER_MS=$(SCREEN_TX_PRESSURE_TRIGGER_MS)
 GCCFLAGS += -DCONFIG_SCREEN_TX_PRESSURE_CLEAN_MS=$(SCREEN_TX_PRESSURE_CLEAN_MS)
 GCCFLAGS += -DCONFIG_SCREEN_BLOCK_PROFILE=$(SCREEN_BLOCK_PROFILE)
+GCCFLAGS += -DCONFIG_SCREEN_WAKE_TRACE=$(SCREEN_WAKE_TRACE)
+ifeq ($(SCREEN_WAKE_TRACE),1)
+ifneq ($(SCREEN_BLOCK_PROFILE)$(SCREEN_TCP_ACK_PROFILE)$(SCREEN_TX_POLL_WAIT)$(PC_PROFILER),1111)
+$(error SCREEN_WAKE_TRACE requires SCREEN_BLOCK_PROFILE=1 SCREEN_TCP_ACK_PROFILE=1 SCREEN_TX_POLL_WAIT=1 PC_PROFILER=1)
+endif
+ifneq ($(SCREEN_TX_DIRECT_CRYPTO)$(SCREEN_QUEUE_PROFILE),00)
+$(error SCREEN_WAKE_TRACE requires SCREEN_TX_DIRECT_CRYPTO=0 SCREEN_QUEUE_PROFILE=0)
+endif
+endif
 GCCFLAGS += -DCONFIG_SCREEN_TX_POLL_TIMEOUT_MS=$(SCREEN_TX_POLL_TIMEOUT_MS)
 GCCFLAGS += -DCONFIG_SCREEN_USB_PROBE=$(SCREEN_USB_PROBE)
 GCCFLAGS += -DCONFIG_SCREEN_TCP_ACK_PROFILE=$(SCREEN_TCP_ACK_PROFILE)
@@ -2489,7 +2509,7 @@ CARBOX_SCREEN_WAIT_RELOC_PATCH := ../src/carbox/tools/patch_screen_wait_relocati
 CARBOX_REDUNDANT_COPY_PATCH := ../src/carbox/tools/patch_airplay_redundant_copy.py
 CARBOX_EVENT_RESPONSE_PATCH := ../src/carbox/tools/patch_airplay_event_response.py
 CARBOX_EVENT_READAHEAD_PATCH := ../src/carbox/tools/patch_airplay_event_readahead.py
-CARBOX_ACCESSORY_PATCH_STAMP := $(OBJ_DIR)/.accessory_patch_v16-zc$(VIDEO_HANDOVER_ZERO_COPY)-direct$(SCREEN_TX_DIRECT_CRYPTO)-wait$(SCREEN_QUEUE_EVENT_WAIT)-txpoll$(SCREEN_TX_POLL_WAIT)-block$(SCREEN_BLOCK_PROFILE)-readahead$(CAR_EVENT_READAHEAD_FIX)-iap2wait$(IAP2_COND_TIMEDWAIT_FIX)-ackts$(CAR_ACK_TIMESTAMP)
+CARBOX_ACCESSORY_PATCH_STAMP := $(OBJ_DIR)/.accessory_patch_v17-zc$(VIDEO_HANDOVER_ZERO_COPY)-direct$(SCREEN_TX_DIRECT_CRYPTO)-wait$(SCREEN_QUEUE_EVENT_WAIT)-txpoll$(SCREEN_TX_POLL_WAIT)-block$(SCREEN_BLOCK_PROFILE)-readahead$(CAR_EVENT_READAHEAD_FIX)-iap2wait$(IAP2_COND_TIMEDWAIT_FIX)-ackts$(CAR_ACK_TIMESTAMP)
 $(CARBOX_ACCESSORY_PATCH_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.accessory_patch_*
@@ -3294,3 +3314,20 @@ ifneq ($(ADDR),)
 else
 	@python3 $(BT_TOOL) text $(BT_FILE) $(BT_ELF) --map $(BT_MAP)
 endif
+
+# Trace state extends only the tail of tcp_pcb. Rebuild all source consumers
+# when toggling it, including memp.c, so PCB allocation sizes cannot go stale.
+TCP_RECOVERY_TRACE_STAMP := $(OBJ_DIR)/.tcp_recovery_trace_$(TCP_RECOVERY_TRACE)
+$(TCP_RECOVERY_TRACE_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.tcp_recovery_trace_*
+	@touch $@
+$(SRC_O) $(ITCM_O) $(ERAM_O) $(SRAM_O) $(CINIT_O): $(TCP_RECOVERY_TRACE_STAMP)
+
+# Observer hooks cross lwIP core/socket and ScreenThread translation units.
+SCREEN_WAKE_TRACE_STAMP := $(OBJ_DIR)/.screen_wake_trace_$(SCREEN_WAKE_TRACE)
+$(SCREEN_WAKE_TRACE_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.screen_wake_trace_*
+	@touch $@
+$(SRC_O) $(ITCM_O) $(ERAM_O) $(SRAM_O) $(CINIT_O): $(SCREEN_WAKE_TRACE_STAMP)

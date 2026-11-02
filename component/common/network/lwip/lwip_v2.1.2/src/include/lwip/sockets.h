@@ -723,6 +723,9 @@ struct lwip_tcp_buffer_diag {
 };
 int lwip_diag_tcp_buffer_state(int s, struct lwip_tcp_buffer_diag *diag);
 #endif
+#if LWIP_TCP && LWIP_TCP_RECOVERY
+int lwip_usb_screen_rto_enable(int s);
+#endif
 #if defined(CONFIG_SCREEN_TCP_ACK_PROFILE) && CONFIG_SCREEN_TCP_ACK_PROFILE
 int lwip_diag_screen_tcp_ack_track(int s);
 void lwip_diag_screen_tcp_ack_report(unsigned int sequence);

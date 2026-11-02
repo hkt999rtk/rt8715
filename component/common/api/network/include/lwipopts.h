@@ -374,8 +374,14 @@ extern unsigned int sys_now(void);
 #undef TCP_SND_BUF
 #define TCP_SND_BUF (128 * 1024)
 
-/* Preserve the previous 32 KiB configuration's writable threshold. */
-#define TCP_SNDLOWAT (16 * 1024)
+/*
+ * Wake TCP socket writers once more than 2 KiB of send credit is available.
+ * With a 250 ms POLLOUT wait, the old 16 KiB threshold left useful partial
+ * credit (e.g. 2880 or 15840 bytes) idle until timeout. This shared threshold
+ * affects every TCP socket; retain the independent pbuf queue low-water gate.
+ * 2 KiB normally batches two 1440-byte ACK credits instead of waking per ACK.
+ */
+#define TCP_SNDLOWAT (2 * 1024)
 
 /*
  * Do not double the metadata pools with TCP_SND_BUF.  The existing capacity
