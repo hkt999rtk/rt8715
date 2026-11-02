@@ -24,6 +24,8 @@ from unicorn.arm_const import (UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2,
 
 HERE = Path(__file__).resolve().parent
 Q, COUNT, BUDDY, TYPE = 0xc44, 0xc70, 0x3378, 0x338a
+POOL, NETIF, STOPPED, REMOVED = 32, 0x3350, 0x32c4, 0x32c8
+PRE_PATCHES = ('patch_amsdu_alloc_failure.py', 'patch_recvframe_pool.py')
 DATA, STACK, STUB = 0x4000000, 0x5000000, 0x300000
 STOP = STUB + 0xfff0
 
@@ -39,7 +41,7 @@ def link_fixture(directory, prefix, vendor, fixed):
         p = directory / name
         p.write_bytes(run(prefix+'ar', 'p', vendor, name))
         objects.append(p)
-    for script in ('patch_amsdu_alloc_failure.py', 'patch_recvframe_pool.py'):
+    for script in PRE_PATCHES:
         run(sys.executable, HERE/script, objects[0])
     if fixed:
         run(sys.executable, HERE/'patch_amsdu_child_adapter.py', objects[0])
@@ -105,14 +107,14 @@ class Machine:
         for i, adapter in enumerate((self.a, self.b)):
             self.write(adapter+TYPE, bytes([i]))
             self.w32(adapter+BUDDY, self.b if i == 0 else self.a)
-            self.w32(adapter+0x3350, adapter)  # opaque netif cookie
+            self.w32(adapter+NETIF, adapter)  # opaque netif cookie
             self.init_list(adapter+Q)
-            self.frames[adapter] = {DATA+0x20000+i*0x2000+n*192 for n in range(32)}
+            self.frames[adapter] = {DATA+0x20000+i*0x2000+n*192 for n in range(POOL)}
             for frame in sorted(self.frames[adapter]):
                 self.w32(frame+16, adapter)
                 self.init_list(frame)
                 self.insert(frame, adapter+Q)
-            self.w32(adapter+COUNT, 32)
+            self.w32(adapter+COUNT, POOL)
 
     def read(self, addr, size):
         return bytes(self.uc.mem_read(addr, size))
@@ -270,8 +272,8 @@ class Machine:
         self.w32(parent+0xa8, skb+64)
         self.w32(parent+0xac, skb+64+len(payload))
         self.w32(parent+0xb0, skb+64+len(payload))
-        self.w32(processor+0x32c4, int(mode == 'stopped'))
-        self.w32(processor+0x32c8, int(mode == 'removed'))
+        self.w32(processor+STOPPED, int(mode == 'stopped'))
+        self.w32(processor+REMOVED, int(mode == 'removed'))
         self.write(processor+0x1865, bytes([int(mode == 'indicate_reject')]))
         self.fail_alloc_at = self.alloc_calls + {'alloc_first': 1, 'alloc_second': 2}.get(mode, -99999)
         self.fail_skb_at = self.skb_calls + {'skb_first': 1, 'skb_second': 2}.get(mode, -99999)
@@ -296,16 +298,22 @@ class Machine:
             assert actual == self.frames[adapter], (
                 f'wrong pool: A={len(self.queue(self.a))}, B={len(self.queue(self.b))}, '
                 f'A_count={self.u32(self.a+COUNT)}, B_count={self.u32(self.b+COUNT)}')
-            assert self.u32(adapter+COUNT) == 32
+            assert self.u32(adapter+COUNT) == POOL
 
 
 def main():
+    global BUDDY, TYPE, POOL, NETIF, STOPPED, REMOVED, PRE_PATCHES
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--prefix', required=True)
     p.add_argument('--vendor-archive', type=Path, required=True)
+    p.add_argument('--mp', action='store_true', help='GCC MP adapter ABI and native 16-frame pool')
     p.add_argument('--unfixed', action='store_true', help='RED: run recovery assertion against unfixed object')
     p.add_argument('--iterations', type=int, default=10000)
     args = p.parse_args()
+    if args.mp:
+        BUDDY, TYPE = 0x3a20, 0x3a32
+        POOL, NETIF, STOPPED, REMOVED = 16, 0x39f8, 0x396c, 0x3970
+        PRE_PATCHES = ('patch_amsdu_alloc_failure.py',)
     with tempfile.TemporaryDirectory(prefix='amsdu-native-test-') as td:
         fixture = link_fixture(Path(td)/'fixture', args.prefix, args.vendor_archive, not args.unfixed)
         m = Machine(fixture)
@@ -321,8 +329,8 @@ def main():
                     m.assert_balanced()
         print('PASS: 40 role/success/failure combinations, skb and frame lifetime, register/stack ABI')
         m = Machine(fixture)
-        held = [m.call('rtw_alloc_recvframe', m.a+Q) for _ in range(31)]
-        assert len(set(held)) == 31 and all(held)
+        held = [m.call('rtw_alloc_recvframe', m.a+Q) for _ in range(POOL-1)]
+        assert len(set(held)) == POOL-1 and all(held)
         assert m.exercise(mode='pool_full') == 0  # real empty queue, no injection
         assert len(m.queue(m.a)) == m.u32(m.a+COUNT) == 1
         for frame in held:
@@ -354,7 +362,7 @@ def test_patch_and_verifier(td, prefix, vendor):
     import patch_amsdu_child_adapter as patcher
     base = td/'base.o'
     base.write_bytes(run(prefix+'ar', 'p', vendor, 'rtw_recv.o'))
-    for script in ('patch_amsdu_alloc_failure.py', 'patch_recvframe_pool.py'):
+    for script in PRE_PATCHES:
         run(sys.executable, HERE/script, base)
     original = base.read_bytes()
     fixed = patcher.patch(original)
@@ -379,7 +387,7 @@ def test_patch_and_verifier(td, prefix, vendor):
             assert syms_after.get_symbol(new['r_info_sym']).name == 'wlan_amsdu_child_init'
     assert changes == [0x76]
     base.write_bytes(fixed)
-    for script in ('patch_amsdu_alloc_failure.py', 'patch_recvframe_pool.py', 'patch_amsdu_child_adapter.py'):
+    for script in (*PRE_PATCHES, 'patch_amsdu_child_adapter.py'):
         run(sys.executable, HERE/script, '--check', base)
     assert base.read_bytes() == fixed, '--check must be read-only'
     candidates = [original[:-1], b'', fixed[:-1], original+b'changed']

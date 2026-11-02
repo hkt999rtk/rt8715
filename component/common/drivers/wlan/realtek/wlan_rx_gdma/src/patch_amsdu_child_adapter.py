@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Redirect exactly one vendor A-MSDU child-init relocation to the ABI bridge.
 
-Input is the known rtw_recv.o after the existing NULL-allocation and 32-frame
-pool patches. No instruction, existing symbol index, or other relocation is
+Input is the known normal rtw_recv.o after the NULL-allocation and 32-frame
+pool patches, or GCC MP after the NULL-allocation patch with its native pool.
+No instruction, existing symbol index, or other relocation is
 changed. New symbol/string tables are appended; their old bytes remain unused.
 Full input/output identities make unknown revisions and partial patches fail.
 """
@@ -13,6 +14,10 @@ import struct
 
 INPUT_SHA256 = 'a6dc25893e3fb17e8e0a8a4dd0fc1fe08e1a258c267cf73374c294689e8f6e4a'
 OUTPUT_SHA256 = '452b1a0782e9ac7f0bb6cb7d57db72f375e2af15f711b640174e1e269cea0f8d'
+MP_INPUT_SHA256 = '688b48387f11c185815c0134c4b60a1dc3f91cb73c4ec537178d7499b5fe4a4b'
+MP_OUTPUT_SHA256 = '9742e0351020e58c67e116fa0650eefcb2a96314cf84dbce8be9fd24614d26a2'
+# MP input has the NULL fix only; retain its native 16-frame pool and ABI.
+PATCH_PROFILES = {INPUT_SHA256: OUTPUT_SHA256, MP_INPUT_SHA256: MP_OUTPUT_SHA256}
 HELPER = b'wlan_amsdu_child_init'
 FUNCTION = '.wlan.text.amsdu_to_msdu'
 CALL_OFFSET = 0x76
@@ -43,15 +48,15 @@ def elf_sections(blob):
 
 
 def check(blob):
-    if hashlib.sha256(blob).hexdigest() != OUTPUT_SHA256:
+    if hashlib.sha256(blob).hexdigest() not in PATCH_PROFILES.values():
         raise ValueError('A-MSDU child-adapter patch missing or object changed')
 
 
 def patch(blob):
     digest = hashlib.sha256(blob).hexdigest()
-    if digest == OUTPUT_SHA256:
+    if digest in PATCH_PROFILES.values():
         return blob  # deterministic and idempotent
-    if digest != INPUT_SHA256:
+    if digest not in PATCH_PROFILES:
         raise ValueError('unknown rtw_recv.o; review vendor ABI and preceding patches')
     shoff, headers, names = elf_sections(blob)
     fn = headers[names[FUNCTION]]
@@ -90,7 +95,8 @@ def patch(blob):
     struct.pack_into('<II', out, shoff+str_index*40+16, new_string_offset, new_string_size)
     struct.pack_into('<II', out, shoff+sym_index*40+16, new_symbol_offset, len(symbols)+16)
     struct.pack_into('<I', out, matches[0]+4, ((len(symbols)//16) << 8) | 10)
-    check(out)
+    if hashlib.sha256(out).hexdigest() != PATCH_PROFILES[digest]:
+        raise ValueError('unexpected patched object identity')
     return bytes(out)
 
 

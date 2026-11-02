@@ -41,3 +41,48 @@ Release defaults in application.is.mk:
 
 When a new vendor library incorporates the source fix, review its ABI and
 lifetime handling, retire this bridge/relocation patch, and update the guards.
+
+GCC lib_wlan_mp.a (2026-11-02)
+-----------------------------
+The MP archive has the same missing child->adapter initialization, but a
+different adapter layout: buddy/type at 0x3a20/0x3a32 (normal: 0x3378/0x338a).
+The child adapter field remains +0x10, processing adapter remains r8, and
+the list-init call remains amsdu_to_msdu+0x76. The NULL-allocation failure
+also branches to the same trap at +0x260. These were checked against MP
+Thumb disassembly, not inferred from the normal archive's offsets.
+
+Build from component/common/drivers/wlan/realtek/wlan_rx_gdma:
+  make mp-fix CROSS_COMPILE=/home/kevin/work/toolchains/arm-none-eabi-gcc-6.4.1-realtek/asdk/linux/newlib/bin/arm-none-eabi-
+Output: build/lib_wlan_mp.a
+The all target also builds it. The normal firmware's zero-copy target still
+links build/lib_wlan_zero_copy.a; building the MP repair does not switch it.
+
+Original MP archive is preserved at:
+  component/soc/realtek/8195b/misc/bsp/lib/common/GCC/lib_wlan_mp.a
+The derived MP archive changes only rtw_recv.o and adds the 8-byte bridge.
+It retains MP's 16-frame pool, native RX/skbuff objects and MP functionality.
+It includes both the NULL-allocation return fix and child adapter repair.
+Do not use the normal driver's recovered RX/skbuff objects with the MP ABI.
+This patch does not cover the separately supplied IAR archive.
+
+Pinned SHA-256 identities:
+  original GCC MP archive:
+    cab792c356dfece332ea395784163a369144198917e95597564e00c0630c26dd
+  original MP rtw_recv.o:
+    be051194bc70209f54c77b05a3b6898786fa445942e977cf6d55901845950525
+  MP rtw_recv.o after NULL-allocation repair (input to child repair):
+    688b48387f11c185815c0134c4b60a1dc3f91cb73c4ec537178d7499b5fe4a4b
+  MP rtw_recv.o after child repair:
+    9742e0351020e58c67e116fa0650eefcb2a96314cf84dbce8be9fd24614d26a2
+  native MP freertos_recv.o:
+    600fb25fa9ec698342ffd8db6845b3ac727cd425e7d24f9eaa0e2ea4ff05aa33
+Verifier pairs rtw_recv.o and freertos_recv.o identities to reject mixed ABIs.
+Builder rejects unknown original archives and verifies every untouched member.
+
+MP native-code regression:
+  test_amsdu_child_adapter.py --mp --vendor-archive <original GCC MP archive> --prefix <toolchain prefix>
+  With --unfixed, one A-MSDU reproduces A=14, B=18, A_count=14, B_count=16.
+  Fixed code passes 40 role/failure cases, actual pool exhaustion/recovery,
+  10,000 A-MSDUs / 20,000 children, ABI/lifetime and corruption checks.
+  These are host Thumb emulation tests with stubbed hardware dependencies;
+  on-board MP/AP+STA long-duration testing remains required.

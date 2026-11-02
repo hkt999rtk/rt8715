@@ -40,6 +40,9 @@ ZERO_COPY_ARCHIVE := $(BUILD_DIR)/lib_wlan_zero_copy.a
 COPY_PARITY_ARCHIVE := $(BUILD_DIR)/lib_wlan_rx_recovered_copy_parity.a
 SKBUFF_PARITY_ARCHIVE := $(BUILD_DIR)/lib_wlan_recovered_skb_copy_parity.a
 DROPIN_ARCHIVE := $(BUILD_DIR)/lib_wlan.a
+MP_ORIGINAL_ARCHIVE ?= $(SDK_ROOT)/component/soc/realtek/8195b/misc/bsp/lib/common/GCC/lib_wlan_mp.a
+MP_FIXED_ARCHIVE := $(BUILD_DIR)/lib_wlan_mp.a
+MP_ARCHIVE_BUILDER := $(RECOVERED_DIR)/build_mp_amsdu_archive.py
 VENDOR_RX_OBJECT := $(BUILD_DIR)/vendor_rtl8195b_recv.o
 VENDOR_SKBUFF_OBJECT := $(BUILD_DIR)/vendor_freertos_skbuff.o
 VENDOR_RX_GLOBALS := $(BUILD_DIR)/vendor_rtl8195b_recv.globals
@@ -93,9 +96,19 @@ WLAN_RX_DMA_PROFILE ?= 0
 DMA_PROFILE_STAMP := $(BUILD_DIR)/.wlan_rx_dma_profile_$(WLAN_RX_DMA_PROFILE)
 
 .NOTPARALLEL:
-.PHONY: all check-input verify zero-copy copy-parity skbuff-parity clean
+.PHONY: all check-input verify zero-copy copy-parity skbuff-parity mp-fix clean
 
-all: check-input verify $(DROPIN_ARCHIVE)
+all: check-input verify $(DROPIN_ARCHIVE) mp-fix
+
+# MP has its own adapter layout. Apply only the A-MSDU repairs to its native
+# archive; do not mix in normal-driver recovered RX or zero-copy objects.
+mp-fix: $(MP_FIXED_ARCHIVE)
+
+$(MP_FIXED_ARCHIVE): $(MP_ORIGINAL_ARCHIVE) $(AMSDU_CHILD_OBJECT) \
+		$(MP_ARCHIVE_BUILDER) $(AMSDU_ALLOC_PATCH) $(AMSDU_CHILD_PATCH) \
+		$(AMSDU_CHILD_VERIFY) Makefile
+	@python3 $(MP_ARCHIVE_BUILDER) --prefix $(CROSS_COMPILE) \
+		--vendor $(MP_ORIGINAL_ARCHIVE) --helper $(AMSDU_CHILD_OBJECT) --output $@
 
 check-input:
 	@test -n "$(ORIGINAL_ARCHIVE)" || \

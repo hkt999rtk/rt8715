@@ -19,6 +19,13 @@ from pathlib import Path
 SECTION_NAME = b".wlan.text.amsdu_to_msdu"
 ORIGINAL_SHA256 = "89d7b559a5ec53ce19c5efa1a7760ed8bd5376181dfcb569f03ab7fff9a451a4"
 PATCHED_SHA256 = "1c9dd203e66c4dc8369b73901bdbeabab01586ed8f750b24c24cc740a151846a"
+# GCC MP has a larger adapter layout, but the reviewed NULL guard and exit
+# occupy the same offsets. Pin its complete function independently.
+PATCH_PROFILES = {
+    ORIGINAL_SHA256: PATCHED_SHA256,
+    "0b5883d51e6e31a6a58f5a47e97750c1f86d013efe564d0add7b8590b5b29de5":
+        "a70e9c442f4d0111da06d245ecb81e82c481787a2fe0bb28432785451252f955",
+}
 TRAP_OFFSET = 0x260
 TRAP_BYTES = bytes.fromhex("0369ffde")  # ldr r3, [r0, #16]; udf #255
 RETURN_BYTES = bytes.fromhex("0020eee7")  # movs r0, #0; b.n +0x242
@@ -68,11 +75,11 @@ def main():
     section = elf[start:start + size]
     digest = hashlib.sha256(section).hexdigest()
     if args.check:
-        if digest != PATCHED_SHA256:
+        if digest not in PATCH_PROFILES.values():
             raise ValueError("A-MSDU null-allocation patch missing or object changed")
         print("A-MSDU null-allocation return verified")
         return
-    if digest != ORIGINAL_SHA256:
+    if digest not in PATCH_PROFILES:
         raise ValueError("vendor A-MSDU function changed; review before patching")
     if section[TRAP_OFFSET:TRAP_OFFSET + 4] != TRAP_BYTES:
         raise ValueError("unexpected A-MSDU null-allocation instructions")
@@ -82,7 +89,7 @@ def main():
         raise ValueError("unexpected A-MSDU failure return")
 
     elf[start + TRAP_OFFSET:start + TRAP_OFFSET + 4] = RETURN_BYTES
-    if hashlib.sha256(elf[start:start + size]).hexdigest() != PATCHED_SHA256:
+    if hashlib.sha256(elf[start:start + size]).hexdigest() != PATCH_PROFILES[digest]:
         raise ValueError("patched A-MSDU function verification failed")
     args.object.write_bytes(elf)
     print("A-MSDU receive-frame allocation failure now returns zero")

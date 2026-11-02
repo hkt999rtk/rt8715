@@ -7,11 +7,15 @@ import re
 import struct
 import subprocess
 
-from patch_amsdu_child_adapter import check, elf_sections
+from patch_amsdu_child_adapter import check, elf_sections, OUTPUT_SHA256, MP_OUTPUT_SHA256
 
 HELPER = 'wlan_amsdu_child_init'
 STORE = bytes.fromhex('c0f81080')  # str.w r8, [r0,#16]
 INDICATE_SHA256 = 'da79b7d94933eefcbc971a54ffca925898e8098594d7ed0d4791d955aec9de8e'
+INDICATE_PROFILES = {
+    OUTPUT_SHA256: INDICATE_SHA256,
+    MP_OUTPUT_SHA256: '600fb25fa9ec698342ffd8db6845b3ac727cd425e7d24f9eaa0e2ea4ff05aa33',
+}
 
 
 def run(*args):
@@ -23,8 +27,10 @@ def verify_archive(path, prefix):
     for name in ('rtw_recv.o', 'freertos_recv.o', HELPER+'.o'):
         if names.count(name) != 1:
             raise ValueError('missing/duplicate archive member: '+name)
-    check(run(prefix+'ar', 'p', path, 'rtw_recv.o'))
-    if hashlib.sha256(run(prefix+'ar', 'p', path, 'freertos_recv.o')).hexdigest() != INDICATE_SHA256:
+    recv = run(prefix+'ar', 'p', path, 'rtw_recv.o')
+    check(recv)
+    expected = INDICATE_PROFILES[hashlib.sha256(recv).hexdigest()]
+    if hashlib.sha256(run(prefix+'ar', 'p', path, 'freertos_recv.o')).hexdigest() != expected:
         raise ValueError('native indication/free contract changed')
     blob = run(prefix+'ar', 'p', path, HELPER+'.o')
     _, headers, sections = elf_sections(blob)
