@@ -78,3 +78,14 @@ REA 完整修正前 relocation evidence：[os-service-before-relocations.json](e
 修正：整張表使用具名欄位初始化，四個未實作的 optional task 方法明確設為 NULL；不更動 struct ABI 或原廠 `.a`。為此檔加入 `-Werror=incompatible-pointer-types`，並把 random-bytes callback 的 length 型別改為介面宣告的 `u32`（ARM32 上仍為 32 bits）。
 
 回歸檢查直接讀取最終 ELF 的函式指標，驗證 12 個 timer、thread、wakelock 與 scheduler callback，以及四個空 task 欄位。舊映像測試失敗，修正映像測試通過。新版 boot log 標示 `diag=2`；上板通過 USB 初始化與實際 UVC 出流仍待使用者重新燒錄確認。
+
+
+## 2026-11-03：Windows Camera 子裝置啟動錯誤
+
+使用者確認 `diag=2` 已通過 USB 初始化，運行超過 70 秒沒有 UsageFault。Windows 顯示 `USB\VID_1D6B&PID_0102\WCAM0001` Composite Device 狀態 OK，`MI_00` Camera「wcam H264 color bar」為 Error；韌體 UVC control 計數為零。Windows ProblemCode／ProblemStatus 尚待回報，不能僅憑 Error 判定完整根因。
+
+已確認的規格錯誤：應用程式在註冊前把 bcdUVC 設成 0x0110，但 archive 的 `uvc_processing` 只有 11 bytes（`0b 24 05 02 01 00 40 02 ff ff 00`），其 UVC 1.0 結構缺少 bmVideoStandards。[Microsoft 的 UVC 1.0／1.1 差異文件](https://learn.microsoft.com/en-us/windows-hardware/drivers/stream/differences-between-uvc-1-0-and-uvc-1-1) 明確要求 UVC 1.1 Processing Unit 長度為 10+n，並同步更新 VC wTotalLength。此處 n=2，應為 12 bytes。
+
+`diag=3` 改用應用程式自有的 12-byte PU descriptor（controls 與 video standards 都為 0），FS／HS configuration 使用相同物件；初始化時把 SDK `uvc_fs_control_cls[2]` 指向此物件。原生 `usbd_uvc_init` 隨後依清單加總 VC descriptors，總長度由 79 改成 80 bytes。原 archive 與其 C 結構 ABI 未修改。最終 ELF 的初始化指令已確認寫入清單 +8，使用正確的 12-byte descriptor 位址。
+
+回歸測試先在 diag=2 ELF 得到「UVC 1.1 Processing Unit is 11 bytes; expected 12」失敗，修正版 FS／HS 均通過；host pattern／control／pacer／stats 測試及 IS 重建通過。這證明 descriptor 錯誤已修正，並非 Windows 驅動啟動成功的實機證明；需要重燒 diag=3 後取得 PnP 狀態與 UART log。

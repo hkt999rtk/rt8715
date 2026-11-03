@@ -43,6 +43,20 @@ def descriptors(name):
 
 
 for name in ("usbd_uvc_descriptors_FS", "usbd_uvc_descriptors_HS"):
+    # The application advertises UVC 1.1 at registration. Its Processing Unit
+    # must include bmVideoStandards (10+n bytes), unlike the SDK's UVC 1.0 PU.
+    control_interface = False
+    processing_units = 0
+    for desc in descriptors(name):
+        if desc[1] == 4:
+            control_interface = desc[5:7] == b"\x0e\x01"
+        if control_interface and desc[1:3] == b"\x24\x05":
+            processing_units += 1
+            assert len(desc) == 10 + desc[7], (
+                f"{name}: UVC 1.1 Processing Unit is {len(desc)} bytes; "
+                f"expected {10 + desc[7]} including bmVideoStandards")
+            assert desc[-1] == 0, "Synthetic video has no analog video standard"
+    assert processing_units == 1, "Missing or duplicated Processing Unit"
     streaming = False
     formats, frames, inputs = [], [], []
     for desc in descriptors(name):
@@ -68,7 +82,7 @@ for name in ("usbd_uvc_descriptors_FS", "usbd_uvc_descriptors_HS"):
     assert struct.unpack_from("<HH", frame, 5) == (1280, 720)
     assert struct.unpack_from("<I", frame, 17)[0] == 333333
     assert frame[21] == 1 and struct.unpack_from("<I", frame, 26)[0] == 333333
-    print(f"{name}: H264 only, 1280x720, 30 fps")
+    print(f"{name}: H264 only, 1280x720, 30 fps; UVC 1.1 PU length valid")
 
 for required in ("wcam_start", "h264_encode", "usbd_uvc_init", "uvc_events_process",
                  "__wrap_usb_composite_probe"):

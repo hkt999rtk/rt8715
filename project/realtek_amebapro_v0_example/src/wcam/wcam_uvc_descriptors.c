@@ -3,6 +3,24 @@
 #include "wcam_pattern.h"
 #include "wcam_uvc_control.h"
 
+/* The archived SDK PU has the 11-byte UVC 1.0 layout. UVC 1.1 adds
+ * bmVideoStandards; use our own wire descriptor without changing archive ABI. */
+static struct __attribute__((packed)) {
+    unsigned char bLength, bDescriptorType, bDescriptorSubType;
+    unsigned char bUnitID, bSourceID;
+    unsigned short wMaxMultiplier;
+    unsigned char bControlSize, bmControls[2], iProcessing, bmVideoStandards;
+} wcam_processing = {
+    .bLength = 12,
+    .bDescriptorType = USB_DT_CS_INTERFACE,
+    .bDescriptorSubType = UVC_VC_PROCESSING_UNIT,
+    .bUnitID = 2,
+    .bSourceID = 1,
+    .wMaxMultiplier = cpu_to_le16(16 * 1024),
+    .bControlSize = 2
+};
+_Static_assert(sizeof(wcam_processing) == 12, "UVC 1.1 PU wire size");
+
 /* Keep the SDK's declared C type; only the first format byte is on the wire. */
 struct UVC_INPUT_HEADER_DESCRIPTOR(1, 4) uvc_input_header = {
     .bLength = UVC_DT_INPUT_HEADER_SIZE(1, 1),
@@ -56,7 +74,7 @@ struct uvc_descriptor_header *uvc_hs_streaming_cls[] = {
     (struct usb_descriptor_header *)&uvc_control_intf, \
     (struct usb_descriptor_header *)&uvc_control_header, \
     (struct usb_descriptor_header *)&uvc_camera_terminal, \
-    (struct usb_descriptor_header *)&uvc_processing, \
+    (struct usb_descriptor_header *)&wcam_processing, \
     (struct usb_descriptor_header *)&uvc_extension_unit, \
     (struct usb_descriptor_header *)&uvc_output_terminal, \
     (struct usb_descriptor_header *)&uvc_control_ep, \
@@ -75,9 +93,11 @@ struct usb_descriptor_header *usbd_uvc_descriptors_HS[] = {
 
 void wcam_uvc_descriptors_init(void)
 {
+    /* usbd_uvc_init sums this list for VC wTotalLength before registration.
+     * It must refer to the same 12-byte PU as both configuration lists. */
+    uvc_fs_control_cls[2] = (struct uvc_descriptor_header *)&wcam_processing;
     /* No ISP exists in this application, so advertise no sensor controls. */
     memset(uvc_camera_terminal.bmControls, 0, sizeof(uvc_camera_terminal.bmControls));
-    memset(uvc_processing.bmControls, 0, sizeof(uvc_processing.bmControls));
     uvc_extension_unit.bNumControls = 0;
     memset(uvc_extension_unit.bmControls, 0, sizeof(uvc_extension_unit.bmControls));
     uvc_control_header.bcdUVC = cpu_to_le16(0x0110);
