@@ -244,7 +244,10 @@ SRC_C += ../../../component/common/media/mmfv2/module_jpeg.c
 SRC_C += ../../../component/common/media/mmfv2/module_mp4.c
 SRC_C += ../../../component/common/media/mmfv2/module_rtp.c
 SRC_C += ../../../component/common/media/mmfv2/module_rtsp2.c
-SRC_C += ../../../component/common/media/mmfv2/module_uvcd.c
+SRC_C += ../src/wcam/wcam_pattern.c
+SRC_C += ../src/wcam/wcam_uvc_control.c
+SRC_C += ../src/wcam/wcam_uvc_descriptors.c
+SRC_C += ../src/wcam/wcam_uvc.c
 SRC_C += ../../../component/common/media/mmfv2/module_httpfs.c
 SRC_C += ../../../component/common/media/mmfv2/module_dup.c
 
@@ -279,8 +282,6 @@ SRC_C += ../../../component/common/example/media_framework/mmf2_example_av_dup_i
 SRC_C += ../../../component/common/example/media_framework/mmf2_example_mp4_dual_init.c
 SRC_C += ../../../component/common/example/media_framework/snapshot_setting.c
 #SRC_C += ../../../component/common/example/media_framework/example_media_framework_sd_detect.c
-SRC_C += ../../../component/common/example/media_uvcd/usbd_uvc_parm.c
-SRC_C += ../../../component/common/example/media_uvcd/usbd_uvc_event.c
 
 #sensor
 SRC_C += ../../../component/common/media/framework/sensor_service.c
@@ -567,7 +568,6 @@ SRC_C += ../../../component/common/example/mcast/example_mcast.c
 SRC_C += ../../../component/common/example/mdns/example_mdns.c
 SRC_C += ../../../component/common/example/media_framework/example_media_framework.c
 SRC_C += ../../../component/common/example/media_h264_to_sdcard/example_media_h264_to_sdcard.c
-SRC_C += ../../../component/common/example/media_uvcd/example_media_uvcd.c
 SRC_C += ../../../component/common/example/mqtt/example_mqtt.c
 SRC_C += ../../../component/common/example/nonblock_connect/example_nonblock_connect.c
 SRC_C += ../../../component/common/example/ota_sdcard/example_ota_sdcard.c
@@ -703,6 +703,7 @@ CPPFLAGS += -Wall -Wpointer-arith -Wundef -Wno-write-strings -Wno-maybe-uninitia
 LFLAGS =
 LFLAGS += -march=armv8-m.main+dsp -mthumb -mcmse -mfloat-abi=softfp -mfpu=fpv5-sp-d16 -Os -nostartfiles -specs=nosys.specs -nodefaultlibs -nostdlib
 LFLAGS += -Wl,--gc-sections -Wl,-Map=$(BIN_DIR)/$(TARGET).map -Wl,--cref -Wl,--build-id=none -Wl,--use-blx
+LFLAGS += -Wl,--wrap,usb_composite_probe
 ##noisy warning option
 ##LFLAGS += -Wl,--warn-section-align
 # libc api wrapper
@@ -750,6 +751,7 @@ all: LIBFLAGS += -l_codec -l_dct -l_h264 -l_haac -l_hmp3 -l_http -l_mmf -l_muxer
 mp: LIBFLAGS += -l_codec -l_dct -l_h264 -l_haac -l_hmp3 -l_http -l_mmf -l_muxer -l_p2p -l_rtsp -l_sdcard -l_soc_is -l_speex  -l_websocket -l_wlan_mp -l_wps -l_qr_code -l_tftp -l_opusenc -l_opusfile -l_opus
 all mp: LIBFLAGS += -l_mdns
 all mp: LIBFLAGS += -l_faac
+all mp: LIBFLAGS += -l_usbd
 all: LIBFLAGS += -lrtstream -lrtscamkit -lrtsv4l2 -lrtsisp -lrtsosd
 LIBFLAGS += -Wl,-u,ram_start -Wl,-u,cinit_start
 
