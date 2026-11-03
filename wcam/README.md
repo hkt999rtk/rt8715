@@ -104,7 +104,7 @@ USB callbacks 不做 UART 輸出，只存入固定大小的事件 buffer。正�
 
 ## 上板驗證
 
-使用者已上板回報舊版在 USB 初始化發生 UsageFault，根因與修正見 [REA.md](REA.md#2026-11-03實機-usb-初始化-usagefault)。`diag=2` 已由使用者上板確認通過 USB 初始化且持續運行超過 70 秒；Windows 可辨識 USB Composite Device，但 Camera 子裝置為 Error。本版 `diag=3` 修正 UVC 1.1 Processing Unit 缺少 bmVideoStandards 的 descriptor 錯誤；Windows 驅動啟動、硬體出流／解碼、實際 GOP 與穩定 30 fps 仍待上板驗證。
+使用者已上板回報舊版在 USB 初始化發生 UsageFault，根因與修正見 [REA.md](REA.md#2026-11-03實機-usb-初始化-usagefault)。`diag=2` 已由使用者上板確認通過 USB 初始化且持續運行超過 70 秒；Windows 可辨識 USB Composite Device，但 Camera 子裝置為 Error。本版 `diag=3` 修正 UVC 1.1 Processing Unit 缺少 bmVideoStandards 的 descriptor 錯誤；使用者後續確認 Windows usbvideo 驅動 ProblemCode=0，DirectShow 可辨識 H264 1280×720／30 fps；約 10 秒串流 UART 顯示 High Speed、每秒 30 個 encode／send 與 1 IDR＋29 P。實際捕獲檔的分析如下，Windows 設定／內建相機預覽仍未成功。
 
 1. 燒錄本目錄的 `flash_is.bin`，接上 USB device port 至主機，再重新開機；保留 UART log。
 2. Linux 主機執行 `v4l2-ctl --list-devices` 找出節點，再用 `v4l2-ctl -d /dev/videoX --list-formats-ext` 確認 H264／1280×720／30 fps。以下請替換 `/dev/videoX`。
@@ -122,6 +122,33 @@ ffprobe -v error -select_streams v:0 -show_entries frame=key_frame,pict_type,wid
 ffmpeg -v error -i wcam.h264 -f null -
 ```
 
-確認八色色條、中央遞增 counter、每 30 frames 一個 IDR，以及開始串流可立即解碼。上述接收命令是待上板執行的測試步驟。
+確認八色色條、中央遞增 counter、每 30 frames 一個 IDR，以及啟動串流時何時收到第一組 SPS/PPS／IDR。上述 Linux 接收命令尚待 Linux 上板驗證。
 
-**目前 POC 限制：** USB 拔除或 completion 超時後，保留可能仍被 DMA 使用的 buffer 並停止 producer；重新接線後需重新開機。單一 buffer 串行編碼／傳送，30 fps 是目標值，無法由編譯與主機單元測試保證。尚未驗證跨作業系統相容性或 Full Speed 效能。
+**目前 POC 限制：** USB 拔除或 completion 超時後，保留可能仍被 DMA 使用的 buffer 並停止 producer；重新接線後需重新開機。單一 buffer 串行編碼／傳送，約 10 秒 Windows 實測已達約 30 fps，長時間穩定性尚待驗證。尚未驗證跨作業系統相容性或 Full Speed 效能。
+
+
+## Windows 實機捕獲與預覽
+
+2026-11-03 使用者提供 [wcam-debug.h264](evidence/board-capture-2026-11-03/wcam-debug.h264)，89,240 bytes，SHA-256 `34ab7ba88a42cbbd43b0a5f25cf52fcb06b35193fdc3841fbbe39981736abbc3`。
+
+- Annex B：290 個 P slice、9 組 SPS／PPS／IDR。檔頭是 29 個沒有參數集的 P frame；第一組 SPS 位於 byte 3793。
+- 從第一組 SPS/PPS／IDR 起，270 張影像解碼成功，沒有解碼錯誤；9 組 GOP 均為 1 IDR＋29 P。
+- 以相同 5×7 字型辨識解碼影像中央計數器，從 126 到 395 全部連續，沒有重複或跳號；見 [分析結果](evidence/board-capture-2026-11-03/counter-analysis.json)。
+- [實機解碼畫面](evidence/board-capture-2026-11-03/frame-126.png)；[可播放 MP4](evidence/board-capture-2026-11-03/verified-720p30.mp4) 保留原始編碼，只移除檔頭 29 個無參考 P frame，並依設定與 UART 的 30 fps 補上時間戳，長度 9 秒。裸 H.264 本身沒有 DirectShow 封包時間戳或 keyframe 標記，不能從它還原主機原始 flags。
+- 這份樣本證明硬體 H.264、USB 出流、色條與 counter 可正常解碼；不能宣稱啟動首個 GOP 完整接收、Windows 內建相機預覽或長時間串流已通過。
+
+Windows 內建預覽仍啟動失敗。接下來以 FFmpeg DirectShow 選取 H.264 並交給 FFplay 即時解碼；此命令待使用者在 Windows 確認：
+
+在 **cmd.exe** 執行（避免舊版 Windows PowerShell 的文字管線改寫二進位資料）；先關閉其他相機程式：
+
+```bat
+ffmpeg -hide_banner -f dshow -video_size 1280x720 -framerate 30 -vcodec h264 -i video="wcam H264 color bar" -c:v copy -copyinkf -f h264 - | ffplay -hide_banner -f h264 -framerate 30 -i -
+```
+
+捕獲原始 H.264 則可在 PowerShell 執行：
+
+```powershell
+ffmpeg -hide_banner -f dshow -video_size 1280x720 -framerate 30 -vcodec h264 -i 'video=wcam H264 color bar' -t 10 -c:v copy -copyinkf wcam-debug.h264
+```
+
+`-copyinkf` 允許複製起始未標記為 keyframe 的封包，便於診斷。它不會補出缺少的參數集或修復損壞影格。來源：[FFmpeg 文件](https://www.ffmpeg.org/ffmpeg.html)。啟動時若檔案由 P frame 開始，必須等到下一組 SPS/PPS／IDR 才能解碼；本樣本第一個 GOP 之後解碼正常。
