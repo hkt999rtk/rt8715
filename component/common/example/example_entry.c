@@ -6,13 +6,12 @@
  ******************************************************************************/
 #include <platform_opts.h>
 #include "main.h"
-#include "carbox_raw_section.h"
 
 #if ATCMD_VER == ATVER_2
 #include "flash_api.h"
 #include "device_lock.h"
 #endif
-   
+
 #if CONFIG_EXAMPLE_MDNS
 #include <mdns/example_mdns.h>
 #endif
@@ -78,16 +77,16 @@
 #endif
 
 #if CONFIG_EXAMPLE_GOOGLE_NEST
-#include <googlenest/example_google.h>  
+#include <googlenest/example_google.h>
 #define FromDevice            1
-#define ToDevice     		2 
-#define BOTH     		3 
+#define ToDevice     		2
+#define BOTH     		3
 #define TYPE         "ToDevice"
-#endif   
+#endif
 
 #if CONFIG_EXAMPLE_GOOGLE_CLOUD_IOT
-#include <google_cloud_iot/example_google_cloud_iot.h>  
-#endif  
+#include <google_cloud_iot/example_google_cloud_iot.h>
+#endif
 
 
 #if CONFIG_EXAMPLE_MJPEG_CAPTURE
@@ -109,7 +108,7 @@
 #if CONFIG_EXAMPLE_FATFS
 #include <fatfs/example_fatfs.h>
 #endif
-   
+
 #if CONFIG_EXAMPLE_STD_FILE
 #include <std_file/example_std_file.h>
 #endif
@@ -140,11 +139,11 @@
 
 #if CONFIG_EXAMPLE_AJ_BASIC
 #include <alljoyn/example_aj_basic.h>
-#endif 
+#endif
 
 #if CONFIG_EXAMPLE_AJ_AMEBA_LED
 #include <alljoyn/example_aj_ameba_led.h>
-#endif 
+#endif
 
 #if CONFIG_EXAMPLE_COAP
 #include <coap/example_coap.h>
@@ -177,7 +176,7 @@
 #if CONFIG_EXAMPLE_AUDIO_TO_G711
 #include <audio_to_g711/example_audio_to_g711.h>
 #endif
-   
+
 #if CONFIG_EXAMPLE_AUDIO_MP3
 #include <audio_mp3/example_audio_mp3.h>
 #endif
@@ -261,7 +260,7 @@
 #if CONFIG_EXAMPLE_CJSON
 #include <cJSON/example_cJSON.h>
 #endif
-	
+
 #if CONFIG_MEDIA_H264_TO_SDCARD
 #include <media_h264_to_sdcard/example_media_h264_to_sdcard.h>
 #endif
@@ -303,7 +302,7 @@
 #endif
 
 #if  CONFIG_USB_DFU_OTA
-#include <usb_dfu_ota/example_usb_dfu_ota.h>	
+#include <usb_dfu_ota/example_usb_dfu_ota.h>
 #endif
 
 #if CONFIG_EXAMPLE_SD_HOT_PLUG
@@ -374,10 +373,7 @@ void pre_example_entry(void)
 */
 void example_entry(void)
 {
-
-	raw_test();
-
-#if (CONFIG_EXAMPLE_MDNS && !CONFIG_EXAMPLE_UART_ADAPTER) 
+#if (CONFIG_EXAMPLE_MDNS && !CONFIG_EXAMPLE_UART_ADAPTER)
 	example_mdns();
 #endif
 
@@ -406,7 +402,7 @@ void example_entry(void)
 #if CONFIG_EXAMPLE_SMTP
 	example_smtp();
 #endif
-        
+
 #if CONFIG_EXAMPLE_SSL_DOWNLOAD
 	example_ssl_download();
 #endif
@@ -449,11 +445,11 @@ void example_entry(void)
 
 #if CONFIG_UART_UPDATE
 	example_uart_update();
-#endif  
+#endif
 
 #if CONFIG_EXAMPLE_WIGADGET
     /*To ensure the application has enough heap size, please goto FreeRTOSConfig.h to change configTOTAL_HEAP_SIZE at least to 115*1024 */
-    example_wigadget();         
+    example_wigadget();
 #endif
 
 #if CONFIG_EXAMPLE_MQTT
@@ -476,10 +472,10 @@ void example_entry(void)
 	example_wifi_mac_monitor();
 #endif
 
-#if CONFIG_EXAMPLE_HTTP_CLIENT        
+#if CONFIG_EXAMPLE_HTTP_CLIENT
         example_http_client();
 #endif
-        
+
 #if CONFIG_JOINLINK
 	example_joinlink();
 #endif
@@ -491,11 +487,11 @@ void example_entry(void)
 #if CONFIG_EXAMPLE_FATFS
 	example_fatfs();
 #endif
-        
+
 #if CONFIG_EXAMPLE_STD_FILE
         example_std_file();
-#endif        
-        
+#endif
+
 #if CONFIG_EXAMPLE_DCT
 	example_dct();
 #endif
@@ -512,14 +508,14 @@ void example_entry(void)
 	example_mass_storage();
 #endif
 
-#if CONFIG_EXAMPLE_USB_ISOC_DEVICE        
+#if CONFIG_EXAMPLE_USB_ISOC_DEVICE
     example_isoc_device();
 #endif
 
-#if CONFIG_EXAMPLE_USB_VENDOR_SPECIFIC 
+#if CONFIG_EXAMPLE_USB_VENDOR_SPECIFIC
 	example_vendor_specific();
-#endif        
-        
+#endif
+
 #if CONFIG_EXAMPLE_UART_ATCMD
 	example_uart_atcmd();
 #endif
@@ -544,11 +540,11 @@ void example_entry(void)
 #if CONFIG_EXAMPLE_AJ_BASIC
     example_aj_basic();
 #endif
-           
+
 #if CONFIG_EXAMPLE_AJ_AMEBA_LED
     example_aj_ameba_led();
 #endif
-        
+
 #if CONFIG_EXAMPLE_COAP
     example_coap();
 #endif
@@ -556,7 +552,7 @@ void example_entry(void)
 #if CONFIG_EXAMPLE_WEBSOCKET_CLIENT
     example_wsclient();
 #endif
-    
+
 #if CONFIG_EXAMPLE_WEBSOCKET_SERVER
     example_wsserver();
 #endif
@@ -566,7 +562,7 @@ void example_entry(void)
 	// Para: S/ A/ M1/ M2/ M3/ M4/ M5/ M6/ M7/ S1/ S2/ S3/ S4/ S5/ S6
 	example_wlan_scenario("S");
 #endif
-	
+
 #if CONFIG_EXAMPLE_BCAST
 	example_bcast();
 #endif
@@ -574,11 +570,11 @@ void example_entry(void)
 #if CONFIG_EXAMPLE_AUDIO
 	example_audio();
 #endif
-        
+
 #if CONFIG_EXAMPLE_AUDIO_LOOP
 	example_audio_loop();
-#endif        
-        
+#endif
+
 #if CONFIG_EXAMPLE_AUDIO_TO_G711
 	example_audio_to_g711();
 #endif
@@ -586,25 +582,25 @@ void example_entry(void)
 #if CONFIG_EXAMPLE_AUDIO_MP3
 /*To ensure the application has enough heap size, please goto FreeRTOSConfig.h to change configTOTAL_HEAP_SIZE at least to 60*1024 */
 	example_audio_mp3();
-#endif     
+#endif
 
 #if CONFIG_EXAMPLE_AUDIO_AC3
 	example_audio_ac3();
-#endif     
+#endif
 
 #if CONFIG_EXAMPLE_AUDIO_M4A
 /*To ensure the application has enough heap size, please goto FreeRTOSConfig.h to change configTOTAL_HEAP_SIZE at least to 270*1024 and ENABLE WIFI*/
 	example_audio_m4a();
-#endif  
-        
+#endif
+
 #if CONFIG_EXAMPLE_AUDIO_M4A_SELFPARSE
 /*To ensure the application has enough heap size, please goto FreeRTOSConfig.h to change configTOTAL_HEAP_SIZE at least to 270*1024 and ENABLE WIFI*/
 	example_audio_m4a_selfparse();
-#endif 
+#endif
 
 #if CONFIG_EXAMPLE_AUDIO_M4A_MP3
 	example_audio_m4a_mp3();
-#endif  
+#endif
 
 #if CONFIG_EXAMPLE_AUDIO_AMR
 	example_audio_amr();
@@ -632,24 +628,24 @@ void example_entry(void)
 
 #if CONFIG_EXAMPLE_RARP
 	example_rarp();
-#endif 
+#endif
 
 #if CONFIG_EXAMPLE_SSL_SERVER
 	example_ssl_server();
-#endif  
-        
+#endif
+
 #if CONFIG_EXAMPLE_TIMELAPSE
         example_media_tl();
 #endif
 
 #if CONFIG_EXAMPLE_OTA_HTTP
 	example_ota_http();
-#endif 
+#endif
 
 #if CONFIG_EXAMPLE_OTA_SDCARD
 	example_ota_sdcard();
 #endif
-	
+
 #if CONFIG_EXAMPLE_AMAZON_AWS_IOT
     example_amazon_awsiot();
 #endif
@@ -657,7 +653,7 @@ void example_entry(void)
 #if CONFIG_EXAMPLE_AZURE_IOT_HUB
     example_iot_hub();
 #endif
-    
+
 #if CONFIG_ALINK
 	example_alink();
 #endif
@@ -669,10 +665,10 @@ example_hilink();
 #if CONFIG_EXAMPLE_ALC_DSP_FW_UPGRADE
         example_alc_dsp_fw_upgrade();
 #endif
-        
+
 #if CONFIG_EXAMPLE_AUDIO_PCM_UPLOAD
         example_audio_pcm_upload();
-#endif 
+#endif
 
 #if CONFIG_EXAMPLE_WIFI_ROAMING
 	example_wifi_roaming();
@@ -689,11 +685,11 @@ example_hilink();
 #if CONFIG_MEDIA_AMEBACAM_APP_BROADCAST
 	media_amebacam_broadcast();
 #endif
-	
+
 #if CONFIG_MEDIA_H264_TO_SDCARD
 	example_media_h264_to_sdcard();
 #endif
-        
+
 #if CONFIG_EXAMPLE_MEDIA_MP4_DEMUXER
         example_media_mp4_demuxer();
 #endif
@@ -704,8 +700,8 @@ example_hilink();
 
 #if CONFIG_EXAMPLE_MEDIA_FRAMEWORK_SD_DETECT
 	example_media_framework_sd_detect();
-#endif	
-	
+#endif
+
 #if CONFIG_EXAMPLE_MEDIA_UVCD
 #if UVCD_DUAL
 	example_media_dual_uvcd();
@@ -714,7 +710,7 @@ example_hilink();
 #endif
 #endif
 
-#if CONFIG_EXAMPLE_MEDIA_UVCH	        
+#if CONFIG_EXAMPLE_MEDIA_UVCH
 	example_usbh_uvc();
 #endif
 
@@ -737,15 +733,15 @@ example_hilink();
 #if CONFIG_BT_PERIPHERAL
 	bt_example_init();
 #endif
-        
+
 #if CONFIG_USB_DFU_OTA
         example_usb_dfu_ota();
-#endif    
-        
+#endif
+
 #if CONFIG_EXAMPLE_SD_HOT_PLUG
         example_sd_hot_plug();
 #endif
-        
+
 #if CONFIG_EXAMPLE_KVS_WEBRTC
         example_kvs_webrtc();
 #endif

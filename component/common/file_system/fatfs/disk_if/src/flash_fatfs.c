@@ -18,32 +18,30 @@
 #include <disk_if/inc/flash_fatfs.h>
 #include "device_lock.h"
 #include "platform_opts.h"
-#include "carbox_flash_layout.h"
 
 
 #if	FATFS_DISK_FLASH
 
 #include "flash_api.h" // Flash interface
 
-#define FLASH_SECTOR_COUNT	CARBOX_FATFS_SECTOR_COUNT
-#define SECTOR_SIZE_FLASH	CARBOX_FATFS_LOGICAL_SECTOR_SIZE
-#define FLASH_APP_BASE		CARBOX_FATFS_BASE
-#define FLASH_ERASE_BLOCK_SECTORS	(CARBOX_FLASH_SECTOR_SIZE / CARBOX_FATFS_LOGICAL_SECTOR_SIZE)
+#define FLASH_BLOCK_SIZE	512		// not passing any
+#define FLASH_SECTOR_COUNT	256//128//256//128
+#define SECTOR_SIZE_FLASH	4096
 
-#if !CARBOX_FATFS_READ_ONLY
-#error "flash_fatfs.c currently supports the Carbox FatFS partition as read-only only"
+#if defined(CONFIG_PLATFORM_8195BHP)
+#define FLASH_APP_BASE  0x440000
+#else
+#define FLASH_APP_BASE  0x180000
 #endif
 
 
 flash_t		flash;
 
-extern void flash_init(flash_t *obj);
-
 DRESULT interpret_flash_result(int out){
 	DRESULT res;
 	if(out)
 		res = RES_OK;
-	else 
+	else
 		res = RES_ERROR;
 	return res;
 }
@@ -71,14 +69,9 @@ DSTATUS FLASH_disk_deinitialize(void){
 }
 
 /* Read sector(s) --------------------------------------------*/
-DRESULT FLASH_disk_read(BYTE *buff, DWORD sector, UINT count){			
+DRESULT FLASH_disk_read(BYTE *buff, DWORD sector, UINT count){
 	DRESULT res;
-	char retry_cnt = 0;
-
-	if ((count == 0) || (sector >= FLASH_SECTOR_COUNT) || (count > (FLASH_SECTOR_COUNT - sector))) {
-		return RES_PARERR;
-	}
-
+	char retry_cnt = 0, i = 0;
 	device_mutex_lock(RT_DEV_LOCK_FLASH);
 	do{
 		res = interpret_flash_result(flash_stream_read(&flash, FLASH_APP_BASE + sector*SECTOR_SIZE_FLASH, count*SECTOR_SIZE_FLASH, (uint8_t *) buff));
@@ -92,10 +85,24 @@ DRESULT FLASH_disk_read(BYTE *buff, DWORD sector, UINT count){
 /* Write sector(s) --------------------------------------------*/
 #if _USE_WRITE == 1
 DRESULT FLASH_disk_write(BYTE const *buff, DWORD sector, UINT count){
-	(void)buff;
-	(void)sector;
-	(void)count;
-	return RES_WRPRT;
+	DRESULT res;
+	char retry_cnt = 0, i = 0;
+
+	device_mutex_lock(RT_DEV_LOCK_FLASH);
+	do{
+		for(i=0;i<count;i++){
+			uint32_t erase_addr = FLASH_APP_BASE + (sector + i)*SECTOR_SIZE_FLASH;
+
+			flash_erase_sector(&flash, erase_addr);
+			res = interpret_flash_result(flash_stream_write(&flash, FLASH_APP_BASE + (sector + i)*SECTOR_SIZE_FLASH, count*SECTOR_SIZE_FLASH, (uint8_t *) buff));		// Replace with Flash API
+		}
+		if(++retry_cnt>=3)
+			break;
+
+	}while(res != RES_OK);
+	device_mutex_unlock(RT_DEV_LOCK_FLASH);
+
+	return res;
 }
 #endif
 
@@ -103,10 +110,12 @@ DRESULT FLASH_disk_write(BYTE const *buff, DWORD sector, UINT count){
 #if _USE_IOCTL == 1
 DRESULT FLASH_disk_ioctl (BYTE cmd, void* buff){
 	DRESULT res = RES_ERROR;
+	// FLASH_RESULT result;
+	DWORD last_blk_addr, block_size;
 
 	switch(cmd){
 		/* Generic command (used by FatFs) */
-		
+
 		/* Make sure that no pending write process in the physical drive */
 		case CTRL_SYNC:		/* Flush disk cache (for write functions) */
 			res = RES_OK;
@@ -122,8 +131,8 @@ DRESULT FLASH_disk_ioctl (BYTE cmd, void* buff){
 			break;
 
 		case GET_BLOCK_SIZE:	/* Get erase block size (for only f_mkfs()) */
-			*(DWORD*)buff = FLASH_ERASE_BLOCK_SECTORS;
-			res = RES_OK;
+			*(DWORD*)buff = FLASH_BLOCK_SIZE;
+			res = RES_ERROR;
 			break;
 		case CTRL_ERASE_SECTOR:/* Force erased a block of sectors (for only _USE_ERASE) */
 			res = RES_OK;
@@ -166,6 +175,6 @@ ll_diskio_drv FLASH_disk_Driver ={
 #if _USE_IOCTL == 1
 	.disk_ioctl = FLASH_disk_ioctl,
 #endif
-	.TAG	= (unsigned char *)"FLASH"
+	.TAG	= "FLASH"
 };
 #endif

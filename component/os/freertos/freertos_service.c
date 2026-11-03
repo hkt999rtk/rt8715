@@ -7,7 +7,6 @@
 //#include <autoconf.h>
 #include <osdep_service.h>
 #include <stdio.h>
-#include <string.h>
 #include <freertos_pmu.h>
 //#include <tcm_heap.h>
 #if defined(CONFIG_PLATFORM_8710C)
@@ -87,7 +86,7 @@ u8* _freertos_zmalloc(u32 sz)
 	if (pbuf != NULL)
 		memset(pbuf, 0, sz);
 
-	return pbuf;	
+	return pbuf;
 }
 
 void _freertos_mfree(u8 *pbuf, u32 sz)
@@ -272,7 +271,7 @@ static void _freertos_cpu_lock(void)
 	__disable_irq();
 	icache_disable();
 	dcache_disable();
-	
+
 	//gtimer_init(&tmp_timer_obj, 0xff);
 	//gtimer_reload(&tmp_timer_obj, 400*1000 );	// 4s
 	//gtimer_start(&tmp_timer_obj);
@@ -283,14 +282,14 @@ static void _freertos_cpu_lock(void)
 
 static void _freertos_cpu_unlock(void)
 {
-#if defined(CONFIG_PLATFORM_8195BHP)	
+#if defined(CONFIG_PLATFORM_8195BHP)
 	//int duration = (int)gtimer_read_us(&tmp_timer_obj)/1000;
 	//gtimer_deinit(&tmp_timer_obj);
         uint32_t duration = (us_ticker_read()-lock_ticker)/1000;
 	// compensate rtos tick
 	vTaskIncTick(duration);
 	dcache_enable();
-	icache_enable();	
+	icache_enable();
 	icache_invalidate();
 	__enable_irq();
 #endif
@@ -409,7 +408,7 @@ static int _freertos_deinit_xqueue( _xqueue* queue )
 
 	  if( uxQueueMessagesWaiting( *queue ) )
 	  {
-	  	  result = -1;
+		  result = -1;
 	  }
     vQueueDelete( *queue );
     return result;
@@ -598,7 +597,7 @@ static u64 _freertos_modular64(u64 n, u64 base)
 	}
 	else
 		__rem = __div64_32(&(n), __base);
-	
+
 	return __rem;
 }
 
@@ -637,7 +636,7 @@ static int _freertos_get_random_bytes(void *buf, size_t len)
 	lp = (unsigned int *) buf;
 
 	for(i = 0; i < count; i ++) {
-		lp[i] = _freertos_arc4random();  
+		lp[i] = _freertos_arc4random();
 		len -= sizeof(unsigned int);
 	}
 
@@ -678,12 +677,6 @@ static int _freertos_create_task(struct task_struct *ptask, const char *name,
 	}
 
 	priority += tskIDLE_PRIORITY;
-
-	/* Workaround: xmit_thread stack overflow in CarPlay wireless mode.
-	   Triple the stack to handle WiFi tx during iAP2 authentication. */
-//	if (strncmp(name, "xmit_thread", 11) == 0)
-//		stack_size *= 3;
-
 #if defined(CONFIG_WIFI_NORMAL) && defined(CONFIG_NETWORK)
 	if(rtw_if_wifi_thread((char*)name) == 0){
 
@@ -702,7 +695,7 @@ static int _freertos_create_task(struct task_struct *ptask, const char *name,
 				&ptask->task,
 				stack_addr,
 				NULL);
-#else							 
+#else
 		ret = xTaskCreate(
 				task_func,
 				(const char *)name,
@@ -727,11 +720,11 @@ static int _freertos_create_task(struct task_struct *ptask, const char *name,
 	if(ret != pdPASS){
 		printf("Create Task \"%s\" Failed! ret=%d\n", ptask->task_name, ret);
 	}
-	
+
 	DBG_TRACE("Create Task \"%s\"\n", ptask->task_name);
 	return ret;
 }
-	
+
 static void _freertos_delete_task(struct task_struct *ptask)
 {
 	if (!ptask->task){
@@ -741,18 +734,8 @@ static void _freertos_delete_task(struct task_struct *ptask)
 
 	vTaskDelete(ptask->task);
 	ptask->task = 0;
-	
+
 	DBG_TRACE("Delete Task \"%s\"\n", ptask->task_name);
-}
-
-static void _freertos_set_priority_task(void *task, u32 NewPriority)
-{
-	vTaskPrioritySet((TaskHandle_t) task, (UBaseType_t) NewPriority);
-}
-
-static int _freertos_get_priority_task(void *task)
-{
-	return (int) uxTaskPriorityGet((TaskHandle_t) task);
 }
 
 static void _freertos_thread_enter(char *name)
@@ -760,90 +743,80 @@ static void _freertos_thread_enter(char *name)
 	DBG_INFO("\n\rRTKTHREAD %s\n", name);
 }
 
-static void _freertos_suspend_task(void *task)
-{
-	vTaskSuspend((TaskHandle_t) task);
-}
-
-static void _freertos_resume_task(void *task)
-{
-	vTaskResume((TaskHandle_t) task);
-}
-
 static void _freertos_thread_exit(void)
 {
-	DBG_INFO("\n\rRTKTHREAD exit %s\n", __FUNCTION__); 
-	vTaskDelete(NULL); 
+	DBG_INFO("\n\rRTKTHREAD exit %s\n", __FUNCTION__);
+	vTaskDelete(NULL);
 }
 
-_timerHandle _freertos_timerCreate( const signed char *pcTimerName, 
-							  osdepTickType xTimerPeriodInTicks, 
-							  u32 uxAutoReload, 
-							  void * pvTimerID, 
+_timerHandle _freertos_timerCreate( const signed char *pcTimerName,
+							  osdepTickType xTimerPeriodInTicks,
+							  u32 uxAutoReload,
+							  void * pvTimerID,
 							  TIMER_FUN pxCallbackFunction )
 {
 	if(xTimerPeriodInTicks == TIMER_MAX_DELAY) {
 		xTimerPeriodInTicks = portMAX_DELAY;
 	}
-	return xTimerCreate((const char *)pcTimerName, xTimerPeriodInTicks, uxAutoReload, pvTimerID, pxCallbackFunction);	
+	return xTimerCreate((const char *)pcTimerName, xTimerPeriodInTicks, uxAutoReload, pvTimerID, pxCallbackFunction);
 }
 
-u32 _freertos_timerDelete( _timerHandle xTimer, 
+u32 _freertos_timerDelete( _timerHandle xTimer,
 							   osdepTickType xBlockTime )
 {
-	return (u32)xTimerDelete(xTimer, xBlockTime);	
+	return (u32)xTimerDelete(xTimer, xBlockTime);
 }
 
 u32 _freertos_timerIsTimerActive( _timerHandle xTimer )
 {
-	return (u32)xTimerIsTimerActive(xTimer);	
+	return (u32)xTimerIsTimerActive(xTimer);
 }
 
-u32  _freertos_timerStop( _timerHandle xTimer, 
+u32  _freertos_timerStop( _timerHandle xTimer,
 							   osdepTickType xBlockTime )
 {
-	return (u32)xTimerStop(xTimer, xBlockTime);	
+	return (u32)xTimerStop(xTimer, xBlockTime);
 }
 
-u32  _freertos_timerChangePeriod( _timerHandle xTimer, 
-							   osdepTickType xNewPeriod, 
+u32  _freertos_timerChangePeriod( _timerHandle xTimer,
+							   osdepTickType xNewPeriod,
 							   osdepTickType xBlockTime )
 {
 	if(xNewPeriod == 0)
 		xNewPeriod += 1;
-	return (u32)xTimerChangePeriod(xTimer, xNewPeriod, xBlockTime);	
+	return (u32)xTimerChangePeriod(xTimer, xNewPeriod, xBlockTime);
 }
 void *_freertos_timerGetID( _timerHandle xTimer ){
 
 	return pvTimerGetTimerID(xTimer);
 }
 
-u32  _freertos_timerStart( _timerHandle xTimer, 
+u32  _freertos_timerStart( _timerHandle xTimer,
 							   osdepTickType xBlockTime )
 {
-	return (u32)xTimerStart(xTimer, xBlockTime);	
+	return (u32)xTimerStart(xTimer, xBlockTime);
 }
 
-u32  _freertos_timerStartFromISR( _timerHandle xTimer, 
+u32  _freertos_timerStartFromISR( _timerHandle xTimer,
 							   osdepBASE_TYPE *pxHigherPriorityTaskWoken )
 {
-	return (u32)xTimerStartFromISR(xTimer, pxHigherPriorityTaskWoken);	
+	return (u32)xTimerStartFromISR(xTimer, pxHigherPriorityTaskWoken);
 }
 
-u32  _freertos_timerStopFromISR( _timerHandle xTimer, 
+u32  _freertos_timerStopFromISR( _timerHandle xTimer,
 							   osdepBASE_TYPE *pxHigherPriorityTaskWoken )
 {
-	return (u32)xTimerStopFromISR(xTimer, pxHigherPriorityTaskWoken);	
+	return (u32)xTimerStopFromISR(xTimer, pxHigherPriorityTaskWoken);
 }
 
-u32  _freertos_timerResetFromISR( _timerHandle xTimer, 
+u32  _freertos_timerResetFromISR( _timerHandle xTimer,
 							   osdepBASE_TYPE *pxHigherPriorityTaskWoken )
 {
-	return (u32)xTimerResetFromISR(xTimer, pxHigherPriorityTaskWoken);	
+	return (u32)xTimerResetFromISR(xTimer, pxHigherPriorityTaskWoken);
 }
 
-u32  _freertos_timerChangePeriodFromISR( _timerHandle xTimer, 
-							   osdepTickType xNewPeriod, 
+u32  _freertos_timerChangePeriodFromISR( _timerHandle xTimer,
+							   osdepTickType xNewPeriod,
 							   osdepBASE_TYPE *pxHigherPriorityTaskWoken )
 {
 	if(xNewPeriod == 0)
@@ -851,10 +824,10 @@ u32  _freertos_timerChangePeriodFromISR( _timerHandle xTimer,
 	return (u32)xTimerChangePeriodFromISR(xTimer, xNewPeriod, pxHigherPriorityTaskWoken);
 }
 
-u32  _freertos_timerReset( _timerHandle xTimer, 
+u32  _freertos_timerReset( _timerHandle xTimer,
 							   osdepTickType xBlockTime )
 {
-	return (u32)xTimerReset(xTimer, xBlockTime);	
+	return (u32)xTimerReset(xTimer, xBlockTime);
 }
 
 void _freertos_acquire_wakelock()
@@ -862,14 +835,14 @@ void _freertos_acquire_wakelock()
 #if defined(CONFIG_PLATFORM_8195A)
 
 #if defined(configUSE_WAKELOCK_PMU) && (configUSE_WAKELOCK_PMU == 1)
-   	pmu_acquire_wakelock(PMU_WLAN_DEVICE);
+	pmu_acquire_wakelock(PMU_WLAN_DEVICE);
 #endif
-	
+
 #elif defined(CONFIG_PLATFORM_8711B) || defined(CONFIG_PLATFORM_8721D)
 
 #if defined(configUSE_WAKELOCK_PMU) && (configUSE_WAKELOCK_PMU == 1)
-	if (pmu_yield_os_check()) 
-   		 pmu_acquire_wakelock(PMU_WLAN_DEVICE);
+	if (pmu_yield_os_check())
+		 pmu_acquire_wakelock(PMU_WLAN_DEVICE);
 #endif
 
 #endif
@@ -883,11 +856,11 @@ void _freertos_release_wakelock()
 #if defined(configUSE_WAKELOCK_PMU) && (configUSE_WAKELOCK_PMU == 1)
     pmu_release_wakelock(PMU_WLAN_DEVICE);
 #endif
-	
+
 #elif defined(CONFIG_PLATFORM_8711B) || defined(CONFIG_PLATFORM_8721D)
 
 #if defined(configUSE_WAKELOCK_PMU) && (configUSE_WAKELOCK_PMU == 1)
-	if (pmu_yield_os_check()) 
+	if (pmu_yield_os_check())
 		pmu_release_wakelock(PMU_WLAN_DEVICE);
 #endif
 
@@ -897,9 +870,9 @@ void _freertos_release_wakelock()
 void _freertos_wakelock_timeout(uint32_t timeout)
 {
 #if defined(CONFIG_PLATFORM_8195A)
-	
+
 #elif defined(CONFIG_PLATFORM_8711B) || defined(CONFIG_PLATFORM_8721D)
-	if (pmu_yield_os_check()) 
+	if (pmu_yield_os_check())
 		pmu_set_sysactive_time(timeout);
 	else
 		DBG_INFO("can't aquire wake during suspend flow!!\n");
@@ -969,7 +942,7 @@ const struct osdep_service_ops osdep_service = {
 	_freertos_mdelay_os,	//rtw_mdelay_os
 	_freertos_udelay_os,	//rtw_udelay_os
 	_freertos_yield_os,		//rtw_yield_os
-	
+
 	_freertos_ATOMIC_SET,	//ATOMIC_SET
 	_freertos_ATOMIC_READ,	//ATOMIC_READ
 	_freertos_ATOMIC_ADD,	//ATOMIC_ADD
@@ -988,19 +961,15 @@ const struct osdep_service_ops osdep_service = {
 	_freertos_create_task,			//rtw_create_task
 	_freertos_delete_task,			//rtw_delete_task
 	NULL,							//rtw_wakeup_task
-	_freertos_set_priority_task,	//rtw_set_priority_task
-	_freertos_get_priority_task,	//rtw_get_priority_task
-	_freertos_suspend_task,			//rtw_suspend_task
-	_freertos_resume_task,			//rtw_resume_task
-        
+
 	_freertos_thread_enter,			//rtw_thread_enter
 	_freertos_thread_exit,			//rtw_thread_exit
 
-	_freertos_timerCreate,			//rtw_timerCreate,       
-	_freertos_timerDelete,			//rtw_timerDelete,       
+	_freertos_timerCreate,			//rtw_timerCreate,
+	_freertos_timerDelete,			//rtw_timerDelete,
 	_freertos_timerIsTimerActive,	//rtw_timerIsTimerActive,
-	_freertos_timerStop,			//rtw_timerStop,         
-	_freertos_timerChangePeriod,	//rtw_timerChangePeriod 
+	_freertos_timerStop,			//rtw_timerStop,
+	_freertos_timerChangePeriod,	//rtw_timerChangePeriod
 	_freertos_timerGetID,			//rtw_timerGetID
 	_freertos_timerStart,			//rtw_timerStart
 	_freertos_timerStartFromISR,	//rtw_timerStartFromISR

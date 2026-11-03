@@ -31,10 +31,10 @@ static rtw_result_t rtw_send_event_to_worker(int event_cmd, char *buf, int buf_l
 	int i;
 	rtw_result_t ret = RTW_SUCCESS;
 	char *local_buf = NULL;
-	
-	if((unsigned int)event_cmd >= WIFI_EVENT_MAX || buf_len < 0 || (buf_len && !buf))
+
+	if(event_cmd >= WIFI_EVENT_MAX)
 		return RTW_BADARG;
-	
+
 	for(i = 0; i < WIFI_EVENT_MAX_ROW; i++){
 		if(event_callback_list[event_cmd][i].handler == NULL)
 			continue;
@@ -63,15 +63,15 @@ static rtw_result_t rtw_send_event_to_worker(int event_cmd, char *buf, int buf_l
 	}
 	return ret;
 }
-#endif
-rtw_result_t rtw_indicate_event_handle(int event_cmd, char *buf, int buf_len, int flags)
+#else
+static rtw_result_t rtw_indicate_event_handle(int event_cmd, char *buf, int buf_len, int flags)
 {
 	rtw_event_handler_t handle = NULL;
 	int i;
-	
-	if((unsigned int)event_cmd >= WIFI_EVENT_MAX || buf_len < 0 || (buf_len && !buf))
+
+	if(event_cmd >= WIFI_EVENT_MAX)
 		return (rtw_result_t)RTW_BADARG;
-	
+
 	for(i = 0; i < WIFI_EVENT_MAX_ROW; i++){
 		handle = event_callback_list[event_cmd][i].handler;
 		if(handle == NULL)
@@ -81,45 +81,40 @@ rtw_result_t rtw_indicate_event_handle(int event_cmd, char *buf, int buf_len, in
 
 	return RTW_SUCCESS;
 }
+#endif
 
 void wifi_indication( rtw_event_indicate_t event, char *buf, int buf_len, int flags)
 {
-	if (event >= WIFI_EVENT_MAX || buf_len < 0 || (buf_len && !buf))
-		return;
-
-	/* Apply internal STA state before notifying applications, as in Smart's
-	 * JOIN_STATUS path. Existing event IDs and driver ABI stay unchanged. */
-	wifi_event_sta_internal_hdl(event, buf, buf_len, flags);
 	//
 	// If upper layer application triggers additional operations on receiving of wext_wlan_indicate,
-	// 		please strictly check current stack size usage (by using uxTaskGetStackHighWaterMark() ) 
-	//		, and tries not to share the same stack with wlan driver if remaining stack space is 
-	//		not available for the following operations. 
+	// 		please strictly check current stack size usage (by using uxTaskGetStackHighWaterMark() )
+	//		, and tries not to share the same stack with wlan driver if remaining stack space is
+	//		not available for the following operations.
 	//		ex: using semaphore to notice another thread.
 	switch(event)
 	{
 		case WIFI_EVENT_DISCONNECT:
-#if(WIFI_INDICATE_MSG==1)			
+#if(WIFI_INDICATE_MSG==1)
 			printf("\n\r %s():Disconnection indication received", __FUNCTION__);
 #endif
 			break;
 		case WIFI_EVENT_CONNECT:
-			// For WPA/WPA2 mode, indication of connection does not mean data can be  
+			// For WPA/WPA2 mode, indication of connection does not mean data can be
 			// 		correctly transmitted or received. Data can be correctly transmitted or
-			// 		received only when 4-way handshake is done. 
+			// 		received only when 4-way handshake is done.
 			// Please check WIFI_EVENT_FOURWAY_HANDSHAKE_DONE event
-#if(WIFI_INDICATE_MSG==1)						
+#if(WIFI_INDICATE_MSG==1)
 			// Sample: return mac address
 			if(buf != NULL && buf_len == 6)
 			{
-				printf("\n\r%s():Connect indication received: %02x:%02x:%02x:%02x:%02x:%02x", __FUNCTION__, 
+				printf("\n\r%s():Connect indication received: %02x:%02x:%02x:%02x:%02x:%02x", __FUNCTION__,
 							buf[0],buf[1],buf[2],buf[3],buf[4],buf[5]);
 			}
 #endif
 			break;
 		case WIFI_EVENT_FOURWAY_HANDSHAKE_DONE:
-#if(WIFI_INDICATE_MSG==1)			
-			if(buf != NULL)			
+#if(WIFI_INDICATE_MSG==1)
+			if(buf != NULL)
 			{
 				if(buf_len == strlen(IW_EXT_STR_FOURWAY_DONE))
 					printf("\n\r%s():%s", __FUNCTION__, buf);
@@ -127,17 +122,17 @@ void wifi_indication( rtw_event_indicate_t event, char *buf, int buf_len, int fl
 #endif
 			break;
 		case WIFI_EVENT_SCAN_RESULT_REPORT:
-#if(WIFI_INDICATE_MSG==1)			
+#if(WIFI_INDICATE_MSG==1)
 			printf("\n\r%s(): WIFI_EVENT_SCAN_RESULT_REPORT\n", __func__);
 #endif
 			break;
 		case WIFI_EVENT_SCAN_DONE:
-#if(WIFI_INDICATE_MSG==1)			
+#if(WIFI_INDICATE_MSG==1)
 			printf("\n\r%s(): WIFI_EVENT_SCAN_DONE\n", __func__);
 #endif
 			break;
 		case WIFI_EVENT_RECONNECTION_FAIL:
-#if(WIFI_INDICATE_MSG==1)			
+#if(WIFI_INDICATE_MSG==1)
 			if(buf != NULL){
 				if(buf_len == strlen(IW_EXT_STR_RECONNECTION_FAIL))
 					printf("\n\r%s", buf);
@@ -145,29 +140,29 @@ void wifi_indication( rtw_event_indicate_t event, char *buf, int buf_len, int fl
 #endif
 			break;
 		case WIFI_EVENT_NO_NETWORK:
-#if(WIFI_INDICATE_MSG==1)			
+#if(WIFI_INDICATE_MSG==1)
 			printf("\n\r%s(): WIFI_EVENT_NO_NETWORK\n", __func__);
 #endif
 			break;
 		case WIFI_EVENT_RX_MGNT:
-#if(WIFI_INDICATE_MSG==1)			
+#if(WIFI_INDICATE_MSG==1)
 			printf("\n\r%s(): WIFI_EVENT_RX_MGNT\n", __func__);
 #endif
 			break;
 #if CONFIG_ENABLE_P2P
 		case WIFI_EVENT_SEND_ACTION_DONE:
-#if(WIFI_INDICATE_MSG==1)			
+#if(WIFI_INDICATE_MSG==1)
 			printf("\n\r%s(): WIFI_EVENT_SEND_ACTION_DONE\n", __func__);
 #endif
 			break;
 #endif //CONFIG_ENABLE_P2P
 		case WIFI_EVENT_STA_ASSOC:
-#if(WIFI_INDICATE_MSG==1)			
+#if(WIFI_INDICATE_MSG==1)
 			printf("\n\r%s(): WIFI_EVENT_STA_ASSOC\n", __func__);
 #endif
 			break;
 		case WIFI_EVENT_STA_DISASSOC:
-#if(WIFI_INDICATE_MSG==1)			
+#if(WIFI_INDICATE_MSG==1)
 			printf("\n\r%s(): WIFI_EVENT_STA_DISASSOC\n", __func__);
 #endif
 			break;
@@ -222,23 +217,21 @@ void wifi_indication( rtw_event_indicate_t event, char *buf, int buf_len, int fl
 
 void wifi_reg_event_handler(unsigned int event_cmds, rtw_event_handler_t handler_func, void *handler_user_data)
 {
-	int i;
-	if (event_cmds >= WIFI_EVENT_MAX || handler_func == NULL)
-		return;
-
-	/* Check duplicates even when the table is full. */
-	for (i = 0; i < WIFI_EVENT_MAX_ROW; i++) {
-		if (event_callback_list[event_cmds][i].handler == handler_func)
-			return;
-	}
-	for (i = 0; i < WIFI_EVENT_MAX_ROW; i++) {
-		if (event_callback_list[event_cmds][i].handler == NULL) {
-			event_callback_list[event_cmds][i].handler_user_data = handler_user_data;
-			event_callback_list[event_cmds][i].handler = handler_func;
-			return;
+	int i = 0, j = 0;
+	if(event_cmds < WIFI_EVENT_MAX){
+		for(i=0; i < WIFI_EVENT_MAX_ROW; i++){
+			if(event_callback_list[event_cmds][i].handler == NULL){
+			    for(j=0; j<WIFI_EVENT_MAX_ROW; j++){
+			        if(event_callback_list[event_cmds][j].handler == handler_func){
+			            return;
+			        }
+			    }
+				event_callback_list[event_cmds][i].handler = handler_func;
+				event_callback_list[event_cmds][i].handler_user_data = handler_user_data;
+				return;
+			}
 		}
 	}
-	printf("WifiEvtReg fail: %u %u\n", event_cmds, (unsigned int)WIFI_EVENT_MAX_ROW);
 }
 
 void wifi_unreg_event_handler(unsigned int event_cmds, rtw_event_handler_t handler_func)
@@ -262,9 +255,9 @@ void init_event_callback_list(){
 int wifi_manager_init()
 {
 #if CONFIG_WIFI_IND_USE_THREAD
-	rtw_create_worker_thread(&wifi_worker_thread, 
-							WIFI_MANAGER_PRIORITY, 
-							WIFI_MANAGER_STACKSIZE, 
+	rtw_create_worker_thread(&wifi_worker_thread,
+							WIFI_MANAGER_PRIORITY,
+							WIFI_MANAGER_STACKSIZE,
 							WIFI_MANAGER_Q_SZ);
 #endif
 	return 0;
@@ -276,4 +269,3 @@ void rtw_wifi_manager_deinit()
 	rtw_delete_worker_thread(&wifi_worker_thread);
 #endif
 }
-

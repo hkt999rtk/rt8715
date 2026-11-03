@@ -30,9 +30,6 @@
 
 extern void shell_cmd_init (void);
 extern s32 shell_task(void);
-#if defined(CONFIG_PWM_EN)
-#include "carbox/led_rgb_lp.h"
-#endif
 extern void main(void);
 
 void malloc_test(void)
@@ -40,15 +37,15 @@ void malloc_test(void)
     void* res = (void*)malloc(1024);
     dbg_printf("res0 %x\n\r", res);
     free(res);
-    
+
     res = (void*)malloc(512);
     dbg_printf("res1 %x\n\r", res);
     free(res);
-    
+
     res = (void*)malloc(123);
     dbg_printf("res1 %x\n\r", res);
     free(res);
-    
+
     res = (void*)malloc(333);
     dbg_printf("res1 %x\n\r", res);
     free(res);
@@ -56,19 +53,10 @@ void malloc_test(void)
 
 void main (void)
 {
-#if defined(CONFIG_PWM_EN)
-    led_rgb_lp_prepare_boot_red();
-#endif
     malloc_test();
     dbg_printf ("Build @ %s, %s\r\n", __TIME__, __DATE__);
     shell_cmd_init ();
-#if defined(CONFIG_PWM_EN)
-    (void)led_rgb_lp_init();
-#endif
     while (1) {
-#if defined(CONFIG_PWM_EN)
-        led_rgb_lp_poll();
-#endif
         shell_task ();
     }
 }

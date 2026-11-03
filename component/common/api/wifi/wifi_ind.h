@@ -20,7 +20,7 @@
   * @brief   This file provides the functions related to event handler mechanism.
   ******************************************************************************
   */
-  
+
 #ifndef _WIFI_INDICATE_H
 #define _WIFI_INDICATE_H
 
@@ -29,8 +29,8 @@
  *  @brief      NIC functions
  *  @{
  */
- 
-#include "wifi_conf.h"  
+
+#include "wifi_conf.h"
 
 #ifdef __cplusplus
   extern "C" {
@@ -45,10 +45,10 @@ typedef struct
 	void*	handler_user_data;
 } event_list_elem_t;
 
-/** 
+/**
  * @brief  Initialize the event callback list.
  * @warning  Please make sure this function has been invoked before
- *  	 using the event handler related mechanism. 
+ *  	 using the event handler related mechanism.
  * @param  None
  * @return  None
  */
@@ -61,28 +61,20 @@ void init_event_callback_list(void);
   * @param[in]  buf_len: The length of the buffer.
   * @param[in]  flags: Indicate some extra information, sometimes it is 0.
   * @retval None
-  * @note  If upper layer application triggers additional operations on receiving of wext_wlan_indicate, 
-  *			please strictly check current stack size usage (by using uxTaskGetStackHighWaterMark() ), 
+  * @note  If upper layer application triggers additional operations on receiving of wext_wlan_indicate,
+  *			please strictly check current stack size usage (by using uxTaskGetStackHighWaterMark() ),
   *			and tries not to share the same stack with wlan driver if remaining stack space is not available
-  *			for the following operations. 
-  *			ex: using semaphore to notice another thread instead of handing event directly in wifi_indication().  
+  *			for the following operations.
+  *			ex: using semaphore to notice another thread instead of handing event directly in wifi_indication().
   */
 extern void wifi_indication( rtw_event_indicate_t event, char *buf, int buf_len, int flags);
 
-/* Public callback dispatch, matching the Smart SDK API. This does not run
- * internal STA state transitions; driver events must use wifi_indication(). */
-rtw_result_t rtw_indicate_event_handle(int event_cmd, char *buf, int buf_len, int flags);
-
-/* RT8715 equivalent of the Smart SDK's join-status internal handler.
- * Accepts RT8715 events, not Smart event IDs or enum join-status values. */
-void wifi_event_sta_internal_hdl(rtw_event_indicate_t event, char *buf, int buf_len, int flags);
-
-/** 
+/**
  * @brief  Register the event listener.
  * @param[in] event_cmds : The event command number indicated.
- * @param[in] handler_func : the callback function which will 
+ * @param[in] handler_func : the callback function which will
  *  			  receive and process the event.
- * @param[in] handler_user_data : user specific data that will be 
+ * @param[in] handler_user_data : user specific data that will be
  *  			   passed directly to the callback function.
  * @return  RTW_SUCCESS : if successfully registers the event.
  * @return  RTW_ERROR : if an error occurred.
@@ -94,9 +86,9 @@ extern void wifi_reg_event_handler(unsigned int event_cmds, rtw_event_handler_t 
 /**
  * @brief  Un-register the event listener.
  * @param[in] event_cmds : The event command number indicated.
- * @param[in] handler_func : the callback function which will 
+ * @param[in] handler_func : the callback function which will
  *  			  receive and process the event.
- *  
+ *
  * @return  RTW_SUCCESS : if successfully un-registers the event .
  * @return  RTW_ERROR : if an error occurred.
  */
@@ -109,4 +101,3 @@ extern void wifi_unreg_event_handler(unsigned int event_cmds, rtw_event_handler_
 /*\@}*/
 
 #endif //_WIFI_INDICATE_H
-

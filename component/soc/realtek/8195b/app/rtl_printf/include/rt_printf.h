@@ -1,7 +1,7 @@
 /**************************************************************************//**
  * @file     rt_printf.h
  * @brief    This file defines the wrapper functions for printf API in ROM.
- * 
+ *
  * @version  V1.00
  * @date     2016-09-28
  *
@@ -25,7 +25,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
  *
  ******************************************************************************/
- 
+
 #ifndef _RT_PRINTF__H
 #define _RT_PRINTF__H
 
@@ -75,43 +75,28 @@ extern const stdio_printf_func_stubs_t __rom_stubs_stdprintf_ns;     // symbol f
 
 extern const stdio_printf_func_stubs_t stdio_printf_stubs;     // symbol from linker script
 
-// --- rt_printf callback types (runtime-swappable print backend) ---
-typedef int (*rt_printf_fn_t)(const char *fmt, ...);
-typedef int (*rt_sprintf_fn_t)(char *buf, const char *fmt, ...);
-typedef int (*rt_snprintf_fn_t)(char *buf, size_t size, const char *fmt, ...);
-typedef int (*rt_sscanf_fn_t)(const char *buf, const char *fmt, ...);
-
-// Global callback pointers — defined in libc_wrap.c with platform-specific defaults:
-//   LP  → ROM stubs (stdio_printf_stubs) to save RAM
-//   HP  → newlib printf / sprintf / snprintf / sscanf
-// Can be overridden at runtime (e.g. LP switching to IPC forwarding).
-extern rt_printf_fn_t    _rt_printf_fn;
-extern rt_sprintf_fn_t   _rt_sprintf_fn;
-extern rt_snprintf_fn_t  _rt_snprintf_fn;
-extern rt_printf_fn_t    _rt_printfl_fn;
-extern rt_sprintf_fn_t   _rt_sprintfl_fn;
-extern rt_snprintf_fn_t  _rt_snprintfl_fn;
-extern rt_sscanf_fn_t    _rt_sscanf_fn;
-
-// Unified macros — both LP and HP go through the same callback pointers
-#define rt_printf(...)                  _rt_printf_fn(__VA_ARGS__)
-#define rt_sprintf(buf, ...)            _rt_sprintf_fn(buf, __VA_ARGS__)
-#define rt_snprintf(buf, size, ...)     _rt_snprintf_fn(buf, size, __VA_ARGS__)
-#define rt_printfl(...)                 _rt_printfl_fn(__VA_ARGS__)
-#define rt_sprintfl(buf, ...)           _rt_sprintfl_fn(buf, __VA_ARGS__)
-#define rt_snprintfl(buf, size, ...)    _rt_snprintfl_fn(buf, size, __VA_ARGS__)
-#if !defined(CONFIG_BUILD_SECURE)
-#define rt_sscanf(buf, ...)             _rt_sscanf_fn(buf, __VA_ARGS__)
-#endif
-
-// rt_log_printf: LP needs the full log_buf support from ROM stubs;
-// HP discards the plog argument and uses the printf callback directly.
-#if defined(CONFIG_PLATFORM_8195BLP) && !defined(CONFIG_BUILD_SECURE)
-#define rt_log_printf(plog, ...)        (stdio_printf_stubs.log_buf_printf(plog, __VA_ARGS__))
-#elif defined(CONFIG_BUILD_SECURE)
+#if defined(CONFIG_BUILD_SECURE)
+// The secure region only have light version printf
+#define rt_printf(...)                  (stdio_printf_stubs.rt_printfl(__VA_ARGS__))
+#define rt_sprintf(buf, ...)            (stdio_printf_stubs.rt_sprintfl(buf, __VA_ARGS__))
+#define rt_snprintf(buf, size, ...)     (stdio_printf_stubs.rt_snprintfl(buf, size, __VA_ARGS__))
+#define rt_printfl(...)                 (stdio_printf_stubs.rt_printfl(__VA_ARGS__))
+#define rt_sprintfl(buf, ...)           (stdio_printf_stubs.rt_sprintfl(buf, __VA_ARGS__))
+#define rt_snprintfl(buf, size, ...)    (stdio_printf_stubs.rt_snprintfl(buf, size, __VA_ARGS__))
+// The secure region have no log buffer printf
 #define rt_log_printf(plog, ...)
 #else
-#define rt_log_printf(plog, ...)        _rt_printf_fn(__VA_ARGS__)
+#define rt_printf(...)                  (stdio_printf_stubs.rt_printf(__VA_ARGS__))
+#define rt_sprintf(buf, ...)            (stdio_printf_stubs.rt_sprintf(buf, __VA_ARGS__))
+#define rt_snprintf(buf, size, ...)     (stdio_printf_stubs.rt_snprintf(buf, size, __VA_ARGS__))
+#define rt_printfl(...)                 (stdio_printf_stubs.rt_printfl(__VA_ARGS__))
+#define rt_sprintfl(buf, ...)           (stdio_printf_stubs.rt_sprintfl(buf, __VA_ARGS__))
+#define rt_snprintfl(buf, size, ...)    (stdio_printf_stubs.rt_snprintfl(buf, size, __VA_ARGS__))
+#define rt_log_printf(plog, ...)        (stdio_printf_stubs.log_buf_printf(plog, __VA_ARGS__))
+#endif
+
+#if !defined(CONFIG_BUILD_SECURE)
+#define rt_sscanf(buf, ...)       do { stdio_printf_stubs.rt_sscanf(buf, __VA_ARGS__); }while(0)
 #endif
 
 #if !defined(CONFIG_BUILD_SECURE)
@@ -142,4 +127,3 @@ void log_buf_set_msg_buf (log_buf_type_t *plog, char *pbuf, uint32_t buf_size)
 #endif
 
 #endif  // end of '#ifndef _RT_PRINTF__H'
-

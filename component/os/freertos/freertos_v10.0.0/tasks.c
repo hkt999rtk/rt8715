@@ -40,10 +40,6 @@ task.h is included from an application file. */
 #include "timers.h"
 #include "stack_macros.h"
 
-#if CONFIG_RX_HANDOVER_DIAG
-#include "rx_handover_diag.h"
-#endif
-
 /* Lint e961 and e750 are suppressed as a MISRA exception justified because the
 MPU ports require MPU_WRAPPERS_INCLUDED_FROM_API_FILE to be defined for the
 header files above, but not in this file, in order to generate the correct
@@ -280,15 +276,15 @@ typedef struct tskTaskControlBlock
 #if defined(V8M_STKOVF)
 	StackType_t			*pxStack;			/*< Points to the start of the stack. */
 #endif
-#if defined(V8M_SECURE)	
+#if defined(V8M_SECURE)
 	uint32_t 			ulSecureStackID;	/*< Secure stack id. */
-#endif	
+#endif
 	ListItem_t			xStateListItem;	/*< The list that the state list item of a task is reference from denotes the state of that task (Ready, Blocked, Suspended ). */
 	ListItem_t			xEventListItem;		/*< Used to reference a task from an event list. */
 	UBaseType_t			uxPriority;			/*< The priority of the task.  0 is the lowest priority. */
-#if !defined(V8M_STKOVF)	
+#if !defined(V8M_STKOVF)
 	StackType_t			*pxStack;			/*< Points to the start of the stack. */
-#endif	
+#endif
 	char				pcTaskName[ configMAX_TASK_NAME_LEN ];/*< Descriptive name given to the task when created.  Facilitates debugging only. */ /*lint !e971 Unqualified char types are allowed for strings and single characters only. */
 
 	#if ( ( portSTACK_GROWTH > 0 ) || ( configRECORD_STACK_HIGH_ADDRESS == 1 ) )
@@ -417,20 +413,6 @@ PRIVILEGED_DATA static volatile UBaseType_t uxSchedulerSuspended	= ( UBaseType_t
 
 #endif
 
-#if defined( configTASK_DEBUG_NAME_LEN ) && defined( configTASK_DEBUG_REGISTRY_SIZE )
-
-	typedef struct xTASK_DEBUG_RECORD
-	{
-		TaskHandle_t xHandle;
-		uint32_t ulStackDepth;
-		char pcTaskName[ configTASK_DEBUG_NAME_LEN ];
-	} TaskDebugRecord_t;
-
-	PRIVILEGED_DATA static TaskDebugRecord_t
-		xTaskDebugRegistry[ configTASK_DEBUG_REGISTRY_SIZE ];
-
-#endif
-
 /*lint -restore */
 
 /*-----------------------------------------------------------*/
@@ -544,15 +526,6 @@ static void prvAddCurrentTaskToDelayedList( TickType_t xTicksToWait, const BaseT
 #if ( ( configUSE_TRACE_FACILITY == 1 ) || ( INCLUDE_uxTaskGetStackHighWaterMark == 1 ) )
 
 	static uint16_t prvTaskCheckFreeStackSpace( const uint8_t * pucStackByte ) PRIVILEGED_FUNCTION;
-
-#endif
-
-#if defined( configTASK_DEBUG_NAME_LEN ) && defined( configTASK_DEBUG_REGISTRY_SIZE )
-
-	static void prvTaskDebugRegister( TCB_t *pxTCB,
-					 const char *pcName,
-					 uint32_t ulStackDepth ) PRIVILEGED_FUNCTION;
-	static void prvTaskDebugUnregister( TCB_t *pxTCB ) PRIVILEGED_FUNCTION;
 
 #endif
 
@@ -846,12 +819,12 @@ static void prvAddNewTaskToReadyList( TCB_t *pxNewTCB ) PRIVILEGED_FUNCTION;
 			}
 		}
 		#endif /* portSTACK_GROWTH */
-		
+
 		#if defined(V8M_SECURE)
 		/* alloc Secure stack */
 		pxNewTCB->ulSecureStackID = TZ_Alloc_Stack_S((uint32_t)pxNewTCB, usSecureStackDepth);
 		#endif
-		
+
 		if( pxNewTCB != NULL )
 		{
 			#if( tskSTATIC_AND_DYNAMIC_ALLOCATION_POSSIBLE != 0 ) /*lint !e731 Macro has been consolidated for readability reasons. */
@@ -887,17 +860,17 @@ static void prvAddNewTaskToReadyList( TCB_t *pxNewTCB ) PRIVILEGED_FUNCTION;
 											UBaseType_t uxPriority )
 	{
 		TaskHandle_t pxCreatedTask = NULL;
-        
+
         char taskname[16];
         sprintf(taskname, "secure%02d", ulTaskId);
-        
+
 		//if(xSecureTaskCreate(vSecureTaskPuppet, taskname, 256, usStackDepth, (void *)ulTaskId, uxPriority, &pxCreatedTask)==pdTRUE)
-        if(xSecureTaskCreate(vSecureTaskDispatcher, taskname, 256, usStackDepth, (void *)ulTaskId, uxPriority, &pxCreatedTask)==pdTRUE)    
+        if(xSecureTaskCreate(vSecureTaskDispatcher, taskname, 256, usStackDepth, (void *)ulTaskId, uxPriority, &pxCreatedTask)==pdTRUE)
 			return pxCreatedTask;
 		else
 			return NULL;
 	}
-	
+
 	BaseType_t xTaskCreate(	TaskFunction_t pxTaskCode,
 							const char * const pcName,
 							const uint16_t usStackDepth,
@@ -1102,12 +1075,6 @@ UBaseType_t x;
 	}
 	#endif /* portUSING_MPU_WRAPPERS */
 
-	#if defined( configTASK_DEBUG_NAME_LEN ) && defined( configTASK_DEBUG_REGISTRY_SIZE )
-	{
-		prvTaskDebugRegister( pxNewTCB, pcName, ulStackDepth );
-	}
-	#endif
-
 	if( ( void * ) pxCreatedTask != NULL )
 	{
 		/* Pass the handle out in an anonymous way.  The handle can be used to
@@ -1215,10 +1182,6 @@ static void prvAddNewTaskToReadyList( TCB_t *pxNewTCB )
 			/* If null is passed in here then it is the calling task that is
 			being deleted. */
 			pxTCB = prvGetTCBFromHandle( xTaskToDelete );
-#if CONFIG_RX_HANDOVER_DIAG
-            /* A deleted queue sender never returns to clear its wait record. */
-            carbox_rxhd_timer_task_deleted(pxTCB);
-#endif
 
 			/* Remove task from the ready list. */
 			if( uxListRemove( &( pxTCB->xStateListItem ) ) == ( UBaseType_t ) 0 )
@@ -2509,156 +2472,6 @@ TCB_t *pxTCB;
 #endif /* INCLUDE_xTaskGetHandle */
 /*-----------------------------------------------------------*/
 
-#if defined( configTASK_DEBUG_NAME_LEN ) && defined( configTASK_DEBUG_REGISTRY_SIZE )
-
-	static void prvTaskDebugRegister( TCB_t *pxTCB,
-					 const char *pcName,
-					 uint32_t ulStackDepth )
-	{
-	UBaseType_t uxIndex;
-	UBaseType_t uxNameIndex;
-	TaskDebugRecord_t *pxFreeRecord = NULL;
-
-		taskENTER_CRITICAL();
-		{
-			for( uxIndex = 0; uxIndex < ( UBaseType_t ) configTASK_DEBUG_REGISTRY_SIZE; uxIndex++ )
-			{
-				if( xTaskDebugRegistry[ uxIndex ].xHandle == ( TaskHandle_t ) pxTCB )
-				{
-					pxFreeRecord = &( xTaskDebugRegistry[ uxIndex ] );
-					break;
-				}
-
-				if( ( pxFreeRecord == NULL ) &&
-				    ( xTaskDebugRegistry[ uxIndex ].xHandle == NULL ) )
-				{
-					pxFreeRecord = &( xTaskDebugRegistry[ uxIndex ] );
-				}
-			}
-
-			if( pxFreeRecord != NULL )
-			{
-				pxFreeRecord->xHandle = ( TaskHandle_t ) pxTCB;
-				pxFreeRecord->ulStackDepth = ulStackDepth;
-
-				for( uxNameIndex = 0;
-				     uxNameIndex < ( UBaseType_t ) configTASK_DEBUG_NAME_LEN - 1U;
-				     uxNameIndex++ )
-				{
-					pxFreeRecord->pcTaskName[ uxNameIndex ] = pcName[ uxNameIndex ];
-					if( pcName[ uxNameIndex ] == '\0' )
-					{
-						break;
-					}
-				}
-				pxFreeRecord->pcTaskName[ configTASK_DEBUG_NAME_LEN - 1U ] = '\0';
-			}
-		}
-		taskEXIT_CRITICAL();
-	}
-
-	static void prvTaskDebugUnregister( TCB_t *pxTCB )
-	{
-	UBaseType_t uxIndex;
-
-		taskENTER_CRITICAL();
-		{
-			for( uxIndex = 0; uxIndex < ( UBaseType_t ) configTASK_DEBUG_REGISTRY_SIZE; uxIndex++ )
-			{
-				if( xTaskDebugRegistry[ uxIndex ].xHandle == ( TaskHandle_t ) pxTCB )
-				{
-					xTaskDebugRegistry[ uxIndex ].xHandle = NULL;
-					xTaskDebugRegistry[ uxIndex ].ulStackDepth = 0U;
-					xTaskDebugRegistry[ uxIndex ].pcTaskName[ 0 ] = '\0';
-					break;
-				}
-			}
-		}
-		taskEXIT_CRITICAL();
-	}
-
-	BaseType_t xTaskGetDebugInfo( TaskHandle_t xTask,
-				     TaskDebugInfo_t *pxTaskDebugInfo )
-	{
-	TCB_t *pxTCB;
-	StackType_t *pxStackEnd;
-	UBaseType_t uxIndex;
-	UBaseType_t uxNameIndex;
-	BaseType_t xReturn = pdFAIL;
-
-		if( pxTaskDebugInfo == NULL )
-		{
-			return pdFAIL;
-		}
-
-		pxTCB = prvGetTCBFromHandle( xTask );
-
-		taskENTER_CRITICAL();
-		{
-			for( uxIndex = 0; uxIndex < ( UBaseType_t ) configTASK_DEBUG_REGISTRY_SIZE; uxIndex++ )
-			{
-				if( xTaskDebugRegistry[ uxIndex ].xHandle == ( TaskHandle_t ) pxTCB )
-				{
-					for( uxNameIndex = 0;
-					     uxNameIndex < ( UBaseType_t ) configTASK_DEBUG_NAME_LEN;
-					     uxNameIndex++ )
-					{
-						pxTaskDebugInfo->pcTaskName[ uxNameIndex ] =
-							xTaskDebugRegistry[ uxIndex ].pcTaskName[ uxNameIndex ];
-					}
-
-					pxTaskDebugInfo->ulStackSizeBytes =
-						xTaskDebugRegistry[ uxIndex ].ulStackDepth *
-						( uint32_t ) sizeof( StackType_t );
-					pxTaskDebugInfo->ulStackUsedBytes = 0U;
-
-					if( xTaskDebugRegistry[ uxIndex ].ulStackDepth > 0U )
-					{
-						#if( portSTACK_GROWTH < 0 )
-						{
-							pxStackEnd = pxTCB->pxStack +
-								( xTaskDebugRegistry[ uxIndex ].ulStackDepth - 1U );
-							pxStackEnd = ( StackType_t * )
-								( ( ( portPOINTER_SIZE_TYPE ) pxStackEnd ) &
-								  ( ~( ( portPOINTER_SIZE_TYPE ) portBYTE_ALIGNMENT_MASK ) ) );
-
-							if( ( pxTCB->pxTopOfStack >= pxTCB->pxStack ) &&
-							    ( pxTCB->pxTopOfStack <= pxStackEnd ) )
-							{
-								pxTaskDebugInfo->ulStackUsedBytes =
-									( uint32_t ) ( pxStackEnd - pxTCB->pxTopOfStack + 1U ) *
-									( uint32_t ) sizeof( StackType_t );
-							}
-						}
-						#else
-						{
-							pxStackEnd = pxTCB->pxStack +
-								( xTaskDebugRegistry[ uxIndex ].ulStackDepth - 1U );
-
-							if( ( pxTCB->pxTopOfStack >= pxTCB->pxStack ) &&
-							    ( pxTCB->pxTopOfStack <= pxStackEnd ) )
-							{
-								pxTaskDebugInfo->ulStackUsedBytes =
-									( uint32_t ) ( pxTCB->pxTopOfStack - pxTCB->pxStack + 1U ) *
-									( uint32_t ) sizeof( StackType_t );
-							}
-						}
-						#endif
-					}
-
-					xReturn = pdPASS;
-					break;
-				}
-			}
-		}
-		taskEXIT_CRITICAL();
-
-		return xReturn;
-	}
-
-#endif
-/*-----------------------------------------------------------*/
-
 #if ( configUSE_TRACE_FACILITY == 1 )
 
 	UBaseType_t uxTaskGetSystemState( TaskStatus_t * const pxTaskStatusArray, const UBaseType_t uxArraySize, uint32_t * const pulTotalRunTime )
@@ -2768,7 +2581,7 @@ void vTaskIncTick( const TickType_t xTicksToJump )
 {
 	xTickCount += xTicksToJump;
 }
-	
+
 /*----------------------------------------------------------*/
 
 #if ( INCLUDE_xTaskAbortDelay == 1 )
@@ -3131,12 +2944,20 @@ void vTaskSwitchContext( void )
 				#endif
 
 				/* Add the amount of time the task has been running to the
-				accumulated time so far. Both values are unsigned, therefore the
-				subtraction remains correct across one wrap of the 32-bit DWT
-				cycle counter. CYCCNT wraps in about 14.32 seconds at 300 MHz;
-				context switches in this system occur well within that interval. */
-				pxCurrentTCB->ulRunTimeCounter +=
-					( uint32_t ) ( ulTotalRunTime - ulTaskSwitchedInTime );
+				accumulated time so far.  The time the task started running was
+				stored in ulTaskSwitchedInTime.  Note that there is no overflow
+				protection here so count values are only valid until the timer
+				overflows.  The guard against negative values is to protect
+				against suspect run time stat counter implementations - which
+				are provided by the application, not the kernel. */
+				if( ulTotalRunTime > ulTaskSwitchedInTime )
+				{
+					pxCurrentTCB->ulRunTimeCounter += ( ulTotalRunTime - ulTaskSwitchedInTime );
+				}
+				else
+				{
+					mtCOVERAGE_TEST_MARKER();
+				}
 				ulTaskSwitchedInTime = ulTotalRunTime;
 		}
 		#endif /* configGENERATE_RUN_TIME_STATS */
@@ -3929,12 +3750,6 @@ static void prvCheckTasksWaitingTermination( void )
 
 	static void prvDeleteTCB( TCB_t *pxTCB )
 	{
-		#if defined( configTASK_DEBUG_NAME_LEN ) && defined( configTASK_DEBUG_REGISTRY_SIZE )
-		{
-			prvTaskDebugUnregister( pxTCB );
-		}
-		#endif
-
 		/* This call is required specifically for the TriCore port.  It must be
 		above the vPortFree() calls.  The call is also used by ports/demos that
 		want to allocate and clean RAM statically. */
@@ -3954,7 +3769,7 @@ static void prvCheckTasksWaitingTermination( void )
 			the stack and TCB. */
 		#if defined(V8M_SECURE)
 			TZ_Free_Stack_S(pxTCB->ulSecureStackID);
-		#endif			
+		#endif
 			vPortFree( pxTCB->pxStack );
 			vPortFree( pxTCB );
 		}
@@ -5304,5 +5119,3 @@ when performing module tests). */
 	}
 
 #endif
-
-

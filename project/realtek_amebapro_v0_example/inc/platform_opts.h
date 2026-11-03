@@ -47,15 +47,11 @@
 /******************************************************************************/
 
 /**
-* For common flash usage  
+* For common flash usage
 */
 #define UART_SETTING_SECTOR		0x000FC000
 #define FAST_RECONNECT_DATA 	0x5000
 #define DCT_BEGIN_ADDR			0x300000	/*!< DCT begin address of flash, ex: 0x200000 = 2M */
-
-#include "carbox_flash_layout.h"
-#define CONFIG_FATFS_EN         1
-#define FATFS_DISK_FLASH        1
 
 /**
 * Unlokc write protect for winbond flash
@@ -74,7 +70,7 @@
 //on/off relative commands in log service
 #define CONFIG_SSL_CLIENT	0
 #define CONFIG_OTA_UPDATE	1
-#define CONFIG_BSD_TCP		1//NOTE : Enable CONFIG_BSD_TCP will increase about 11KB code size
+#define CONFIG_BSD_TCP		0//NOTE : Enable CONFIG_BSD_TCP will increase about 11KB code size
 #define CONFIG_AIRKISS		0//on or off tencent airkiss
 #define CONFIG_UART_SOCKET	0
 #define CONFIG_JD_SMART		0//on or off for jdsmart
@@ -102,7 +98,7 @@
 #define CONFIG_WIFI_IND_USE_THREAD	1
 #endif
 #if (CONFIG_ENABLE_P2P && ((CONFIG_ENABLE_WPS_AP == 0) || (CONFIG_ENABLE_WPS == 0)))
-#error "If CONFIG_ENABLE_P2P, need to define CONFIG_ENABLE_WPS_AP 1" 
+#error "If CONFIG_ENABLE_P2P, need to define CONFIG_ENABLE_WPS_AP 1"
 #endif
 
 /* For SSL/TLS */
@@ -113,11 +109,7 @@
 #define CONFIG_INCLUDE_SIMPLE_CONFIG		1
 
 /*For fast reconnection*/
-#ifdef CARBOX_EXPERIMENTAL_SMART_A_LINK
-#define CONFIG_EXAMPLE_WLAN_FAST_CONNECT	0
-#else
 #define CONFIG_EXAMPLE_WLAN_FAST_CONNECT	1
-#endif
 #if CONFIG_EXAMPLE_WLAN_FAST_CONNECT
 #define CONFIG_FAST_DHCP 1
 #else
@@ -129,7 +121,7 @@
 
 #define CONFIG_GAGENT			0
 /*Disable CONFIG_EXAMPLE_WLAN_FAST_CONNECT when CONFIG_GAGENT is enabled,because
-	reconnect to previous AP is not suitable when re-configuration. 
+	reconnect to previous AP is not suitable when re-configuration.
 */
 #if CONFIG_GAGENT
 #define CONFIG_EXAMPLE_WLAN_FAST_CONNECT 0
@@ -147,7 +139,7 @@
 /**
  * For Ethernet configurations
  */
-#define CONFIG_ETHERNET 1
+#define CONFIG_ETHERNET 0
 #if CONFIG_ETHERNET
 
 #define CONFIG_LWIP_LAYER	1
@@ -155,7 +147,7 @@
 
 //on/off relative commands in log service
 #define CONFIG_SSL_CLIENT	0
-#define CONFIG_BSD_TCP		1//NOTE : Enable CONFIG_BSD_TCP will increase about 11KB code size
+#define CONFIG_BSD_TCP		0//NOTE : Enable CONFIG_BSD_TCP will increase about 11KB code size
 
 #endif
 
@@ -199,7 +191,7 @@
 
 /* For WIFI MAC MONITOR example */
 #define CONFIG_EXAMPLE_WIFI_MAC_MONITOR  0
-   
+
 /* For HTTP CLIENT example */
 #define CONFIG_EXAMPLE_HTTP_CLIENT  0
 
@@ -275,7 +267,7 @@
 
 /* For audio loop eample*/
 #define CONFIG_EXAMPLE_AUDIO_LOOP               0
-   
+
 /* For audio to G711 eample*/
 #define CONFIG_EXAMPLE_AUDIO_TO_G711            0
 
@@ -369,7 +361,7 @@
 #define CONFIG_EXAMPLE_MEDIA_MP4_DEMUXER					0
 #ifdef  CONFIG_EXAMPLE_MEDIA_MP4_DEMUXER
 #define FATFS_DISK_SD								1
-#endif  
+#endif
 
 #define CONFIG_EXAMPLE_MEDIA_UVCH						0
 //Note: When UVC-Host is enabled, please also enable lib_usbh.a and disable lib_usbd.a
@@ -382,10 +374,10 @@
 #define FATFS_DISK_SD								1
 #endif
 
-#define CONFIG_EXAMPLE_ISP_OSD_MULTI								0    
-#define CONFIG_EXAMPLE_MASK								0   
+#define CONFIG_EXAMPLE_ISP_OSD_MULTI								0
+#define CONFIG_EXAMPLE_MASK								0
 #define CONFIG_EXAMPLE_MOTION_DETECT								0
-     
+
 #define CONFIG_MEDIA_H264_TO_SDCARD						0
 #if CONFIG_MEDIA_H264_TO_SDCARD
 #define FATFS_DISK_SD								1
@@ -422,7 +414,7 @@
 #endif
 #endif
 /* For ISP AT COMMAND config*/
-#define CONFIG_ISP 0
+#define CONFIG_ISP 1
 
 /* For Mjpeg capture example*/
 #define CONFIG_EXAMPLE_MJPEG_CAPTURE		0
@@ -470,7 +462,7 @@
 /* For vendor specific example  */
 #define CONFIG_EXAMPLE_USB_VENDOR_SPECIFIC      0
 
-#define CONFIG_EXAMPLE_USB_ISOC_DEVICE          0   
+#define CONFIG_EXAMPLE_USB_ISOC_DEVICE          0
 
 /* For FATFS example*/
 #define CONFIG_EXAMPLE_FATFS			0
@@ -512,7 +504,7 @@
 #undef CONFIG_LWIP_LAYER
 #define CONFIG_LWIP_LAYER	1
 #undef	CONFIG_BSD_TCP
-#define CONFIG_BSD_TCP		0
+#define CONFIG_BSD_TCP		1
 
 #endif
 #endif
@@ -532,16 +524,12 @@
 #endif
 
 /* For uart adapter example */
-/* Please also configure LWIP_UART_ADAPTER to 1 
+/* Please also configure LWIP_UART_ADAPTER to 1
 in lwip_opt.h for support uart adapter*/
 #define CONFIG_EXAMPLE_UART_ADAPTER	0
 #if CONFIG_EXAMPLE_UART_ADAPTER
 #undef CONFIG_EXAMPLE_WLAN_FAST_CONNECT
-#ifdef CARBOX_EXPERIMENTAL_SMART_A_LINK
-#define CONFIG_EXAMPLE_WLAN_FAST_CONNECT	0
-#else
 #define CONFIG_EXAMPLE_WLAN_FAST_CONNECT	1
-#endif
 #undef CONFIG_EXAMPLE_MDNS
 #define CONFIG_EXAMPLE_MDNS	1
 #undef FREERTOS_PMU_TICKLESS_PLL_RESERVED
@@ -562,7 +550,7 @@ in lwip_opt.h for support uart adapter*/
 /* For wifi scenarios example (Wi-Fi, WPS enrollee, P2P GO) */
 // also need to enable WPS and P2P
 #define CONFIG_EXAMPLE_WLAN_SCENARIO	0
-	 
+
 /* For broadcast example */
 #define CONFIG_EXAMPLE_BCAST			0
 
@@ -591,8 +579,8 @@ in lwip_opt.h for support uart adapter*/
 #define CONFIG_FATFS_EN	1
 #define FATFS_R_10C
 #define FATFS_DISK_SD 	1
-#endif  
-#endif 
+#endif
+#endif
 
 /* For ota update http example */
 #define CONFIG_EXAMPLE_OTA_HTTP			0
@@ -617,28 +605,28 @@ in lwip_opt.h for support uart adapter*/
 #if CONFIG_ENABLE_WPS
 #define WPS_CONNECT_RETRY_COUNT		4
 #define WPS_CONNECT_RETRY_INTERVAL	5000 // in ms
-#endif 
+#endif
 
 #define AUTO_RECONNECT_COUNT	8
 #define AUTO_RECONNECT_INTERVAL	5 // in sec
 
 /* For QR code scanner example */
 #define CONFIG_EXAMPLE_QR_CODE_SCANNER		0
-   
+
 #define CONFIG_EXAMPLE_SNAPSHOT		0
 #if CONFIG_EXAMPLE_SNAPSHOT
 #define FATFS_DISK_SD								1
 #endif
-	 
+
 /* For doorbell example */
 #define CONFIG_EXAMPLE_DOORBELL		0
-#if CONFIG_EXAMPLE_DOORBELL   
+#if CONFIG_EXAMPLE_DOORBELL
 #define CONFIG_LIGHT_SENSOR 1 // NOTE: enable it only when with light sensor
 #define FATFS_DISK_SD								1
-#define ISP_BOOT_MODE_ENABLE                                                    0   
+#define ISP_BOOT_MODE_ENABLE                                                    0
 #define CONFIG_MEDIA_AMEBACAM_APP_BROADCAST					1
-#endif   
-   
+#endif
+
 #endif
 
 /* For ActionCAM example */
@@ -680,5 +668,3 @@ in lwip_opt.h for support uart adapter*/
 #if CONFIG_EXAMPLE_AMZ_SMARTHOME_RTC
 #define ENABLE_WRTC_PEER_MMFV2	1
 #endif
-
-

@@ -137,106 +137,6 @@ PRIVILEGED_DATA static List_t *pxOverflowTimerList;
 PRIVILEGED_DATA static QueueHandle_t xTimerQueue = NULL;
 PRIVILEGED_DATA static TaskHandle_t xTimerTaskHandle = NULL;
 
-#if CONFIG_RX_HANDOVER_DIAG
-#include "rx_handover_diag.h"
-static volatile struct rxhd_timer_state rxhd_timer_stats;
-static volatile uint32_t rxhd_timer_waiters;
-
-/* queue.c calls this only when it will actually wait for queue space. The
- * scheduler is already suspended; no allocation, formatting or printing here.
- * A probe before xQueueSend could miss a producer filling the last slot. */
-void carbox_rxhd_timer_block(void *queue, const void *item, uint32_t ticks)
-{
-    const DaemonTaskMessage_t *message = (const DaemonTaskMessage_t *)item;
-    TaskHandle_t task;
-    unsigned i, free_slot = RXHD_TIMER_WAIT_SLOTS;
-    const char *name;
-    if (queue != xTimerQueue || item == NULL) return;
-    task = xTaskGetCurrentTaskHandle();
-    for (i = 0; i < RXHD_TIMER_WAIT_SLOTS; ++i) {
-        if (rxhd_timer_stats.waits[i].task == task) return; /* repeated wakeup */
-        if (rxhd_timer_stats.waits[i].task == NULL) free_slot = i;
-    }
-    rxhd_timer_stats.full_waits++;
-    if (task == xTimerTaskHandle) rxhd_timer_stats.self_waits++;
-    if (free_slot == RXHD_TIMER_WAIT_SLOTS) {
-        rxhd_timer_stats.wait_overflow++;
-        return;
-    }
-    rxhd_timer_stats.waits[free_slot].task = task;
-    rxhd_timer_stats.waits[free_slot].timer = message->xMessageID >= 0 ?
-        message->u.xTimerParameters.pxTimer : NULL;
-    rxhd_timer_stats.waits[free_slot].command = message->xMessageID;
-    rxhd_timer_stats.waits[free_slot].since_tick = xTaskGetTickCount();
-    rxhd_timer_stats.waits[free_slot].wait_ticks = ticks;
-    name = pcTaskGetName(task);
-    for (i = 0; i < sizeof(rxhd_timer_stats.waits[free_slot].task_name) - 1U && name[i]; ++i)
-        rxhd_timer_stats.waits[free_slot].task_name[i] = name[i];
-    rxhd_timer_stats.waits[free_slot].task_name[i] = '\0';
-    rxhd_timer_waiters++;
-}
-
-/* Caller holds a critical section, both on send return and before TCB
- * deletion. Compare opaque handles only; no access to the task being freed. */
-void carbox_rxhd_timer_task_deleted(void *task)
-{
-    unsigned i;
-    if (task == NULL || rxhd_timer_waiters == 0U) return;
-    for (i = 0; i < RXHD_TIMER_WAIT_SLOTS; ++i) {
-        if (rxhd_timer_stats.waits[i].task == task) {
-            rxhd_timer_stats.waits[i].task = NULL;
-            rxhd_timer_waiters--;
-            break;
-        }
-    }
-}
-
-static void prvRxhdTimerSendReturned(void)
-{
-    if (rxhd_timer_waiters == 0U) return;
-    taskENTER_CRITICAL();
-    carbox_rxhd_timer_task_deleted(xTaskGetCurrentTaskHandle());
-    taskEXIT_CRITICAL();
-}
-
-static void prvRxhdCallbackBegin(void *timer, uintptr_t function)
-{
-    rxhd_timer_stats.callback_timer = timer;
-    rxhd_timer_stats.callback_function = function;
-    rxhd_timer_stats.callback_since = xTaskGetTickCount();
-    rxhd_timer_stats.callback_started++;
-    rxhd_timer_stats.callback_active = 1U;
-}
-
-static void prvRxhdCallbackEnd(void)
-{
-    uint32_t ticks = (TickType_t)(xTaskGetTickCount() - rxhd_timer_stats.callback_since);
-    if (ticks > rxhd_timer_stats.callback_max_ticks)
-        rxhd_timer_stats.callback_max_ticks = ticks;
-    rxhd_timer_stats.callback_done++;
-    rxhd_timer_stats.callback_active = 0U;
-}
-
-void carbox_rxhd_timer_snapshot(struct rxhd_timer_state *out)
-{
-    taskENTER_CRITICAL();
-    *out = rxhd_timer_stats;
-    out->depth = xTimerQueue != NULL ? uxQueueMessagesWaiting(xTimerQueue) : 0U;
-    out->capacity = configTIMER_QUEUE_LENGTH;
-    out->daemon = xTimerTaskHandle;
-    taskEXIT_CRITICAL();
-}
-#define RXHD_TIMER_FAIL() ((void)__atomic_fetch_add(&rxhd_timer_stats.send_fail, 1U, __ATOMIC_RELAXED))
-#define RXHD_TIMER_CALLBACK(timer) do { \
-    prvRxhdCallbackBegin(timer, (uintptr_t)(timer)->pxCallbackFunction); \
-    (timer)->pxCallbackFunction((TimerHandle_t)(timer)); \
-    prvRxhdCallbackEnd(); \
-} while (0)
-#else
-#define RXHD_TIMER_CALLBACK(timer) (timer)->pxCallbackFunction((TimerHandle_t)(timer))
-#endif
-
-
 /*lint -restore */
 
 /*-----------------------------------------------------------*/
@@ -368,7 +268,7 @@ BaseType_t xReturn = pdFAIL;
 											configTIMER_TASK_STACK_DEPTH,	// for secure
 											NULL,
 											( ( UBaseType_t ) configTIMER_TASK_PRIORITY ) | portPRIVILEGE_BIT,
-											&xTimerTaskHandle );			
+											&xTimerTaskHandle );
 			#endif
 		}
 		#endif /* configSUPPORT_STATIC_ALLOCATION */
@@ -412,12 +312,12 @@ BaseType_t xReturn = pdFAIL;
 		return pxNewTimer;
 	}
 
-#if defined(V8M_SECURE)	
+#if defined(V8M_SECURE)
 	TimerHandle_t xTimerCreateFromSecure(	const TickType_t xTimerPeriodInTicks,
 											const UBaseType_t uxAutoReload,
 											void * const pvTimerID,
 											TimerCallbackFunction_t pxCallbackFunction )
-	{	
+	{
 		return xTimerCreate("_sectime", xTimerPeriodInTicks, uxAutoReload, pvTimerID, pxCallbackFunction);
 	}
 #endif
@@ -529,10 +429,6 @@ DaemonTaskMessage_t xMessage;
 			xReturn = xQueueSendToBackFromISR( xTimerQueue, &xMessage, pxHigherPriorityTaskWoken );
 		}
 
-#if CONFIG_RX_HANDOVER_DIAG
-        if (xCommandID < tmrFIRST_FROM_ISR_COMMAND) prvRxhdTimerSendReturned();
-        if (xReturn != pdPASS) RXHD_TIMER_FAIL();
-#endif
 		traceTIMER_COMMAND_SEND( xTimer, xCommandID, xOptionalValue, xReturn );
 	}
 	else
@@ -548,12 +444,12 @@ DaemonTaskMessage_t xMessage;
 BaseType_t xTimerGenericCommandFromSecure( uint32_t * params )
 {
 	//params from NS heap, allocated by secure domain
-	//params[0] TimerHandle_t xTimer, 
-	//params[1] const BaseType_t xCommandID, 
-	//params[2] const TickType_t xOptionalValue, 
-	//params[3] BaseType_t * const pxHigherPriorityTaskWoken, 
+	//params[0] TimerHandle_t xTimer,
+	//params[1] const BaseType_t xCommandID,
+	//params[2] const TickType_t xOptionalValue,
+	//params[3] BaseType_t * const pxHigherPriorityTaskWoken,
 	//params[4] const TickType_t xTicksToWait
-	
+
 	return xTimerGenericCommand((TimerHandle_t)params[0], (BaseType_t)params[1], (TickType_t)params[2], (BaseType_t *)params[3], (TickType_t)params[4]);
 }
 #endif
@@ -633,7 +529,7 @@ Timer_t * const pxTimer = ( Timer_t * ) listGET_OWNER_OF_HEAD_ENTRY( pxCurrentTi
 	}
 
 	/* Call the timer callback. */
-	RXHD_TIMER_CALLBACK(pxTimer);
+	pxTimer->pxCallbackFunction( ( TimerHandle_t ) pxTimer );
 }
 /*-----------------------------------------------------------*/
 
@@ -832,9 +728,6 @@ TickType_t xTimeNow;
 
 	while( xQueueReceive( xTimerQueue, &xMessage, tmrNO_DELAY ) != pdFAIL ) /*lint !e603 xMessage does not have to be initialised as it is passed out, not in, and it is not used unless xQueueReceive() returns pdTRUE. */
 	{
-#if CONFIG_RX_HANDOVER_DIAG
-        rxhd_timer_stats.processed++;
-#endif
 		#if ( INCLUDE_xTimerPendFunctionCall == 1 )
 		{
 			/* Negative commands are pended function calls rather than timer
@@ -848,13 +741,7 @@ TickType_t xTimeNow;
 				configASSERT( pxCallback );
 
 				/* Call the function. */
-#if CONFIG_RX_HANDOVER_DIAG
-                prvRxhdCallbackBegin(NULL, (uintptr_t)pxCallback->pxCallbackFunction);
-#endif
 				pxCallback->pxCallbackFunction( pxCallback->pvParameter1, pxCallback->ulParameter2 );
-#if CONFIG_RX_HANDOVER_DIAG
-                prvRxhdCallbackEnd();
-#endif
 			}
 			else
 			{
@@ -903,7 +790,7 @@ TickType_t xTimeNow;
 					{
 						/* The timer expired before it was added to the active
 						timer list.  Process it now. */
-						RXHD_TIMER_CALLBACK(pxTimer);
+						pxTimer->pxCallbackFunction( ( TimerHandle_t ) pxTimer );
 						traceTIMER_EXPIRED( pxTimer );
 
 						if( pxTimer->uxAutoReload == ( UBaseType_t ) pdTRUE )
@@ -1002,7 +889,7 @@ BaseType_t xResult;
 		/* Execute its callback, then send a command to restart the timer if
 		it is an auto-reload timer.  It cannot be restarted here as the lists
 		have not yet been switched. */
-		RXHD_TIMER_CALLBACK(pxTimer);
+		pxTimer->pxCallbackFunction( ( TimerHandle_t ) pxTimer );
 
 		if( pxTimer->uxAutoReload == ( UBaseType_t ) pdTRUE )
 		{
@@ -1157,9 +1044,6 @@ Timer_t * const pxTimer = ( Timer_t * ) xTimer;
 
 		xReturn = xQueueSendFromISR( xTimerQueue, &xMessage, pxHigherPriorityTaskWoken );
 
-#if CONFIG_RX_HANDOVER_DIAG
-        if (xReturn != pdPASS) RXHD_TIMER_FAIL();
-#endif
 		tracePEND_FUNC_CALL_FROM_ISR( xFunctionToPend, pvParameter1, ulParameter2, xReturn );
 
 		return xReturn;
@@ -1189,10 +1073,6 @@ Timer_t * const pxTimer = ( Timer_t * ) xTimer;
 
 		xReturn = xQueueSendToBack( xTimerQueue, &xMessage, xTicksToWait );
 
-#if CONFIG_RX_HANDOVER_DIAG
-        prvRxhdTimerSendReturned();
-        if (xReturn != pdPASS) RXHD_TIMER_FAIL();
-#endif
 		tracePEND_FUNC_CALL( xFunctionToPend, pvParameter1, ulParameter2, xReturn );
 
 		return xReturn;
@@ -1225,6 +1105,3 @@ Timer_t * const pxTimer = ( Timer_t * ) xTimer;
 to include software timer functionality.  If you want to include software timer
 functionality then ensure configUSE_TIMERS is set to 1 in FreeRTOSConfig.h. */
 #endif /* configUSE_TIMERS == 1 */
-
-
-

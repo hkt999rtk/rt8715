@@ -20,26 +20,14 @@ endif
 
 ifeq ($(findstring Linux, $(OS)), Linux)
 	ARM_GCC_TOOLCHAIN = ../../../tools/arm-none-eabi-gcc/asdk/linux/newlib/bin
-	ELF2BIN = $(AMEBAPRO_TOOLDIR)/elf2bin.linux	
+	ELF2BIN = $(AMEBAPRO_TOOLDIR)/elf2bin.linux
 endif
 
 #CROSS_COMPILE = $(ARM_GCC_TOOLCHAIN)/arm-none-eabi-
 CROSS_COMPILE = $(ARM_GCC_TOOLCHAIN)/arm-none-eabi-
 
 # Compilation tools
-# Keep customer builds working with legacy toolchain bundles whose cross ar is
-# missing or incomplete.  GNU ar archives do not encode a host architecture,
-# so prefer host ar and override stale recursive MAKEFLAGS values.
-HOST_AR := $(strip $(shell command -v ar 2>/dev/null))
-ifeq ($(HOST_AR),)
-override AR := $(strip $(shell if [ -x "$(CROSS_COMPILE)ar" ]; then \
-	printf '%s' "$(CROSS_COMPILE)ar"; fi))
-ifeq ($(AR),)
-$(error Neither $(CROSS_COMPILE)ar nor a host GNU ar was found)
-endif
-else
-override AR := $(HOST_AR)
-endif
+AR = $(CROSS_COMPILE)ar
 CC = $(CROSS_COMPILE)gcc
 AS = $(CROSS_COMPILE)as
 NM = $(CROSS_COMPILE)nm
@@ -146,7 +134,6 @@ SRC_C += ../../../component/soc/realtek/8195b/fwlib/hal-rtl8195b-lp/source/hal_t
 
 #user
 SRC_C += ../src/main_lp.c
-SRC_C += ../src/carbox/led_rgb_lp.c
 
 
 # Generate obj list
@@ -165,20 +152,18 @@ OBJ_LIST = $(addprefix $(OBJ_DIR)/,$(patsubst %.c,%.o,$(SRC_C_LIST)))
 
 CFLAGS =
 CFLAGS += -march=armv8-m.base -mthumb -O2 -g -gdwarf-3 --save-temps -c -MMD
-CFLAGS += -fstack-usage -fdata-sections -ffunction-sections 
-CFLAGS += -Wall -Wpointer-arith -Wstrict-prototypes -Wundef -Wno-write-strings -Wno-maybe-uninitialized  
-CFLAGS += -w
-CFLAGS += -D__thumb2__ -DCONFIG_PLATFORM_8195B -DCONFIG_PLATFORM_8195BLP -D__ARM_ARCH_7M__=0 -D__ARM_ARCH_7EM__=0 -D__ARM_ARCH_8M_MAIN__=0 -D__ARM_ARCH_8M_BASE__=1 
-CFLAGS += -D__ARM_FEATURE_DSP=0 -D__CORTEX_M0 -DCONFIG_BUILD_RAM=1 
+CFLAGS += -fstack-usage -fdata-sections -ffunction-sections
+CFLAGS += -Wall -Wpointer-arith -Wstrict-prototypes -Wundef -Wno-write-strings -Wno-maybe-uninitialized
+CFLAGS += -D__thumb2__ -DCONFIG_PLATFORM_8195B -DCONFIG_PLATFORM_8195BLP -D__ARM_ARCH_7M__=0 -D__ARM_ARCH_7EM__=0 -D__ARM_ARCH_8M_MAIN__=0 -D__ARM_ARCH_8M_BASE__=1
+CFLAGS += -D__ARM_FEATURE_DSP=0 -D__CORTEX_M0 -DCONFIG_BUILD_RAM=1
 CFLAGS += -DCONFIG_DISABLE_LP_SHELL -DCONFIG_SWWDT_EN=1 -DCONFIG_LS_RESET_REQ_EN=1
-CFLAGS += -DCONFIG_PWM_EN=1
 
 
-LFLAGS = 
-LFLAGS += -O2 -march=armv8-m.base -mthumb -mcmse  
-LFLAGS += -nostartfiles -nodefaultlibs -nostdlib -specs=nosys.specs 
+LFLAGS =
+LFLAGS += -O2 -march=armv8-m.base -mthumb -mcmse
+LFLAGS += -nostartfiles -nodefaultlibs -nostdlib -specs=nosys.specs
 LFLAGS += -Wl,--gc-sections -Wl,--warn-section-align -Wl,--cref -Wl,--build-id=none -Wl,--use-blx
-LFLAGS += -Wl,-Map=$(BIN_DIR)/$(TARGET).map 
+LFLAGS += -Wl,-Map=$(BIN_DIR)/$(TARGET).map
 
 LIBFLAGS =
 all: LIBFLAGS += ../../../component/soc/realtek/8195b/fwlib/hal-rtl8195b-lp/lib/lib/hal_pmc_lp.a
@@ -186,7 +171,7 @@ all: LIBFLAGS += ../../../component/soc/realtek/8195b/misc/bsp/lib/common/GCC/li
 
 
 RAMALL_BIN =
-OTA_BIN = 
+OTA_BIN =
 
 # Compile
 # -------------------------------------------------------------------
@@ -194,13 +179,12 @@ OTA_BIN =
 .PHONY: application_lp
 #application: prerequirement build_info $(SRC_O) $(DRAM_O)
 application_lp: prerequirement $(SRC_O) $(DRAM_O)
-	@echo "  LD   application_lp.axf"
-	@$(LD) $(LFLAGS) -o $(BIN_DIR)/$(TARGET).axf  $(OBJ_LIST) $(LIB_A) $(ROMIMG) $(LIBFLAGS) -T$(LDSCRIPT)
-	@$(OBJDUMP) -d $(BIN_DIR)/$(TARGET).axf > $(BIN_DIR)/$(TARGET).asm
+	$(LD) $(LFLAGS) -o $(BIN_DIR)/$(TARGET).axf  $(OBJ_LIST) $(LIB_A) $(ROMIMG) $(LIBFLAGS) -T$(LDSCRIPT)
+	$(OBJDUMP) -d $(BIN_DIR)/$(TARGET).axf > $(BIN_DIR)/$(TARGET).asm
 
 
 # Generate build info
-# -------------------------------------------------------------------	
+# -------------------------------------------------------------------
 
 
 .PHONY: prerequirement
@@ -208,25 +192,24 @@ prerequirement:
 	@echo ===========================================================
 	@echo Build $(TARGET)
 	@echo ===========================================================
-	@mkdir -p $(OBJ_DIR)
-	@mkdir -p $(BIN_DIR)
-	@mkdir -p $(INFO_DIR)
-	
+	mkdir -p $(OBJ_DIR)
+	mkdir -p $(BIN_DIR)
+	mkdir -p $(INFO_DIR)
+
 
 $(SRC_O): %.o : %.c
-	@echo "  CC $<"
-	@$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
-	@#$(CC) $(CFLAGS) $(INCLUDES) -c $< -MM -MT $@ -MF $(OBJ_DIR)/$(notdir $(patsubst %.o,%.d,$@))
-	@cp $@ $(OBJ_DIR)/$(notdir $@)
-	@mv $(notdir $*.i) $(INFO_DIR)
-	@mv $(notdir $*.s) $(INFO_DIR)
-	@chmod 777 $(OBJ_DIR)/$(notdir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	#$(CC) $(CFLAGS) $(INCLUDES) -c $< -MM -MT $@ -MF $(OBJ_DIR)/$(notdir $(patsubst %.o,%.d,$@))
+	cp $@ $(OBJ_DIR)/$(notdir $@)
+	mv $(notdir $*.i) $(INFO_DIR)
+	mv $(notdir $*.s) $(INFO_DIR)
+	chmod 777 $(OBJ_DIR)/$(notdir $@)
 
 
 -include $(DEPENDENCY_LIST)
 
 # Generate build info
-# -------------------------------------------------------------------	
+# -------------------------------------------------------------------
 #ifeq (setup,$(firstword $(MAKECMDGOALS)))
 #  # use the rest as arguments for "run"
 #  RUN_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))

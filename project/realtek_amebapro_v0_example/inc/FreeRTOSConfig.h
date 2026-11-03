@@ -101,9 +101,7 @@
 #define configTOTAL_HEAP_SIZE					( ( size_t ) ( 120 * 1024 ) )
 #endif
 
-#define configMAX_TASK_NAME_LEN					( 32 )
-#define configTASK_DEBUG_NAME_LEN				( 32 )
-#define configTASK_DEBUG_REGISTRY_SIZE			( 64 )
+#define configMAX_TASK_NAME_LEN					( 10 )
 #define configUSE_TRACE_FACILITY				1
 #define configUSE_16_BIT_TICKS					0
 #define configIDLE_SHOULD_YIELD					1
@@ -123,26 +121,16 @@
 /* The full demo always has tasks to run so the tick will never be turned off.
 The blinky demo will use the default tickless idle implementation to turn the
 tick off. */
-#define configUSE_TICKLESS_IDLE					1
+#define configUSE_TICKLESS_IDLE					0
 
 /* Run time stats gathering definitions. */
 #define configGENERATE_RUN_TIME_STATS	1
 #if configGENERATE_RUN_TIME_STATS
-/*
- * Charge task execution in raw DWT CPU cycles. A context switch therefore
- * needs only one CYCCNT register read instead of a system-GTimer latch/poll.
- * ATSS separately uses the 1 us GTimer as its wall-clock denominator.
- * CYCCNT wraps in about 14.32 seconds at 300 MHz; unsigned modulo subtraction
- * is valid because normal context switches and ATSS's two-second samples are
- * much shorter than one wrap.
- */
-extern void atss_runtime_counter_init(void);
-extern uint32_t atss_runtime_counter_get(void);
-#define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS() atss_runtime_counter_init()
-#define portGET_RUN_TIME_COUNTER_VALUE() atss_runtime_counter_get()
+#define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS() //( ulHighFrequencyTimerTicks = 0UL )
+#define portGET_RUN_TIME_COUNTER_VALUE() xTickCount //ulHighFrequencyTimerTicks
 #undef	configUSE_TRACE_FACILITY
 #define configUSE_TRACE_FACILITY			1
-#define portCONFIGURE_STATS_PEROID_VALUE	CONFIG_CPU_CLK /* one second, in cycles */
+#define portCONFIGURE_STATS_PEROID_VALUE	1000 //unit Ticks
 #endif
 
 /* This demo makes use of one or more example stats formatting functions.  These
@@ -222,18 +210,17 @@ files. */
 	header file. */
 	extern void vAssertCalled( uint32_t ulLine, const char *pcFile );
 	#define configASSERT( x ) if( ( x ) == 0 ) vAssertCalled( __LINE__, __FILE__ )
-	
+
 	// _memxxx proto-type?
 	//#define memcpy _memcpy
 	//#define memset _memset
 	//#define memcmp _memcmp
 	#include "basic_types.h"
 	//#include "memory.h"
-    
+
     extern int bprintf(char* fmt, ...);
     //#define traceTASK_SWITCHED_OUT()    do{if(pxCurrentTCB) bprintf(">%s\n\r", pxCurrentTCB->pcTaskName);}while(0)
-    //#define traceTASK_SWITCHED_IN()     do{if(pxCurrentTCB) bprintf("<%s\n\r", pxCurrentTCB->pcTaskName);}while(0)    
+    //#define traceTASK_SWITCHED_IN()     do{if(pxCurrentTCB) bprintf("<%s\n\r", pxCurrentTCB->pcTaskName);}while(0)
 #endif /* __IAR_SYSTEMS_ASM__ */
 
 #endif /* FREERTOS_CONFIG_H */
-

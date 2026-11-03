@@ -18,8 +18,6 @@
 #include "main.h"
 #include "atcmd_wifi.h"
 #include "device_lock.h"
-#include "hal_timer.h"
-#include "semphr.h"
 
 #if defined(configUSE_WAKELOCK_PMU) && (configUSE_WAKELOCK_PMU == 1)
 #include "freertos_pmu.h"
@@ -39,508 +37,6 @@ extern int uart_ymodem(void);
 //#if ATCMD_VER == ATVER_1
 #if (configGENERATE_RUN_TIME_STATS == 1)
 static char cBuffer[512];
-
-#define ATSS_SNAPSHOT_RETRIES	3U
-#define ATSS_TASK_COUNT_MARGIN	2U
-#define ATSS_MONITOR_STACK_SIZE	1024U
-#define ATSS_MONITOR_PRIORITY	(tskIDLE_PRIORITY + 1U)
-
-static TaskHandle_t atss_monitor_task;
-static volatile BaseType_t atss_monitor_stop_requested;
-static volatile BaseType_t atss_monitor_exiting;
-static volatile BaseType_t atss_internal_enabled;
-static volatile BaseType_t atss_cli_print_enabled;
-static SemaphoreHandle_t atss_control_mutex;
-static SemaphoreHandle_t atss_data_mutex;
-static SemaphoreHandle_t atss_monitor_stopped;
-static atss_task_stat_t *atss_latest_stats;
-static size_t atss_latest_count;
-static uint32_t atss_latest_sequence;
-static int atss_latest_status = ATSS_NOT_RUNNING;
-
-static SemaphoreHandle_t atss_install_semaphore(SemaphoreHandle_t candidate,
-						SemaphoreHandle_t *target)
-{
-	SemaphoreHandle_t installed;
-
-	taskENTER_CRITICAL();
-	if (*target == NULL) {
-		*target = candidate;
-		candidate = NULL;
-	}
-	installed = *target;
-	taskEXIT_CRITICAL();
-
-	if (candidate != NULL) {
-		vSemaphoreDelete(candidate);
-	}
-	return installed;
-}
-
-static int atss_sync_init(void)
-{
-	SemaphoreHandle_t candidate;
-
-	if (atss_control_mutex == NULL) {
-		candidate = xSemaphoreCreateMutex();
-		if (candidate == NULL) {
-			return ATSS_NO_MEMORY;
-		}
-		(void)atss_install_semaphore(candidate, &atss_control_mutex);
-	}
-	if (atss_data_mutex == NULL) {
-		candidate = xSemaphoreCreateMutex();
-		if (candidate == NULL) {
-			return ATSS_NO_MEMORY;
-		}
-		(void)atss_install_semaphore(candidate, &atss_data_mutex);
-	}
-	if (atss_monitor_stopped == NULL) {
-		candidate = xSemaphoreCreateBinary();
-		if (candidate == NULL) {
-			return ATSS_NO_MEMORY;
-		}
-		(void)atss_install_semaphore(candidate, &atss_monitor_stopped);
-	}
-	return ATSS_OK;
-}
-
-static void atss_copy_name(char dst[ATSS_TASK_NAME_LEN], const char *src)
-{
-	size_t index;
-
-	if (src == NULL) {
-		src = "<unknown>";
-	}
-	for (index = 0; index + 1U < ATSS_TASK_NAME_LEN && src[index] != '\0'; index++) {
-		dst[index] = src[index];
-	}
-	dst[index] = '\0';
-}
-
-static TaskStatus_t *atss_take_snapshot(UBaseType_t *task_count, uint32_t *wall_time_us)
-{
-	TaskStatus_t *tasks;
-	UBaseType_t capacity;
-	UBaseType_t count;
-	uint32_t snapshot_wall_us;
-	unsigned int retry;
-
-	for (retry = 0; retry < ATSS_SNAPSHOT_RETRIES; retry++) {
-		capacity = uxTaskGetNumberOfTasks() + ATSS_TASK_COUNT_MARGIN;
-		tasks = pvPortMalloc(capacity * sizeof(*tasks));
-		if (tasks == NULL) {
-			return NULL;
-		}
-
-		/*
-		 * Keep the GTimer boundary and DWT task-counter snapshot in the same
-		 * scheduler-suspended interval. uxTaskGetSystemState() uses a nested
-		 * scheduler suspension, which is supported by FreeRTOS. Without this
-		 * outer level, its final xTaskResumeAll() could preempt this monitor
-		 * before the wall-clock read and make utilization appear too low.
-		 * Interrupts remain enabled while the scheduler is suspended.
-		 */
-		vTaskSuspendAll();
-		snapshot_wall_us = hal_read_curtime_us();
-		count = uxTaskGetSystemState(tasks, capacity, NULL);
-		(void)xTaskResumeAll();
-		if (count != 0U) {
-			*wall_time_us = snapshot_wall_us;
-			*task_count = count;
-			return tasks;
-		}
-
-		vPortFree(tasks);
-	}
-
-	return NULL;
-}
-
-static int atss_calculate_sample(const TaskStatus_t *start_tasks,
-				 UBaseType_t start_count,
-				 uint32_t start_wall_us,
-				 const TaskStatus_t *end_tasks,
-				 UBaseType_t end_count,
-				 uint32_t end_wall_us,
-				 atss_task_stat_t **out_stats,
-				 size_t *out_count,
-				 uint32_t *out_window_us)
-{
-	UBaseType_t start_index;
-	UBaseType_t end_index;
-	uint32_t wall_delta_us;
-	uint32_t task_delta;
-	uint32_t stack_free_min_bytes;
-	uint64_t window_cycles;
-	const char *task_name;
-	TaskDebugInfo_t task_debug_info;
-	atss_task_stat_t *stats;
-
-	wall_delta_us = end_wall_us - start_wall_us;
-	if (wall_delta_us == 0U || SystemCoreClock == 0U) {
-		return ATSS_NOT_READY;
-	}
-	window_cycles = ((uint64_t)wall_delta_us * (uint64_t)SystemCoreClock) /
-			1000000ULL;
-	if (window_cycles == 0ULL) {
-		return ATSS_NOT_READY;
-	}
-
-	stats = pvPortMalloc((size_t)end_count * sizeof(*stats));
-	if (stats == NULL) {
-		return ATSS_NO_MEMORY;
-	}
-
-	for (end_index = 0; end_index < end_count; end_index++) {
-		task_delta = end_tasks[end_index].ulRunTimeCounter;
-
-		for (start_index = 0; start_index < start_count; start_index++) {
-			if ((end_tasks[end_index].xHandle == start_tasks[start_index].xHandle) &&
-			    (end_tasks[end_index].xTaskNumber == start_tasks[start_index].xTaskNumber)) {
-				task_delta -= start_tasks[start_index].ulRunTimeCounter;
-				break;
-			}
-		}
-
-		stats[end_index].priority =
-			(uint32_t)end_tasks[end_index].uxCurrentPriority;
-		stats[end_index].runtime_us =
-			(uint32_t)(((uint64_t)task_delta * 1000000ULL +
-				    ((uint64_t)SystemCoreClock / 2ULL)) /
-				   (uint64_t)SystemCoreClock);
-		stats[end_index].cpu_utilization_x10 =
-			(uint32_t)(((uint64_t)task_delta * 1000ULL +
-				    (window_cycles / 2ULL)) /
-				   window_cycles);
-
-		if (xTaskGetDebugInfo(end_tasks[end_index].xHandle, &task_debug_info) == pdPASS) {
-			task_name = task_debug_info.pcTaskName;
-			stats[end_index].stack_size_bytes =
-				task_debug_info.ulStackSizeBytes;
-			stats[end_index].stack_used_bytes =
-				task_debug_info.ulStackUsedBytes;
-		} else {
-			task_name = end_tasks[end_index].pcTaskName;
-			stats[end_index].stack_size_bytes = 0U;
-			stats[end_index].stack_used_bytes = 0U;
-		}
-		atss_copy_name(stats[end_index].task_name, task_name);
-
-		stack_free_min_bytes =
-			(uint32_t)end_tasks[end_index].usStackHighWaterMark * (uint32_t)sizeof(StackType_t);
-		if (stats[end_index].stack_size_bytes >= stack_free_min_bytes) {
-			stats[end_index].stack_peak_bytes =
-				stats[end_index].stack_size_bytes - stack_free_min_bytes;
-		} else {
-			stats[end_index].stack_peak_bytes = 0U;
-		}
-	}
-
-	*out_stats = stats;
-	*out_count = (size_t)end_count;
-	*out_window_us = wall_delta_us;
-	return ATSS_OK;
-}
-
-static void atss_print_sample(const atss_task_stat_t *stats, size_t count,
-			      uint32_t window_us)
-{
-	size_t index;
-	uint32_t utilization_x100;
-
-	AT_PRINTK("[ATSS]: %-31s %5s %7s %10s %12s %12s %12s",
-		 "Task", "Prio", "CPU", "Time(us)", "StackSize(B)", "StackUsed(B)", "StackPeak(B)");
-
-	for (index = 0; index < count; index++) {
-		utilization_x100 =
-			(uint32_t)(((uint64_t)stats[index].runtime_us * 10000ULL +
-				    ((uint64_t)window_us / 2ULL)) /
-				   (uint64_t)window_us);
-		AT_PRINTK("[ATSS]: %-31s %5u %4u.%02u%% %10u %12u %12u %12u",
-			 stats[index].task_name,
-			 (unsigned int)stats[index].priority,
-			 (unsigned int)(utilization_x100 / 100U),
-			 (unsigned int)(utilization_x100 % 100U),
-			 (unsigned int)stats[index].runtime_us,
-			 (unsigned int)stats[index].stack_size_bytes,
-			 (unsigned int)stats[index].stack_used_bytes,
-			 (unsigned int)stats[index].stack_peak_bytes);
-	}
-}
-
-static void atss_set_latest_status(int status)
-{
-	if (atss_data_mutex == NULL) {
-		return;
-	}
-	xSemaphoreTake(atss_data_mutex, portMAX_DELAY);
-	if (atss_latest_stats != NULL) {
-		vPortFree(atss_latest_stats);
-		atss_latest_stats = NULL;
-	}
-	atss_latest_count = 0U;
-	atss_latest_status = status;
-	xSemaphoreGive(atss_data_mutex);
-}
-
-static void atss_publish_sample(atss_task_stat_t *stats, size_t count)
-{
-	xSemaphoreTake(atss_data_mutex, portMAX_DELAY);
-	if (atss_latest_stats != NULL) {
-		vPortFree(atss_latest_stats);
-	}
-	atss_latest_stats = stats;
-	atss_latest_count = count;
-	atss_latest_sequence++;
-	atss_latest_status = ATSS_OK;
-	xSemaphoreGive(atss_data_mutex);
-}
-
-static void atss_monitor(void *param)
-{
-	TaskStatus_t *start_tasks;
-	TaskStatus_t *end_tasks;
-	atss_task_stat_t *sample_stats;
-	size_t sample_count;
-	UBaseType_t start_count;
-	UBaseType_t end_count;
-	uint32_t start_wall_us;
-	uint32_t end_wall_us;
-	uint32_t sample_window_us;
-	int status;
-	BaseType_t normal_stop = pdFALSE;
-
-	(void)param;
-
-	start_tasks = atss_take_snapshot(&start_count, &start_wall_us);
-	if (start_tasks == NULL) {
-		atss_set_latest_status(ATSS_NO_MEMORY);
-		if (atss_cli_print_enabled != pdFALSE) {
-			AT_PRINTK("[ATSS]: ERROR: unable to allocate the initial snapshot");
-		}
-		goto exit;
-	}
-	if (atss_cli_print_enabled != pdFALSE) {
-		AT_PRINTK("[ATSS]: runtime=DWT frequency=%luHz resolution=1cycle wallclock=GTIMER",
-			 (unsigned long)SystemCoreClock);
-	}
-
-	while (1) {
-		(void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ATSS_SAMPLE_PERIOD_MS));
-		if (atss_monitor_stop_requested != pdFALSE) {
-			normal_stop = pdTRUE;
-			break;
-		}
-
-		end_tasks = atss_take_snapshot(&end_count, &end_wall_us);
-		if (end_tasks == NULL) {
-			atss_set_latest_status(ATSS_NO_MEMORY);
-			if (atss_cli_print_enabled != pdFALSE) {
-				AT_PRINTK("[ATSS]: ERROR: unable to allocate a snapshot");
-			}
-			vPortFree(start_tasks);
-			start_tasks = atss_take_snapshot(&start_count, &start_wall_us);
-			if (start_tasks == NULL) {
-				goto exit;
-			}
-			continue;
-		}
-
-		sample_stats = NULL;
-		sample_count = 0U;
-		sample_window_us = 0U;
-		status = atss_calculate_sample(start_tasks, start_count, start_wall_us,
-					       end_tasks, end_count, end_wall_us,
-					       &sample_stats, &sample_count,
-					       &sample_window_us);
-
-		vPortFree(start_tasks);
-		start_tasks = end_tasks;
-		start_count = end_count;
-		start_wall_us = end_wall_us;
-
-		if (atss_monitor_stop_requested != pdFALSE) {
-			if (sample_stats != NULL) {
-				vPortFree(sample_stats);
-			}
-			normal_stop = pdTRUE;
-			break;
-		}
-		if (status == ATSS_OK) {
-			atss_publish_sample(sample_stats, sample_count);
-			if (atss_cli_print_enabled != pdFALSE) {
-				atss_print_sample(sample_stats, sample_count,
-						  sample_window_us);
-			}
-		} else {
-			atss_set_latest_status(status);
-			if (atss_cli_print_enabled != pdFALSE) {
-				AT_PRINTK("[ATSS]: ERROR: unable to calculate a sample (%d)",
-					 status);
-			}
-		}
-	}
-
-	vPortFree(start_tasks);
-
-exit:
-	if (normal_stop != pdFALSE) {
-		atss_set_latest_status(ATSS_NOT_RUNNING);
-	}
-	taskENTER_CRITICAL();
-	atss_monitor_exiting = pdTRUE;
-	atss_monitor_task = NULL;
-	atss_monitor_stop_requested = pdFALSE;
-	taskEXIT_CRITICAL();
-	xSemaphoreGive(atss_monitor_stopped);
-	vTaskDelete(NULL);
-}
-
-static int atss_set_enabled(BaseType_t cli, BaseType_t enable)
-{
-	BaseType_t should_stop;
-	TaskHandle_t task_to_stop;
-	int status;
-
-	status = atss_sync_init();
-	if (status != ATSS_OK) {
-		return status;
-	}
-
-	xSemaphoreTake(atss_control_mutex, portMAX_DELAY);
-	if (cli != pdFALSE) {
-		atss_cli_print_enabled = enable;
-	} else {
-		atss_internal_enabled = enable;
-	}
-
-	if (enable != pdFALSE) {
-		if (atss_monitor_task == NULL) {
-			if (atss_monitor_exiting != pdFALSE) {
-				xSemaphoreTake(atss_monitor_stopped, portMAX_DELAY);
-				atss_monitor_exiting = pdFALSE;
-			}
-			while (xSemaphoreTake(atss_monitor_stopped, 0) == pdTRUE) {
-			}
-			atss_monitor_stop_requested = pdFALSE;
-			atss_set_latest_status(ATSS_NOT_READY);
-			if (xTaskCreate(atss_monitor,
-					(const char *)"atss_monitor",
-					ATSS_MONITOR_STACK_SIZE,
-					NULL,
-					ATSS_MONITOR_PRIORITY,
-					&atss_monitor_task) != pdPASS) {
-				atss_monitor_task = NULL;
-				if (cli != pdFALSE) {
-					atss_cli_print_enabled = pdFALSE;
-				} else {
-					atss_internal_enabled = pdFALSE;
-				}
-				atss_set_latest_status(ATSS_NO_MEMORY);
-				xSemaphoreGive(atss_control_mutex);
-				return ATSS_NO_MEMORY;
-			}
-		}
-		xSemaphoreGive(atss_control_mutex);
-		return ATSS_OK;
-	}
-
-	should_stop = (atss_internal_enabled == pdFALSE) &&
-		      (atss_cli_print_enabled == pdFALSE);
-	task_to_stop = atss_monitor_task;
-	if (should_stop != pdFALSE && task_to_stop != NULL) {
-		atss_monitor_stop_requested = pdTRUE;
-		xTaskNotifyGive(task_to_stop);
-		xSemaphoreTake(atss_monitor_stopped, portMAX_DELAY);
-		atss_monitor_exiting = pdFALSE;
-	} else if (should_stop != pdFALSE &&
-		   atss_monitor_exiting != pdFALSE) {
-		xSemaphoreTake(atss_monitor_stopped, portMAX_DELAY);
-		atss_monitor_exiting = pdFALSE;
-		atss_set_latest_status(ATSS_NOT_RUNNING);
-	} else if (should_stop != pdFALSE) {
-		atss_set_latest_status(ATSS_NOT_RUNNING);
-	}
-	xSemaphoreGive(atss_control_mutex);
-	return ATSS_OK;
-}
-
-int atss_stats_start(void)
-{
-	return atss_set_enabled(pdFALSE, pdTRUE);
-}
-
-int atss_stats_get(atss_task_stat_t *stats,
-		   size_t capacity,
-		   size_t *task_count,
-		   uint32_t *sequence,
-		   uint32_t *sample_period_ms)
-{
-	size_t count;
-	int status;
-
-	if (task_count == NULL || (stats == NULL && capacity != 0U)) {
-		return ATSS_INVALID_ARGUMENT;
-	}
-	status = atss_sync_init();
-	if (status != ATSS_OK) {
-		return status;
-	}
-
-	xSemaphoreTake(atss_data_mutex, portMAX_DELAY);
-	count = atss_latest_count;
-	*task_count = count;
-	if (sequence != NULL) {
-		*sequence = atss_latest_sequence;
-	}
-	if (sample_period_ms != NULL) {
-		*sample_period_ms = ATSS_SAMPLE_PERIOD_MS;
-	}
-	status = atss_latest_status;
-	if (status == ATSS_OK && capacity < count) {
-		status = ATSS_BUFFER_TOO_SMALL;
-	} else if (status == ATSS_OK && count != 0U) {
-		memcpy(stats, atss_latest_stats, count * sizeof(*stats));
-	}
-	xSemaphoreGive(atss_data_mutex);
-	return status;
-}
-
-int atss_stats_stop(void)
-{
-	return atss_set_enabled(pdFALSE, pdFALSE);
-}
-#else
-int atss_stats_start(void)
-{
-	return ATSS_UNAVAILABLE;
-}
-
-int atss_stats_get(atss_task_stat_t *stats,
-		   size_t capacity,
-		   size_t *task_count,
-		   uint32_t *sequence,
-		   uint32_t *sample_period_ms)
-{
-	(void)stats;
-	(void)capacity;
-	if (task_count != NULL) {
-		*task_count = 0U;
-	}
-	if (sequence != NULL) {
-		*sequence = 0U;
-	}
-	if (sample_period_ms != NULL) {
-		*sample_period_ms = ATSS_SAMPLE_PERIOD_MS;
-	}
-	return (task_count == NULL) ? ATSS_INVALID_ARGUMENT : ATSS_UNAVAILABLE;
-}
-
-int atss_stats_stop(void)
-{
-	return ATSS_UNAVAILABLE;
-}
 #endif
 //#endif
 
@@ -552,7 +48,7 @@ void fATAD(void *arg)
 	int argc = 0;
 	char *argv[MAX_ARGC] = {0};
 	argc = parse_param(arg, argv);
-	
+
 	if(strcmp(argv[1], "start")==0){
 		int time = atoi(argv[2]);
 		printf("start mic dump %d s \n\r", time);
@@ -563,7 +59,7 @@ void fATAD(void *arg)
 		/*else if(strcmp(argv[3],"aec")==0){
 			audio_rx_debug_start(3);
 		}*/
-		
+
 	}else if(strcmp(argv[1], "dump")==0){
 		if(argc == 2){
 		printf("dump buffered audio input\n\r");
@@ -581,20 +77,20 @@ void fATAS(void *arg)
 {
 	char *argv[MAX_ARGC] = {0};
 	parse_param(arg, argv);
-	
+
 	if(strcmp(argv[1], "start")==0){
 		printf("start sending buffer\n\r");
 		audio_tx_debug_get();
 		audio_debug_buf_print(audio_tx_debug_buffer);
-		audio_tx_debug_start();		
-		
+		audio_tx_debug_start();
+
 	}else if(strcmp(argv[1], "play")==0){
 		if(strcmp(argv[2], "buf")==0){
 			printf("play sending buffer\n\r");
-			audio_tx_debug_start();		
+			audio_tx_debug_start();
 		}else if (strcmp(argv[2], "tone")==0){
 			int freq = atoi(argv[3]);
-			//audio_debug_gen_tone(audio_tx_debug_buf, freq);	
+			//audio_debug_gen_tone(audio_tx_debug_buf, freq);
 		}
 	}else if(strcmp(argv[1], "send")==0){
 		int time = atoi(argv[2]);
@@ -614,7 +110,7 @@ void fATAF(void *arg)
 	//int argc = 0;
 	char *argv[MAX_ARGC] = {0};
 	parse_param(arg, argv);
-	
+
 	if(strcmp(argv[1], "agc")==0){
 		module_audio_agc = argv[2][0]-'0';
 	}else if(strcmp(argv[1], "ns")==0){
@@ -634,7 +130,7 @@ void fATSD(void *arg)
 #if !defined(CONFIG_PLATFORM_8710C)
 	int argc = 0;
 	char *argv[MAX_ARGC] = {0};
-	
+
 	AT_DBG_MSG(AT_FLAG_DUMP, AT_DBG_ALWAYS, "[ATSD]: _AT_SYSTEM_DUMP_REGISTER_");
 	if(!arg){
 		AT_DBG_MSG(AT_FLAG_DUMP, AT_DBG_ALWAYS, "[ATSD] Usage: ATSD=REGISTER");
@@ -651,7 +147,7 @@ void fATSE(void *arg)
 #if !defined(CONFIG_PLATFORM_8710C)
 	int argc = 0;
 	char *argv[MAX_ARGC] = {0};
-	
+
 	AT_DBG_MSG(AT_FLAG_EDIT, AT_DBG_ALWAYS, "[ATSE]: _AT_SYSTEM_EDIT_REGISTER_");
 	if(!arg){
 		AT_DBG_MSG(AT_FLAG_EDIT, AT_DBG_ALWAYS, "[ATSE] Usage: ATSE=REGISTER[VALUE]");
@@ -664,7 +160,7 @@ void fATSE(void *arg)
 }
 
 void fATSC(void *arg)
-{	
+{
 	AT_DBG_MSG(AT_FLAG_OTA, AT_DBG_ALWAYS, "[ATSC]: _AT_SYSTEM_CLEAR_OTA_SIGNATURE_");
 	sys_clear_ota_signature();
 }
@@ -716,9 +212,9 @@ void fATSK(void *arg)
 			AT_DBG_MSG(AT_FLAG_RDP, AT_DBG_ALWAYS, "[ATSK] Err: RDP key length should be 16 bytes");
 			return;
 		}
-		
-		sscanf(argv[2], "%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x", 
-			&key[0], &key[1], &key[2], &key[3], &key[4], &key[5], &key[6], &key[7], 
+
+		sscanf(argv[2], "%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
+			&key[0], &key[1], &key[2], &key[3], &key[4], &key[5], &key[6], &key[7],
 			&key[8], &key[9], &key[10], &key[11], &key[12], &key[13], &key[14], &key[15]);
 
 		EFUSE_RDP_KEY(key);
@@ -739,9 +235,9 @@ void fATSK(void *arg)
 			AT_DBG_MSG(AT_FLAG_RDP, AT_DBG_ALWAYS, "[ATSK] Err: RSIP key length should be 16 bytes");
 			return;
 		}
-		
-		sscanf(argv[2], "%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x", 
-			&key[0], &key[1], &key[2], &key[3], &key[4], &key[5], &key[6], &key[7], 
+
+		sscanf(argv[2], "%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
+			&key[0], &key[1], &key[2], &key[3], &key[4], &key[5], &key[6], &key[7],
 			&key[8], &key[9], &key[10], &key[11], &key[12], &key[13], &key[14], &key[15]);
 
 		EFUSE_OTF_KEY(key);
@@ -749,7 +245,7 @@ void fATSK(void *arg)
 	}else if(strcmp(argv[1], "SB_EN") == 0){
 		u8 data = 0;
 		u32 efuse_ctrl = HAL_READ32(SYSTEM_CTRL_BASE, REG_SYS_EFUSE_CTRL);
-	
+
 		EFUSERead8(efuse_ctrl, 0xD3, &data, L25EOUTVOLTAGE);
 		if ((data & EFUSE_PHYSICAL_SBOOT_ON) != 0) {
 			EFUSEWrite8(efuse_ctrl, 0xD3, data & (~EFUSE_PHYSICAL_SBOOT_ON), L25EOUTVOLTAGE);
@@ -759,7 +255,7 @@ void fATSK(void *arg)
 		}
 	}else if(strcmp(argv[1], "SB_PK_MD5") == 0){
 		u8 i = 0;
-		
+
 		if(argc != 3){
 			AT_DBG_MSG(AT_FLAG_RDP, AT_DBG_ALWAYS, "[ATSK] Usage: ATSK=SB_PK_MD5[value(hex)]");
 			return;
@@ -769,9 +265,9 @@ void fATSK(void *arg)
 			AT_DBG_MSG(AT_FLAG_RDP, AT_DBG_ALWAYS, "[ATSK] Err: MD5 value of public key should be 16 bytes");
 			return;
 		}
-		
-		sscanf(argv[2], "%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x", 
-			&key[0], &key[1], &key[2], &key[3], &key[4], &key[5], &key[6], &key[7], 
+
+		sscanf(argv[2], "%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
+			&key[0], &key[1], &key[2], &key[3], &key[4], &key[5], &key[6], &key[7],
 			&key[8], &key[9], &key[10], &key[11], &key[12], &key[13], &key[14], &key[15]);
 
 		for(i = 0; i < 16; i++) {
@@ -782,15 +278,15 @@ void fATSK(void *arg)
 	}else{
 		AT_DBG_MSG(AT_FLAG_RDP, AT_DBG_ALWAYS, "[ATSK] Usage: ATSK=RDP_EN");
 		AT_DBG_MSG(AT_FLAG_RDP, AT_DBG_ALWAYS, "[ATSK] Usage: ATSK=RDP_KEY[value(hex)]");
-		AT_DBG_MSG(AT_FLAG_RDP, AT_DBG_ALWAYS, "[ATSK] 	Example: ATSK=RDP_KEY[345487bbaa435bfe382233445ba359aa]");		
+		AT_DBG_MSG(AT_FLAG_RDP, AT_DBG_ALWAYS, "[ATSK] 	Example: ATSK=RDP_KEY[345487bbaa435bfe382233445ba359aa]");
 		AT_DBG_MSG(AT_FLAG_RDP, AT_DBG_ALWAYS, "[ATSK] Usage: ATSK=RSIP_EN");
 		AT_DBG_MSG(AT_FLAG_RDP, AT_DBG_ALWAYS, "[ATSK] Usage: ATSK=RSIP_DIS");
 		AT_DBG_MSG(AT_FLAG_RDP, AT_DBG_ALWAYS, "[ATSK] Usage: ATSK=RSIP_KEY[value(hex)]");
 		AT_DBG_MSG(AT_FLAG_RDP, AT_DBG_ALWAYS, "[ATSK] Usage: ATSK=SB_EN");
 		AT_DBG_MSG(AT_FLAG_RDP, AT_DBG_ALWAYS, "[ATSK] Usage: ATSK=SB_PK_MD5[value(hex)]");
-		
+
 	}
-	
+
 }
 #endif
 
@@ -802,7 +298,7 @@ void fATSA(void *arg)
 	int argc = 0, channel;
 	char *argv[MAX_ARGC] = {0}, *ptmp;
 	u16 offset, gain;
-	
+
 	AT_DBG_MSG(AT_FLAG_ADC, AT_DBG_ALWAYS, "[ATSA]: _AT_SYSTEM_ADC_TEST_");
 	if(!arg){
 		AT_DBG_MSG(AT_FLAG_ADC, AT_DBG_ALWAYS, "[ATSA] Usage: ATSA=CHANNEL(1~3)");
@@ -810,7 +306,7 @@ void fATSA(void *arg)
 		AT_DBG_MSG(AT_FLAG_ADC, AT_DBG_ALWAYS, "[ATSA] Usage: ATSA=k_set[offet(hex),gain(hex)]");
 		return;
 	}
-	
+
 	argc = parse_param(arg, argv);
 	if(strcmp(argv[1], "k_get") == 0){
 		sys_adc_calibration(0, &offset, &gain);
@@ -832,7 +328,7 @@ void fATSA(void *arg)
 		}
 		analogin_t   adc;
 		u16 adcdat;
-		
+
 		// Remove debug info massage
 		ConfigDebugInfo = 0;
 		if(channel == 1)
@@ -845,7 +341,7 @@ void fATSA(void *arg)
 		analogin_deinit(&adc);
 		// Recover debug info massage
 		ConfigDebugInfo = tConfigDebugInfo;
-		
+
 		AT_DBG_MSG(AT_FLAG_ADC, AT_DBG_ALWAYS, "[ATSA] A%d = 0x%04X", channel, adcdat);
 	}
 #elif defined(CONFIG_PLATFORM_8721D)
@@ -873,7 +369,7 @@ void fATSA(void *arg)
 	analogin_init(&adc, ch_list[channel]);
 	adcdat = analogin_read_u16(&adc);
 	analogin_deinit(&adc);
-	
+
 	AT_DBG_MSG(AT_FLAG_ADC, AT_DBG_ALWAYS, "[ATSA] A%d = 0x%04X", channel, adcdat);
 #endif
 }
@@ -886,7 +382,7 @@ void fATSG(void *arg)
 	char *argv[MAX_ARGC] = {0}, port, num;
 	PinName pin = NC;
 	u32 tConfigDebugInfo = ConfigDebugInfo;
-    
+
 	AT_DBG_MSG(AT_FLAG_GPIO, AT_DBG_ALWAYS, "[ATSG]: _AT_SYSTEM_GPIO_TEST_");
 	if(!arg){
 		AT_DBG_MSG(AT_FLAG_GPIO, AT_DBG_ALWAYS, "[ATSG] Usage: ATSG=PINNAME(ex:A0)");
@@ -996,7 +492,7 @@ void fATSG(void *arg)
 	char *argv[MAX_ARGC] = {0}, port;
 	PinName pin = NC;
 	u32 tConfigDebugInfo = ConfigDebugInfo;
-    
+
 	AT_DBG_MSG(AT_FLAG_GPIO, AT_DBG_ALWAYS, "[ATSG]: _AT_SYSTEM_GPIO_TEST_");
 	if(!arg){
 		AT_DBG_MSG(AT_FLAG_GPIO, AT_DBG_ALWAYS, "[ATSG] Usage: ATSG=PINNAME(ex:A0)");
@@ -1012,8 +508,8 @@ void fATSG(void *arg)
 	if(port >= 'a' && port <= 'z')
 		port -= ('a' - 'A');
 	num = atoi(argv[1] + 1);
-	
-	//PA_6~PA_11 are not allowed to be tested when code running on flash. 
+
+	//PA_6~PA_11 are not allowed to be tested when code running on flash.
 	//PA_16~PA_17 or PA_29~PA_30 should not be tested when they are used as log UART RX and TX.
 	switch(port){
 		case 'A':
@@ -1055,7 +551,7 @@ void fATSG(void *arg)
     int argc = 0, val, num;
 	char *argv[MAX_ARGC] = {0}, port;
 	PinName pin = NC;
-    
+
 	AT_DBG_MSG(AT_FLAG_GPIO, AT_DBG_ALWAYS, "[ATSG]: _AT_SYSTEM_GPIO_TEST_");
 	if(!arg){
 		AT_DBG_MSG(AT_FLAG_GPIO, AT_DBG_ALWAYS, "[ATSG] Usage: ATSG=PINNAME(ex:A0)");
@@ -1071,8 +567,8 @@ void fATSG(void *arg)
 	if(port >= 'a' && port <= 'z')
 		port -= ('a' - 'A');
 	num = atoi(argv[1] + 1);
-	
-	//PB_12~PB_17 or PB_18~PB_23 are not allowed to be tested when code running on flash. 
+
+	//PB_12~PB_17 or PB_18~PB_23 are not allowed to be tested when code running on flash.
 	//PA_7~PA_8 should not be tested when they are used as log UART RX and TX.
 	switch(port){
 		case 'A':
@@ -1112,7 +608,7 @@ void fATSG(void *arg)
 	val = gpio_read(&gpio_test);
 
 	AT_DBG_MSG(AT_FLAG_GPIO, AT_DBG_ALWAYS, "[ATSG] %c%d = %d", port, num, val);
-	
+
 #endif
 }
 
@@ -1199,7 +695,7 @@ int write_otu_to_system_data(flash_t *flash, uint32_t otu_addr)
 	uint32_t data, i = 0;
 	flash_read_word(flash, FLASH_SYSTEM_DATA_ADDR+0xc, &data);
 	//printf("\n\r[%s] data 0x%x otu_addr 0x%x", __FUNCTION__, data, otu_addr);
-	AT_DBG_MSG(AT_FLAG_DUMP, AT_DBG_ALWAYS, "[ATSB]: data 0x%x otu_addr 0x%x", data, otu_addr);	
+	AT_DBG_MSG(AT_FLAG_DUMP, AT_DBG_ALWAYS, "[ATSB]: data 0x%x otu_addr 0x%x", data, otu_addr);
 	if(data == ~0x0){
 		flash_write_word(flash, FLASH_SYSTEM_DATA_ADDR+0xc, otu_addr);
 	}else{
@@ -1235,7 +731,7 @@ void fATSB(void *arg)
 	u8 gpio_pin;
 	u8 uart_port, uart_index;
 	u8 gpio_pin_bar;
-	u8 uart_port_bar;		
+	u8 uart_port_bar;
 	flash_t flash;
 
 	// parameter check
@@ -1286,7 +782,7 @@ void fATSB(void *arg)
 			AT_DBG_MSG(AT_FLAG_DUMP, AT_DBG_ALWAYS, "[ATSB]:uart_port_bar 0x%x", uart_port_bar);
 			AT_DBG_MSG(AT_FLAG_DUMP, AT_DBG_ALWAYS, "[ATSB]:boot_gpio 0x%x", boot_gpio);
 			write_otu_to_system_data(&flash, boot_gpio);
-			flash_read_word(&flash, FLASH_SYSTEM_DATA_ADDR+0x0c, &rb_boot_gpio);			
+			flash_read_word(&flash, FLASH_SYSTEM_DATA_ADDR+0x0c, &rb_boot_gpio);
 			AT_DBG_MSG(AT_FLAG_DUMP, AT_DBG_ALWAYS, "[ATSB]:Read 0x900c 0x%x", rb_boot_gpio);
 		}else{
 			AT_DBG_MSG(AT_FLAG_DUMP, AT_DBG_ALWAYS, "[ATSB]: Usage: ATSB=[GPIO_PIN,TRIGER_MODE,UART]");
@@ -1294,7 +790,7 @@ void fATSB(void *arg)
 			AT_DBG_MSG(AT_FLAG_DUMP, AT_DBG_ALWAYS, "[ATSB]: TRIGER_MODE: low_trigger, high_trigger");
 			AT_DBG_MSG(AT_FLAG_DUMP, AT_DBG_ALWAYS, "[ATSB]: UART: UART0, UART2");
 			AT_DBG_MSG(AT_FLAG_DUMP, AT_DBG_ALWAYS, "[ATSB]: example: ATSB=[PC_2,low_trigger,UART2]");
-		}		
+		}
 	}else{
 		AT_DBG_MSG(AT_FLAG_DUMP, AT_DBG_ALWAYS, "[ATSB]: Usage: ATSB=[GPIO_PIN,TRIGER_MODE,UART]");
 		AT_DBG_MSG(AT_FLAG_DUMP, AT_DBG_ALWAYS, "[ATSB]: GPIO_PIN: PB_1, PC_4 ....");
@@ -1310,65 +806,9 @@ void fATSB(void *arg)
 #if (configGENERATE_RUN_TIME_STATS == 1)
 void fATSS(void *arg)	// Show CPU stats
 {
-	int argc;
-	int status;
-	char *argv[MAX_ARGC] = {0};
-	BaseType_t stop_monitor = pdFALSE;
-	BaseType_t monitor_was_running;
-
-	if (arg != NULL) {
-		argc = parse_param(arg, argv);
-		if (argc != 2) {
-			AT_PRINTK("[ATSS]: Usage: ATSS, ATSS=start, or ATSS=stop");
-			return;
-		}
-
-		if ((strcmp(argv[1], "stop") == 0) || (strcmp(argv[1], "0") == 0)) {
-			stop_monitor = pdTRUE;
-		} else if ((strcmp(argv[1], "start") != 0) && (strcmp(argv[1], "1") != 0)) {
-			AT_PRINTK("[ATSS]: Usage: ATSS, ATSS=start, or ATSS=stop");
-			return;
-		}
-	}
-
-	if (stop_monitor != pdFALSE) {
-		if (atss_cli_print_enabled == pdFALSE) {
-			AT_PRINTK("[ATSS]: CPU monitor is not running");
-		} else {
-			status = atss_set_enabled(pdTRUE, pdFALSE);
-			if (status == ATSS_OK) {
-				if (atss_internal_enabled != pdFALSE) {
-					AT_PRINTK("[ATSS]: CPU monitor printing stopped; internal statistics remain active");
-				} else {
-					AT_PRINTK("[ATSS]: CPU monitor stopped");
-				}
-			} else {
-				AT_PRINTK("[ATSS]: ERROR: unable to stop CPU monitor (%d)",
-					 status);
-			}
-		}
-		return;
-	}
-
-	if (atss_cli_print_enabled != pdFALSE) {
-		AT_PRINTK("[ATSS]: CPU monitor is already running");
-		return;
-	}
-
-	monitor_was_running = (atss_monitor_task != NULL);
-	status = atss_set_enabled(pdTRUE, pdTRUE);
-	if (status != ATSS_OK) {
-		AT_PRINTK("[ATSS]: ERROR: unable to start CPU monitor (%d)", status);
-		return;
-	}
-
-	if (monitor_was_running != pdFALSE) {
-		AT_PRINTK("[ATSS]: CPU monitor printing enabled; reporting every %u ms",
-			 (unsigned int)ATSS_SAMPLE_PERIOD_MS);
-	} else {
-		AT_PRINTK("[ATSS]: CPU monitor started; reporting every %u ms",
-			 (unsigned int)ATSS_SAMPLE_PERIOD_MS);
-	}
+	AT_PRINTK("[ATSS]: _AT_SYSTEM_CPU_STATS_");
+	vTaskGetRunTimeStats((char *)cBuffer);
+	AT_PRINTK("%s", cBuffer);
 }
 #endif
 
@@ -1458,8 +898,8 @@ void fATSt(void *arg)
 }
 
 #if defined(CONFIG_PLATFORM_8711B)
-/*Function: Check if the input jtag key is matched with the jtag password derived from the SB key stored in EFUSE. 
-		    If the input jtag key is correct, it will be stored in system data area of the flash. 
+/*Function: Check if the input jtag key is matched with the jtag password derived from the SB key stored in EFUSE.
+		    If the input jtag key is correct, it will be stored in system data area of the flash.
 		    Otherwise, the last 1 of the error map will be written to 0, which is also stored in system data of the flash. */
 static void sys_enable_jtag_by_password(char *keystring)
 {
@@ -1467,13 +907,13 @@ static void sys_enable_jtag_by_password(char *keystring)
 	u8 key[8];
 	u32 data, key32[8], i = 0, errmap = 0;
 	int is_match = 0;
-	
+
 	if(strlen(keystring) < 16){
 		AT_PRINTK("%s(): Key length should be 16 characters.", __func__);
 		return;
 	}
 	AT_PRINTK("Enter JTAG Key: %s\n", keystring);
-	sscanf((const char*)keystring, "%02x%02x%02x%02x%02x%02x%02x%02x", 
+	sscanf((const char*)keystring, "%02x%02x%02x%02x%02x%02x%02x%02x",
 		&key32[0], &key32[1], &key32[2], &key32[3], &key32[4], &key32[5], &key32[6], &key32[7]);
 	for(i=0; i<8; i++){
 		key[i] = key32[i] & 0xFF;
@@ -1490,7 +930,7 @@ static void sys_enable_jtag_by_password(char *keystring)
 
 	// check if jtag key is correct
 	is_match = boot_export_symbol.is_jtag_key_match(key);
-	
+
 	device_mutex_lock(RT_DEV_LOCK_FLASH);
 	flash_read_word(&flash, FLASH_SYSTEM_DATA_ADDR + 0x44, &data);
 	if(data != ~0x0){
@@ -1506,7 +946,7 @@ static void sys_enable_jtag_by_password(char *keystring)
 				data = 0xFFFFFFFF;
 			flash_write_word(&flash, FLASH_RESERVED_DATA_BASE + i,data);
 		}
-		
+
 		//erase system data
 		flash_erase_sector(&flash, FLASH_SYSTEM_DATA_ADDR);
 		//write data back to system data
@@ -1529,9 +969,9 @@ static void sys_enable_jtag_by_password(char *keystring)
 
 void fATSJ(void *arg)
 {
-  	volatile int argc = 0;
+	volatile int argc = 0;
 	char *argv[MAX_ARGC] = {0};
-  
+
 #if defined (CONFIG_PLATFORM_8721D)
 	#ifdef AMEBAD_TODO
 	AT_PRINTK("[ATSJ]: _AT_SYSTEM_JTAG_");
@@ -1544,7 +984,7 @@ void fATSJ(void *arg)
 #if defined(CONFIG_PLATFORM_8711B)
 		else if (strcmp(argv[1], "key" ) == 0)
 			sys_enable_jtag_by_password(argv[2]); //Enter "FFFFFFFFFFFFFFFF" to clear key in flash
-#endif			
+#endif
 		else
 			AT_PRINTK("ATSJ=%s is not supported!", argv[1]);
 	}
@@ -1561,7 +1001,7 @@ void fATSJ(void *arg)
 #if defined(CONFIG_PLATFORM_8711B)
 		else if (strcmp(argv[1], "key" ) == 0)
 			sys_enable_jtag_by_password(argv[2]); //Enter "FFFFFFFFFFFFFFFF" to clear key in flash
-#endif			
+#endif
 		else
 			AT_PRINTK("ATSJ=%s is not supported!", argv[1]);
 	}
@@ -1653,7 +1093,7 @@ void fATSP(void *arg){
 
 	uint32_t lock_id;
 	uint32_t bitmap;
-	
+
 	if (!arg) {
 		AT_DBG_MSG(AT_FLAG_COMMON, AT_DBG_ERROR, "\r\n[ATSP] Usage: ATSP=<a/r/?>");
 		at_printf("\r\n[ATSP] ERROR:1");
@@ -1670,7 +1110,7 @@ void fATSP(void *arg){
 		case 'a': // acquire
 		{
 			pmu_acquire_wakelock(PMU_OS);
-			//at_printf("\r\n[ATSP] wakelock:0x%08x", pmu_get_wakelock_status());			
+			//at_printf("\r\n[ATSP] wakelock:0x%08x", pmu_get_wakelock_status());
 			break;
 		}
 
@@ -1699,7 +1139,7 @@ void fATSE(void *arg){
 	char *argv[MAX_ARGC] = {0};
 	int err_no = 0;
 
-	AT_DBG_MSG(AT_FLAG_COMMON, AT_DBG_ALWAYS, "[ATSE]: _AT_SYSTEM_ECHO_DBG_SETTING");	
+	AT_DBG_MSG(AT_FLAG_COMMON, AT_DBG_ALWAYS, "[ATSE]: _AT_SYSTEM_ECHO_DBG_SETTING");
 	if(!arg){
 		AT_DBG_MSG(AT_FLAG_COMMON, AT_DBG_ERROR, "[ATSE] Usage: ATSE=<echo>,<dbg_msk>,<dbg_lv>");
 		err_no = 1;
@@ -1728,12 +1168,12 @@ void fATSE(void *arg){
 		mask = strtoul(argv[2], NULL, 0);
 		at_set_debug_mask(mask);
 	}
-	
+
 	if((argc == 4) && (argv[3] != NULL)){
 		dbg_lv = strtoul(argv[3], NULL, 0);
 		at_set_debug_level(dbg_lv);
 	}
-	
+
 exit:
 	if(err_no)
 		at_printf("\r\n[ATSE] ERROR:%d", err_no);
@@ -1757,8 +1197,8 @@ void fATSY(void *arg){
 #if CONFIG_OTA_UPDATE
 	// Reset ota image  signature
 	cmd_ota_image(0);
-#endif	
-	
+#endif
+
 	at_printf("\r\n[ATSY] OK");
 	// reboot
 	sys_reset();
@@ -1769,7 +1209,7 @@ extern int wifi_is_connected_to_ap( void );
 void fATSO(void *arg){
 	int argc = 0;
 	char *argv[MAX_ARGC] = {0};
-	
+
 	if(!arg){
 		AT_DBG_MSG(AT_FLAG_OTA, AT_DBG_ERROR, "\r\n[ATSO] Usage: ATSO=<ip>,<port>");
 		at_printf("\r\n[ATSO] ERROR:1");
@@ -1786,7 +1226,7 @@ void fATSO(void *arg){
 	if(wifi_is_connected_to_ap()==0){
 		cmd_update(argc, argv);
 		at_printf("\r\n[ATSO] OK");
-		
+
 	}else{
 		at_printf("\r\n[ATSO] ERROR:3");
 	}
@@ -1796,7 +1236,7 @@ void fATSC(void *arg){
 	int argc = 0;
 	char *argv[MAX_ARGC] = {0};
 	int cmd = 0;
-	
+
 	if(!arg){
 		AT_DBG_MSG(AT_FLAG_OTA, AT_DBG_ERROR, "\r\n[ATSC] Usage: ATSC=<0/1>");
 		at_printf("\r\n[ATSC] ERROR:1");
@@ -1814,12 +1254,12 @@ void fATSC(void *arg){
 		at_printf("\r\n[ATSC] ERROR:2");
 		return;
 	}
-		
+
 	at_printf("\r\n[ATSC] OK");
 
- 	if(cmd == 1){
- 		cmd_ota_image(1);
- 	}
+	if(cmd == 1){
+		cmd_ota_image(1);
+	}
 	else{
 		cmd_ota_image(0);
 	}
@@ -1842,15 +1282,15 @@ void fATSU(void *arg){
 	u8 configmode = 0;
 	int i;
 	UART_LOG_CONF uartconf;
-	
+
 	if(!arg){
-		AT_DBG_MSG(AT_FLAG_COMMON, AT_DBG_ERROR, 
+		AT_DBG_MSG(AT_FLAG_COMMON, AT_DBG_ERROR,
 		"[ATSU] Usage: ATSU=<baud>,<databits>,<stopbits>,<parity>,<flowcontrol>,<configmode>");
 		at_printf("\r\n[ATSU] ERROR:1");
 		return;
 	}
 	if((argc = parse_param(arg, argv)) != 7){
-		AT_DBG_MSG(AT_FLAG_COMMON, AT_DBG_ERROR, 
+		AT_DBG_MSG(AT_FLAG_COMMON, AT_DBG_ERROR,
 		"[ATSU] Usage: ATSU=<baud>,<databits>,<stopbits>,<parity>,<flowcontrol>,<configmode>");
 		at_printf("\r\n[ATSU] ERROR:1");
 		return;
@@ -1869,7 +1309,7 @@ void fATSU(void *arg){
             break;
         }
     }
-    
+
     if (log_uart_support_rate[i]== 0xFFFFFF) {
 		at_printf("\r\n[ATSU] ERROR:2");
         return;
@@ -1884,14 +1324,14 @@ void fATSU(void *arg){
 		at_printf("\r\n[ATSU] ERROR:2");
 		return;
 	}
-	
+
 	memset((void*)&uartconf, 0, sizeof(UART_LOG_CONF));
 	uartconf.BaudRate = baud;
 	uartconf.DataBits = databits;
 	uartconf.StopBits = stopbits;
 	uartconf.Parity = parity;
 	uartconf.FlowControl = flowcontrol;
-	AT_DBG_MSG(AT_FLAG_COMMON, AT_DBG_ALWAYS, 
+	AT_DBG_MSG(AT_FLAG_COMMON, AT_DBG_ALWAYS,
 		"AT_UART_CONF: %d,%d,%d,%d,%d", uartconf.BaudRate, uartconf.DataBits,uartconf.StopBits,uartconf.Parity,uartconf.FlowControl);
 	switch(configmode){
 		case 0: // set current configuration, won't save
@@ -1905,7 +1345,7 @@ void fATSU(void *arg){
 			write_uart_atcmd_setting_to_system_data(&uartconf);
 			break;
 	}
-	
+
 	at_printf("\r\n[ATSU] OK");
 }
 #endif //#if CONFIG_EXAMPLE_UART_ATCMD
@@ -1921,24 +1361,24 @@ void fATSG(void *arg)
 	AT_DBG_MSG(AT_FLAG_GPIO, AT_DBG_ALWAYS, "[ATSG]: _AT_SYSTEM_GPIO_CTRL_");
 
 	if(!arg){
-		AT_DBG_MSG(AT_FLAG_GPIO, AT_DBG_ERROR, 
+		AT_DBG_MSG(AT_FLAG_GPIO, AT_DBG_ERROR,
 		"[ATSG] Usage: ATSG=<R/W>,<PORT>,<DATA>,<DIR>,<PULL>");
 		error_no = 1;
 		goto exit;
 	}
 	if((argc = parse_param(arg, argv)) < 3){
-		AT_DBG_MSG(AT_FLAG_GPIO, AT_DBG_ERROR, 
+		AT_DBG_MSG(AT_FLAG_GPIO, AT_DBG_ERROR,
 			"[ATSG] Usage: ATSG=<R/W>,<PORT>,<DATA>,<DIR>,<PULL>");
 		error_no = 2;
 		goto exit;
-	}	
+	}
 
 	port = argv[2][1];
 	num = strtoul(&argv[2][3], NULL, 0);
 	port -= 'A';
 	pin = (port << 4 | num);
 	AT_DBG_MSG(AT_FLAG_GPIO, AT_DBG_ALWAYS, "PORT: %s[%d]", argv[2], pin);
-	
+
 	if(gpio_set(pin) == 0xff)
 	{
 		AT_DBG_MSG(AT_FLAG_GPIO, AT_DBG_ERROR, "[ATSG]: Invalid Pin Name [%d]", pin);
@@ -1966,7 +1406,7 @@ void fATSG(void *arg)
 		gpio_dir(&gpio_ctrl, PIN_OUTPUT);
 		gpio_write(&gpio_ctrl, val);
 	}
-	
+
 exit:
 	if(error_no){
 		at_printf("\r\n[ATSG] ERROR:%d", error_no);
@@ -2007,7 +1447,7 @@ void fATSL(void *arg)
 				lock_id = strtoul(argv[2], NULL, 16);
 				pmu_acquire_wakelock(lock_id);
 			}
-			AT_DBG_MSG(AT_FLAG_OS, AT_DBG_ALWAYS, "[ATSL] wakelock:0x%08x", pmu_get_wakelock_status());			
+			AT_DBG_MSG(AT_FLAG_OS, AT_DBG_ALWAYS, "[ATSL] wakelock:0x%08x", pmu_get_wakelock_status());
 			break;
 		}
 
@@ -2102,17 +1542,7 @@ void fATSF(void *arg)
 }
 #endif
 
-#ifndef CONFIG_TOUCH_AA_COMMAND
-#define CONFIG_TOUCH_AA_COMMAND 0
-#endif
-#if CONFIG_TOUCH_AA_COMMAND
-extern void carbox_touch_aa_command(void *arg);
-#endif
-
 log_item_t at_sys_items[] = {
-#if CONFIG_TOUCH_AA_COMMAND
-	{"aa", carbox_touch_aa_command,},
-#endif
 #if CONFIG_MMF_AUDIO_DEBUG
 	{"ATAD", fATAD,},
 	{"ATAS", fATAS,},
@@ -2138,7 +1568,7 @@ log_item_t at_sys_items[] = {
 	{"ATSA", fATSA,},	// MP ADC test
 	{"ATSG", fATSG,},	// MP GPIO test
 	{"ATSP", fATSP,},	// MP Power related test
-	{"ATSB", fATSB,},	// OTU PIN setup			
+	{"ATSB", fATSB,},	// OTU PIN setup
 #endif
 #if (configGENERATE_RUN_TIME_STATS == 1)
 	{"ATSS", fATSS,},	// Show CPU stats
@@ -2180,7 +1610,7 @@ log_item_t at_sys_items[] = {
 	{"ATSL", fATSL,},	 // wakelock test
 #endif
 #endif
-// Unlock the flash status 
+// Unlock the flash status
 #if defined(CONFIG_PLATFORM_8195BHP)
         {"ATSF", fATSF,},	 // wakelock test
 #endif
