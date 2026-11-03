@@ -57,3 +57,24 @@ rea decompile h264_encoder.o h264_encode --provider ghidra --json
 反組譯、decompiler pseudocode、SDK source 與實際 link 互相對照；pseudocode 仍可能有型別推斷誤差。未執行板上 runtime trace，不能據此宣稱 USB 枚舉、傳輸完成時序、SPS/PPS 解碼或 FHD 30 fps 已實測通過。
 
 程式審查另外發現 producer 超過一個幀週期時會多睡一幀，已先用失敗測試重現，再修正排程並通過回歸測試。所有上板檢查步驟見 README。
+
+## 2026-11-03：實機 USB 初始化 UsageFault
+
+使用者回報 720p 韌體 SHA-256 `75f186c26bfad39d55e3e7fdf1f09f9af6c46f03ad70e3b7408016772c9bc30a` 的開機 log：encoder 初始化之後，在 `[stage] USB init/wait` 發生 `CFSR=0x01000000`（unaligned UsageFault）。
+
+與該版 ELF 的對照：
+
+- PC `0x00018238`：`uxListRemove()`，指令 `str r1, [r2, #4]`。
+- LR `0x0001a17f`：`prvProcessReceivedCommands()` 的 timer list 移除路徑。
+- Timer 指標 `0x704e87c0`，list item 為 `0x704e87c4`。
+- `R1=0x656d6954`、`R2=0x55550072`，分別吻合 `"Wake Up Timer"` 字串 +8 的 `"Time"` 和 +12 的 `"r\0"`；timer daemon 把字串當成 Timer_t。
+- `osdep_service` 位址 `0x9be1d408`；`rtw_timerCreate` 的 wrapper 從 table `+0x120` 讀取函式指標。
+- 錯誤映像 table `+0x120` 是 `0x9be08a85`，即 `_freertos_timerChangePeriod`；正確的 `_freertos_timerCreate` 是 `0x9be08a59`。
+
+根因是 `freertos_service.c` 使用 positional initializer，卻漏掉 `osdep_service_ops` 中四個 task 欄位：set_priority、get_priority、suspend、resume。timerCreate 因而直接派送到 ChangePeriod，把傳入的 timer 名稱排進 FreeRTOS timer command queue。這同時解釋函式呼叫鏈與實機暫存器值。
+
+REA 完整修正前 relocation evidence：[os-service-before-relocations.json](evidence/os-service-before-relocations.json)，ID `ev_ffc99e50afbb8f34b9991416002218f87091ada16d416bda4fdbc3ca608888f7`。其 `.rodata.osdep_service` 表顯示 Create 被放在 `+0x110`，ChangePeriod 被放在 `+0x120`。實際 ELF 位址與 crash 對照另由本機 objdump／addr2line 取得。
+
+修正：整張表使用具名欄位初始化，四個未實作的 optional task 方法明確設為 NULL；不更動 struct ABI 或原廠 `.a`。為此檔加入 `-Werror=incompatible-pointer-types`，並把 random-bytes callback 的 length 型別改為介面宣告的 `u32`（ARM32 上仍為 32 bits）。
+
+回歸檢查直接讀取最終 ELF 的函式指標，驗證 12 個 timer、thread、wakelock 與 scheduler callback，以及四個空 task 欄位。舊映像測試失敗，修正映像測試通過。新版 boot log 標示 `diag=2`；上板通過 USB 初始化與實際 UVC 出流仍待使用者重新燒錄確認。

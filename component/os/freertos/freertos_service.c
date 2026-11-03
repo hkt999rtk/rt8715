@@ -626,7 +626,7 @@ static int _freertos_arc4random(void)
 #endif
 }
 
-static int _freertos_get_random_bytes(void *buf, size_t len)
+static int _freertos_get_random_bytes(void *buf, u32 len)
 {
 #if 1 //becuase of 4-byte align, we use the follow code style.
 	unsigned int ranbuf;
@@ -891,95 +891,96 @@ u8 _freertos_get_scheduler_state(void)
 }
 
 
+/* Use named slots: the task operations added to osdep_service_ops must not
+ * shift timer callbacks. The former positional table dispatched timerCreate
+ * to timerChangePeriod and queued a timer name as a FreeRTOS handle. */
 const struct osdep_service_ops osdep_service = {
-	_freertos_malloc,			//rtw_vmalloc
-	_freertos_zmalloc,			//rtw_zvmalloc
-	_freertos_mfree,			//rtw_vmfree
-	_freertos_malloc,			//rtw_malloc
-	_freertos_zmalloc,			//rtw_zmalloc
-	_freertos_mfree,			//rtw_mfree
-	_freertos_memcpy,			//rtw_memcpy
-	_freertos_memcmp,			//rtw_memcmp
-	_freertos_memset,			//rtw_memset
-	_freertos_init_sema,		//rtw_init_sema
-	_freertos_free_sema,		//rtw_free_sema
-	_freertos_up_sema,			//rtw_up_sema
-	_freertos_up_sema_from_isr,	//rtw_up_sema_from_isr
-	_freertos_down_sema,		//rtw_down_sema
-	_freertos_mutex_init,		//rtw_mutex_init
-	_freertos_mutex_free,		//rtw_mutex_free
-	_freertos_mutex_get,		//rtw_mutex_get
-	_freertos_mutex_get_timeout,//rtw_mutex_get_timeout
-	_freertos_mutex_put,		//rtw_mutex_put
-	_freertos_enter_critical,	//rtw_enter_critical
-	_freertos_exit_critical,	//rtw_exit_critical
-	_freertos_enter_critical_from_isr,	//rtw_enter_critical_from_isr
-	_freertos_exit_critical_from_isr,	//rtw_exit_critical_from_isr
-	NULL,		//rtw_enter_critical_bh
-	NULL,		//rtw_exit_critical_bh
-	_freertos_enter_critical_mutex,	//rtw_enter_critical_mutex
-	_freertos_exit_critical_mutex,	//rtw_exit_critical_mutex
-	_freertos_cpu_lock,
-	_freertos_cpu_unlock,
-	_freertos_spinlock_init,		//rtw_spinlock_init
-	_freertos_spinlock_free,		//rtw_spinlock_free
-	_freertos_spinlock,				//rtw_spin_lock
-	_freertos_spinunlock,			//rtw_spin_unlock
-	_freertos_spinlock_irqsave,		//rtw_spinlock_irqsave
-	_freertos_spinunlock_irqsave,	//rtw_spinunlock_irqsave
-	_freertos_init_xqueue,			//rtw_init_xqueue
-	_freertos_push_to_xqueue,		//rtw_push_to_xqueue
-	_freertos_pop_from_xqueue,		//rtw_pop_from_xqueue
-	_freertos_peek_from_xqueue,		//rtw_peek_from_xqueue
-	_freertos_deinit_xqueue,		//rtw_deinit_xqueue
-	_freertos_get_current_time,		//rtw_get_current_time
-	_freertos_systime_to_ms,		//rtw_systime_to_ms
-	_freertos_systime_to_sec,		//rtw_systime_to_sec
-	_freertos_ms_to_systime,		//rtw_ms_to_systime
-	_freertos_sec_to_systime,		//rtw_sec_to_systime
-	_freertos_msleep_os,	//rtw_msleep_os
-	_freertos_usleep_os,	//rtw_usleep_os
-	_freertos_mdelay_os,	//rtw_mdelay_os
-	_freertos_udelay_os,	//rtw_udelay_os
-	_freertos_yield_os,		//rtw_yield_os
-
-	_freertos_ATOMIC_SET,	//ATOMIC_SET
-	_freertos_ATOMIC_READ,	//ATOMIC_READ
-	_freertos_ATOMIC_ADD,	//ATOMIC_ADD
-	_freertos_ATOMIC_SUB,	//ATOMIC_SUB
-	_freertos_ATOMIC_INC,	//ATOMIC_INC
-	_freertos_ATOMIC_DEC,	//ATOMIC_DEC
-	_freertos_ATOMIC_ADD_RETURN,	//ATOMIC_ADD_RETURN
-	_freertos_ATOMIC_SUB_RETURN,	//ATOMIC_SUB_RETURN
-	_freertos_ATOMIC_INC_RETURN,	//ATOMIC_INC_RETURN
-	_freertos_ATOMIC_DEC_RETURN,	//ATOMIC_DEC_RETURN
-
-	_freertos_modular64,			//rtw_modular64
-	_freertos_get_random_bytes,		//rtw_get_random_bytes
-	_freertos_GetFreeHeapSize,		//rtw_getFreeHeapSize
-
-	_freertos_create_task,			//rtw_create_task
-	_freertos_delete_task,			//rtw_delete_task
-	NULL,							//rtw_wakeup_task
-
-	_freertos_thread_enter,			//rtw_thread_enter
-	_freertos_thread_exit,			//rtw_thread_exit
-
-	_freertos_timerCreate,			//rtw_timerCreate,
-	_freertos_timerDelete,			//rtw_timerDelete,
-	_freertos_timerIsTimerActive,	//rtw_timerIsTimerActive,
-	_freertos_timerStop,			//rtw_timerStop,
-	_freertos_timerChangePeriod,	//rtw_timerChangePeriod
-	_freertos_timerGetID,			//rtw_timerGetID
-	_freertos_timerStart,			//rtw_timerStart
-	_freertos_timerStartFromISR,	//rtw_timerStartFromISR
-	_freertos_timerStopFromISR,		//rtw_timerStopFromISR
-	_freertos_timerResetFromISR,	//rtw_timerResetFromISR
-	_freertos_timerChangePeriodFromISR,	//rtw_timerChangePeriodFromISR
-	_freertos_timerReset,			//rtw_timerReset
-
-	_freertos_acquire_wakelock,		//rtw_acquire_wakelock
-	_freertos_release_wakelock,		//rtw_release_wakelock
-	_freertos_wakelock_timeout,		//rtw_wakelock_timeout
-	_freertos_get_scheduler_state	//rtw_get_scheduler_state
+	.rtw_vmalloc = _freertos_malloc,
+	.rtw_zvmalloc = _freertos_zmalloc,
+	.rtw_vmfree = _freertos_mfree,
+	.rtw_malloc = _freertos_malloc,
+	.rtw_zmalloc = _freertos_zmalloc,
+	.rtw_mfree = _freertos_mfree,
+	.rtw_memcpy = _freertos_memcpy,
+	.rtw_memcmp = _freertos_memcmp,
+	.rtw_memset = _freertos_memset,
+	.rtw_init_sema = _freertos_init_sema,
+	.rtw_free_sema = _freertos_free_sema,
+	.rtw_up_sema = _freertos_up_sema,
+	.rtw_up_sema_from_isr = _freertos_up_sema_from_isr,
+	.rtw_down_timeout_sema = _freertos_down_sema,
+	.rtw_mutex_init = _freertos_mutex_init,
+	.rtw_mutex_free = _freertos_mutex_free,
+	.rtw_mutex_get = _freertos_mutex_get,
+	.rtw_mutex_get_timeout = _freertos_mutex_get_timeout,
+	.rtw_mutex_put = _freertos_mutex_put,
+	.rtw_enter_critical = _freertos_enter_critical,
+	.rtw_exit_critical = _freertos_exit_critical,
+	.rtw_enter_critical_from_isr = _freertos_enter_critical_from_isr,
+	.rtw_exit_critical_from_isr = _freertos_exit_critical_from_isr,
+	.rtw_enter_critical_bh = NULL,
+	.rtw_exit_critical_bh = NULL,
+	.rtw_enter_critical_mutex = _freertos_enter_critical_mutex,
+	.rtw_exit_critical_mutex = _freertos_exit_critical_mutex,
+	.rtw_cpu_lock = _freertos_cpu_lock,
+	.rtw_cpu_unlock = _freertos_cpu_unlock,
+	.rtw_spinlock_init = _freertos_spinlock_init,
+	.rtw_spinlock_free = _freertos_spinlock_free,
+	.rtw_spin_lock = _freertos_spinlock,
+	.rtw_spin_unlock = _freertos_spinunlock,
+	.rtw_spinlock_irqsave = _freertos_spinlock_irqsave,
+	.rtw_spinunlock_irqsave = _freertos_spinunlock_irqsave,
+	.rtw_init_xqueue = _freertos_init_xqueue,
+	.rtw_push_to_xqueue = _freertos_push_to_xqueue,
+	.rtw_pop_from_xqueue = _freertos_pop_from_xqueue,
+	.rtw_peek_from_xqueue = _freertos_peek_from_xqueue,
+	.rtw_deinit_xqueue = _freertos_deinit_xqueue,
+	.rtw_get_current_time = _freertos_get_current_time,
+	.rtw_systime_to_ms = _freertos_systime_to_ms,
+	.rtw_systime_to_sec = _freertos_systime_to_sec,
+	.rtw_ms_to_systime = _freertos_ms_to_systime,
+	.rtw_sec_to_systime = _freertos_sec_to_systime,
+	.rtw_msleep_os = _freertos_msleep_os,
+	.rtw_usleep_os = _freertos_usleep_os,
+	.rtw_mdelay_os = _freertos_mdelay_os,
+	.rtw_udelay_os = _freertos_udelay_os,
+	.rtw_yield_os = _freertos_yield_os,
+	.ATOMIC_SET = _freertos_ATOMIC_SET,
+	.ATOMIC_READ = _freertos_ATOMIC_READ,
+	.ATOMIC_ADD = _freertos_ATOMIC_ADD,
+	.ATOMIC_SUB = _freertos_ATOMIC_SUB,
+	.ATOMIC_INC = _freertos_ATOMIC_INC,
+	.ATOMIC_DEC = _freertos_ATOMIC_DEC,
+	.ATOMIC_ADD_RETURN = _freertos_ATOMIC_ADD_RETURN,
+	.ATOMIC_SUB_RETURN = _freertos_ATOMIC_SUB_RETURN,
+	.ATOMIC_INC_RETURN = _freertos_ATOMIC_INC_RETURN,
+	.ATOMIC_DEC_RETURN = _freertos_ATOMIC_DEC_RETURN,
+	.rtw_modular64 = _freertos_modular64,
+	.rtw_get_random_bytes = _freertos_get_random_bytes,
+	.rtw_getFreeHeapSize = _freertos_GetFreeHeapSize,
+	.rtw_create_task = _freertos_create_task,
+	.rtw_delete_task = _freertos_delete_task,
+	.rtw_wakeup_task = NULL,
+	.rtw_set_priority_task = NULL,
+	.rtw_get_priority_task = NULL,
+	.rtw_suspend_task = NULL,
+	.rtw_resume_task = NULL,
+	.rtw_thread_enter = _freertos_thread_enter,
+	.rtw_thread_exit = _freertos_thread_exit,
+	.rtw_timerCreate = _freertos_timerCreate,
+	.rtw_timerDelete = _freertos_timerDelete,
+	.rtw_timerIsTimerActive = _freertos_timerIsTimerActive,
+	.rtw_timerStop = _freertos_timerStop,
+	.rtw_timerChangePeriod = _freertos_timerChangePeriod,
+	.rtw_timerGetID = _freertos_timerGetID,
+	.rtw_timerStart = _freertos_timerStart,
+	.rtw_timerStartFromISR = _freertos_timerStartFromISR,
+	.rtw_timerStopFromISR = _freertos_timerStopFromISR,
+	.rtw_timerResetFromISR = _freertos_timerResetFromISR,
+	.rtw_timerChangePeriodFromISR = _freertos_timerChangePeriodFromISR,
+	.rtw_timerReset = _freertos_timerReset,
+	.rtw_acquire_wakelock = _freertos_acquire_wakelock,
+	.rtw_release_wakelock = _freertos_release_wakelock,
+	.rtw_wakelock_timeout = _freertos_wakelock_timeout,
+	.rtw_get_scheduler_state = _freertos_get_scheduler_state,
 };

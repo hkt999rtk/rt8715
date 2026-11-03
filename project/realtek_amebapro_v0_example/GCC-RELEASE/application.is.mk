@@ -872,6 +872,9 @@ $(SRC_O): %.o : %.c
 .PHONY: force_is_cmd_shell
 ../../../component/soc/realtek/8195b/app/shell/cmd_shell.o: force_is_cmd_shell
 
+# A shifted OS callback table can link but crash the USB timer daemon.
+../../../component/os/freertos/freertos_service.o: CFLAGS += -Werror=incompatible-pointer-types
+
 $(SRAM_O): %.o : %.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 	$(OBJCOPY) --prefix-alloc-sections .sram $@

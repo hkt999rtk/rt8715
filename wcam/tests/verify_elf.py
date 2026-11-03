@@ -84,3 +84,24 @@ body = read(address & ~1, size)
 wrapped = symbols["__wrap_usb_composite_probe"][0] | 1
 assert struct.pack("<I", wrapped) in body, "UVC init bypasses callback wrapper"
 print("ELF: native encoder/USB present, wrapper active, no sensor pipeline/customer symbols")
+
+# ARM32 OS service ABI consumed by rtw_* wrappers. A positional initializer
+# previously omitted four task slots: timerCreate dispatched ChangePeriod with
+# a name string as the timer handle, crashing the timer daemon in uxListRemove.
+table, _ = symbols["osdep_service"]
+timer_services = (
+    "Create", "Delete", "IsTimerActive", "Stop", "ChangePeriod", "GetID",
+    "Start", "StartFromISR", "StopFromISR", "ResetFromISR", "ChangePeriodFromISR", "Reset",
+)
+for i, service in enumerate(timer_services):
+    name = "_freertos_timer" + service
+    actual, = struct.unpack("<I", read(table + 0x120 + i * 4, 4))
+    expected = symbols[name][0] | 1
+    assert actual == expected, f"OS timer{service}: dispatches {actual:#x}, expected {name} {expected:#x}"
+for offset, name in ((0x118, "_freertos_thread_enter"), (0x11c, "_freertos_thread_exit"),
+                     (0x150, "_freertos_acquire_wakelock"), (0x154, "_freertos_release_wakelock"),
+                     (0x158, "_freertos_wakelock_timeout"), (0x15c, "_freertos_get_scheduler_state")):
+    actual, = struct.unpack("<I", read(table + offset, 4))
+    assert actual == symbols[name][0] | 1, f"OS service mismatch: {name}"
+assert read(table + 0x108, 16) == bytes(16), "Unsupported task slots must remain NULL"
+print("ELF: OS service timer/thread/wakelock/scheduler callbacks match the ARM ABI")

@@ -269,7 +269,7 @@ static void wcam_task(void *arg)
     int result = 0, first_frame = 1;
     (void)arg;
     wcam_stats_reset(&stats, xTaskGetTickCount());
-    printf("[wcam][boot] diag=1 build=%s %s tick_hz=%u heap=%lu/%lu\r\n",
+    printf("[wcam][boot] diag=2 build=%s %s tick_hz=%u heap=%lu/%lu\r\n",
            __DATE__, __TIME__, (unsigned)configTICK_RATE_HZ,
            (unsigned long)xPortGetFreeHeapSizeExt(0), (unsigned long)xPortGetFreeHeapSizeExt(1));
     printf("[wcam][config] NV12=%ux%u fps=%u bps=%u gop=%u baseline level=40 raw=%u out=%u payload=%u timeout_ms=2000\r\n",

@@ -23,8 +23,8 @@ Counter 計算的是產生的影像；若主機在編碼途中停止串流，該
 [flash_is.bin](flash_is.bin) 是包含 SDK bootloader 與 IS 韌體的完整 flash 映像。
 
 - 大小：1,987,584 bytes
-- SHA-256：`75f186c26bfad39d55e3e7fdf1f09f9af6c46f03ad70e3b7408016772c9bc30a`
-- 建置時間：2026-11-03 21:40:07 +0800
+- SHA-256：`58d8b9e892a351469aa839b92f1f9114c90f997f82c741158bff991d03414968`
+- 建置時間：2026-11-03 22:32:18 +0800
 - 原先的最小 SDK 範例保留在 git commit `021e06d`。
 
 新增的 `lib_usbd.a` 取自本機原廠 SDK 備份；來源、雜湊與逆向證據見 [REA.md](REA.md)。
@@ -40,7 +40,7 @@ make -j1 -B ram_lp CROSS_COMPILE="$PREFIX"
 make -j8 ram_is CROSS_COMPILE="$PREFIX"
 ```
 
-產物為 `application_is/flash_is.bin`。完整 clean build 已成功，程式審查後的排程、USB alternate setting 修正、UART 診斷 log 與 720p 解析度設定亦完成 IS 重建。SDK 既有編譯警告仍存在。
+產物為 `application_is/flash_is.bin`。完整 clean build 已成功，程式審查後的排程、USB alternate setting 修正、UART 診斷 log 、720p 解析度設定與 OS timer callback 表修正亦完成 IS 重建。SDK 既有編譯警告仍存在。
 
 若使用需要 `gnu_utility/vfs.py` 的 SDK 打包設定，重建前先確認 `python3 -c 'from pyfatfs.PyFat import PyFat; import littlefs'`；缺少時依根目錄 AGENTS.md 安裝至暫存目錄並設定 PYTHONPATH。
 
@@ -62,10 +62,13 @@ python3 wcam/tests/verify_elf.py project/realtek_amebapro_v0_example/GCC-RELEASE
 - 診斷統計：不同 tick 頻率／回捲、completion 幀率／碼率、NAL 邊界與重複 slice、事件 buffer 溢位。
 - 實際連結 ELF：FS/HS 描述符皆為 H.264 720p／30 fps，callback wrapper 有效，沒有 sensor pipeline 與客戶符號。
 - 連結 map：僅 SDK／toolchain archives，沒有客戶 `.a`。
+- OS 函式表：實際 ELF 中所有 timer／thread／wakelock／scheduler callback 正確；舊版會在 USB 初始化誤用 timer 名稱為 handle 的錯位已修正。
 
 ## UART 診斷 log
 
-此版本開機印出 `diag=1`、編譯日期／時間、影像參數與 buffer 大小。`[stage]` 記錄 pattern、video clocks、encoder hardware、encoder init、USB init/wait、UVC init 與首次 encode；如果卡住，請保留最後一個階段。
+UART 設為 **115200 baud、8N1、Flow control=None**；bootloader 與應用程式相同。
+
+此版本開機印出 `diag=2`、編譯日期／時間、影像參數與 buffer 大小。`[stage]` 記錄 pattern、video clocks、encoder hardware、encoder init、USB init/wait、UVC init 與首次 encode；如果卡住，請保留最後一個階段。
 
 串流中約每秒輸出 `[stat]`、`[perf]` 各一行；未串流時約每 5 秒輸出一次。範例數字僅供欄位解讀，並非實機測量：
 
@@ -101,7 +104,7 @@ USB callbacks 不做 UART 輸出，只存入固定大小的事件 buffer。正�
 
 ## 上板驗證
 
-尚未燒錄實機；USB 列舉、硬體編碼、可解碼的 SPS/PPS、實際 GOP 與穩定 30 fps 都待確認。
+使用者已上板回報舊版在 USB 初始化發生 UsageFault，根因與修正見 [REA.md](REA.md#2026-11-03實機-usb-初始化-usagefault)。本版 `diag=2` 修正 OS callback 表錯位；仍需重新燒錄確認 USB 初始化、列舉、硬體出流／解碼、實際 GOP 與穩定 30 fps。
 
 1. 燒錄本目錄的 `flash_is.bin`，接上 USB device port 至主機，再重新開機；保留 UART log。
 2. Linux 主機執行 `v4l2-ctl --list-devices` 找出節點，再用 `v4l2-ctl -d /dev/videoX --list-formats-ext` 確認 H264／1280×720／30 fps。以下請替換 `/dev/videoX`。
