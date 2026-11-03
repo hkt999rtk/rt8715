@@ -246,6 +246,7 @@ SRC_C += ../../../component/common/media/mmfv2/module_rtp.c
 SRC_C += ../../../component/common/media/mmfv2/module_rtsp2.c
 SRC_C += ../src/wcam/wcam_pattern.c
 SRC_C += ../src/wcam/wcam_uvc_control.c
+SRC_C += ../src/wcam/wcam_stats.c
 SRC_C += ../src/wcam/wcam_uvc_descriptors.c
 SRC_C += ../src/wcam/wcam_uvc.c
 SRC_C += ../../../component/common/media/mmfv2/module_httpfs.c
