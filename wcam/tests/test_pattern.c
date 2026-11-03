@@ -8,7 +8,7 @@
 /* Catch wrong chroma order, plane offset, frame bounds and stale digits. */
 int main(void)
 {
-    const size_t size = 1920u * 1080u * 3u / 2u;
+    const size_t size = 1280u * 720u * 3u / 2u;
     uint8_t *allocation = malloc(size + 64);
     uint8_t *reference = malloc(size);
     uint8_t *frame = allocation + 32;
@@ -21,16 +21,16 @@ int main(void)
     memset(allocation, 0xa5, size + 64);
     wcam_pattern_init(frame);
     for (unsigned bar = 0; bar < 8; ++bar) {
-        unsigned x = bar * 240 + 120;
+        unsigned x = bar * 160 + 80;
         assert(frame[x] == y[bar]);
-        assert(frame[1079u * 1920 + x] == y[bar]);
-        assert(frame[1920u * 1080 + x] == uv[bar][0]);
-        assert(frame[1920u * 1080 + x + 1] == uv[bar][1]);
+        assert(frame[719u * 1280 + x] == y[bar]);
+        assert(frame[1280u * 720 + x] == uv[bar][0]);
+        assert(frame[1280u * 720 + x + 1] == uv[bar][1]);
     }
     memcpy(reference, frame, size);
     wcam_pattern_counter(frame, 0);
     assert(memcmp(reference, frame, size) != 0);
-    assert(memcmp(reference, frame, 400u * 1920) == 0);
+    assert(memcmp(reference, frame, 300u * 1280) == 0);
     memcpy(reference, frame, size);
     wcam_pattern_counter(frame, 1);
     assert(memcmp(reference, frame, size) != 0);

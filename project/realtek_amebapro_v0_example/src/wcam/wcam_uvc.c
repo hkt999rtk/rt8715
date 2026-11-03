@@ -64,9 +64,10 @@ static void trace_print(unsigned budget)
                    (unsigned long)event.b, (unsigned long)event.c, (unsigned long)event.d);
             break;
         case TRACE_SET:
-            printf("[wcam][ctrl] set selector=%lu fmt=%lu frame=%lu interval=%lu len=%lu -> fixed FHD/30\r\n",
+            printf("[wcam][ctrl] set selector=%lu fmt=%lu frame=%lu interval=%lu len=%lu -> fixed %ux%u/%u\r\n",
                    (unsigned long)event.a, (unsigned long)(event.b >> 8),
-                   (unsigned long)(event.b & 255), (unsigned long)event.c, (unsigned long)event.d);
+                   (unsigned long)(event.b & 255), (unsigned long)event.c, (unsigned long)event.d,
+                   WCAM_WIDTH, WCAM_HEIGHT, WCAM_FPS);
             break;
         case TRACE_STALL:
             printf("[wcam][ctrl] STALL interface=%lu entity=%lu selector=%lu\r\n",
@@ -338,7 +339,8 @@ static void wcam_task(void *arg)
     if (usb->func.config && usb->func.config->cdev)
         printf("[wcam][usb] speed_enum=%d (1=low,2=full,3=high)\r\n",
                usb->func.config->cdev->gadget->speed);
-    printf("[wcam] ready: NV12 color bars -> H264 UVC 1920x1080 30 fps, counter=0\r\n");
+    printf("[wcam] ready: NV12 color bars -> H264 UVC %ux%u %u fps, counter=0\r\n",
+           WCAM_WIDTH, WCAM_HEIGHT, WCAM_FPS);
     for (;;) {
         TickType_t delay;
         uint32_t enc_start, enc_ticks, usb_start, usb_ticks;

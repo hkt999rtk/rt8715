@@ -65,10 +65,10 @@ for name in ("usbd_uvc_descriptors_FS", "usbd_uvc_descriptors_HS"):
     assert fmt[5:21] == b"H264\x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71"
     assert fmt[27] == 1
     assert frame[0] == 30 and frame[3] == 1
-    assert struct.unpack_from("<HH", frame, 5) == (1920, 1080)
+    assert struct.unpack_from("<HH", frame, 5) == (1280, 720)
     assert struct.unpack_from("<I", frame, 17)[0] == 333333
     assert frame[21] == 1 and struct.unpack_from("<I", frame, 26)[0] == 333333
-    print(f"{name}: H264 only, 1920x1080, 30 fps")
+    print(f"{name}: H264 only, 1280x720, 30 fps")
 
 for required in ("wcam_start", "h264_encode", "usbd_uvc_init", "uvc_events_process",
                  "__wrap_usb_composite_probe"):

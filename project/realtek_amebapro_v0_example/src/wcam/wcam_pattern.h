@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 
-#define WCAM_WIDTH 1920u
-#define WCAM_HEIGHT 1080u
+#define WCAM_WIDTH 1280u
+#define WCAM_HEIGHT 720u
 #define WCAM_Y_SIZE (WCAM_WIDTH * WCAM_HEIGHT)
 #define WCAM_NV12_SIZE (WCAM_Y_SIZE * 3u / 2u)
 
