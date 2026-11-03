@@ -139,6 +139,8 @@ ffmpeg -v error -i wcam.h264 -f null -
 
 Windows 內建預覽仍啟動失敗。接下來以 FFmpeg DirectShow 選取 H.264 並交給 FFplay 即時解碼；此命令待使用者在 Windows 確認：
 
+可下載並雙擊 [preview-windows.cmd](preview-windows.cmd)。它會檢查 FFmpeg／FFplay 是否可執行，並透過 cmd 的二進位管線啟動預覽。此腳本尚待 Windows 實機驗證。
+
 在 **cmd.exe** 執行（避免舊版 Windows PowerShell 的文字管線改寫二進位資料）；先關閉其他相機程式：
 
 ```bat
