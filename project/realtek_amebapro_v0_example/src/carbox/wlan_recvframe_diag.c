@@ -1,14 +1,26 @@
 /* Observe each vendor RX frame pool without printing in the RX critical section. */
 #include <stdint.h>
+#include "nav_tx_trace.h"
+#include "screen_tx_poll_wait.h"
 #include <stdio.h>
 #include <string.h>
 
 #include "FreeRTOS.h"
 #include "task.h"
 #include "rx_handover_diag.h"
+#include "audio_diag_log.h"
 
+#if CONFIG_AUDIO_MUSIC_DIAG
+extern void carbox_music_lifecycle_report(void);
+extern void carbox_music_progress_report(void);
+extern void carbox_audio_music_output_report(void);
+#endif
 extern void printf_lock_init(void);
 #define WLAN_RECVFRAME_REPORT_MS 2000U
+
+#if CONFIG_AUDIO_NAV_DIAG
+extern void carbox_audio_nav_report(void);
+#endif
 
 #if CONFIG_AUDIO_STREAM_DIAG
 extern void carbox_audio_pcm_tx_report(void);
@@ -158,13 +170,28 @@ static void wlan_recvframe_diag_task(void *argument)
 	/* One initialization site, in task context after scheduler startup. Without
 	 * this, the nonblocking RX reporter always sees a NULL mutex and skips. */
 	printf_lock_init();
+#if CONFIG_AUDIO_MUSIC_DIAG
+	carbox_audio_diag_log("[MUSIC_DIAG] enabled=1 lifecycle=1 progress=1 output=1 period_ms=5000 reporter=wlan_rx_diag\n");
+#endif
 
-#if CONFIG_RX_HANDOVER_DIAG || CONFIG_AUDIO_STREAM_DIAG
+#if CONFIG_RX_HANDOVER_DIAG || CONFIG_AUDIO_STREAM_DIAG || CONFIG_AUDIO_NAV_DIAG || CONFIG_AUDIO_MUSIC_DIAG || CONFIG_SCREEN_TX_BATCH_DIAG
 	for (;;) {
 #if CONFIG_RX_HANDOVER_DIAG
 		uint32_t i;
 #endif
 		vTaskDelay(pdMS_TO_TICKS(WLAN_RECVFRAME_REPORT_MS));
+#if CONFIG_SCREEN_TX_BATCH_DIAG
+		carbox_screen_write_report();
+#endif
+#if CONFIG_AUDIO_MUSIC_DIAG
+		carbox_music_lifecycle_report();
+		carbox_music_progress_report();
+		carbox_audio_music_output_report();
+		navtx_report();
+#endif
+#if CONFIG_AUDIO_NAV_DIAG
+		carbox_audio_nav_report();
+#endif
 #if CONFIG_AUDIO_STREAM_DIAG
 		carbox_audio_pcm_tx_report();
 #endif

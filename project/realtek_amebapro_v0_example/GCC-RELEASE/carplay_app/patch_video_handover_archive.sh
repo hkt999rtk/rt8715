@@ -21,7 +21,6 @@ screen_tx_poll_wait=${12:-0}
 screen_frame_id_profile=${13:-0}
 script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 screen_wait_patcher=$script_directory/../../src/carbox/tools/patch_screen_wait_relocation.py
-redundant_copy_patcher=$script_directory/../../src/carbox/tools/patch_airplay_redundant_copy.py
 event_response_patcher=$script_directory/../../src/carbox/tools/patch_airplay_event_response.py
 event_readahead_patcher=$script_directory/../../src/carbox/tools/patch_airplay_event_readahead.py
 temporary=$(mktemp -d)
@@ -131,11 +130,10 @@ cp "$input_archive" "$output_archive"
 				$memcpy_option \
 				"$member" "patched.o"
 		fi
-		if [ "$mode" = accessory ] && [ "$member" = AirPlayScreen.o ]; then
-			# The customer normal-frame function copies the complete payload
-			# twice.  Strictly remove only the validated second byte loop from
-			# the derived archive; a changed vendor layout stops the build.
-			python3 "$redundant_copy_patcher" "patched.o"
+		if [ "$member" = AirPlayScreen.o ]; then
+			# Native poll and duplicate-copy removal are customer-owned now.
+			# Reject older/unknown senders rather than silently revive old patches.
+			python3 "$screen_wait_patcher" "patched.o" native-poll
 		fi
 		if [ "$screen_wait" = 1 ] && [ "$member" = AirPlayScreen.o ]; then
 			# Add the new symbol without globally renaming vTaskDelay, then let
@@ -147,28 +145,17 @@ cp "$input_archive" "$output_archive"
 			python3 "$screen_wait_patcher" "patched.o"
 		fi
 		if [ "$screen_tx_poll_wait" = 1 ] && [ "$member" = AirPlayScreen.o ]; then
-			# Redirect only the normal-frame EAGAIN delay; pass sockScreen
-			# instead of the old 10-tick constant to the poll wait helper.
 			"$objcopy_tool" --add-symbol \
-				carbox_screen_tx_poll_wait=0,global \
-				--add-symbol carbox_screen_tcp_write=0,global \
+				carbox_screen_tcp_write=0,global \
 				"patched.o" "patched-with-tx-poll.o"
 			mv "patched-with-tx-poll.o" "patched.o"
-			python3 "$screen_wait_patcher" "patched.o" tx-poll
 			# Enable the tested USB RTO policy before the first write, even
 			# when the diagnostic write wrapper is compiled out.
 			python3 "$screen_wait_patcher" "patched.o" tx-write
 		fi
 		if [ "$screen_frame_id_profile" = 1 ] && [ "$member" = AirPlayScreen.o ]; then
-			# Keep the customer frame sender intact.  Redirect only normal-frame
-			# entry and its EAGAIN print in the derived archive.
-			"$objcopy_tool" \
-				--add-symbol carbox_screen_normal_frame_probe=0,global \
-				--add-symbol carbox_screen_block_note=0,global \
-				"patched.o" "patched-with-frame-id.o"
-			mv "patched-with-frame-id.o" "patched.o"
-			python3 "$screen_wait_patcher" "patched.o" frame-dispatch
-			python3 "$screen_wait_patcher" "patched.o" frame-block
+			echo "mono native poll has no frame poll observer; frame profile unsupported" >&2
+			exit 1
 		elif [ "$screen_tx_poll_wait" = 1 ] && [ "$member" = AirPlayScreen.o ]; then
 			# Silence only the EAGAIN "screen block" print in release builds.
 			# Other sender errors and the partial-write retry loop stay intact.
@@ -179,11 +166,15 @@ cp "$input_archive" "$output_archive"
 		fi
 		if [ "$ack_cache" = 1 ] && [ "$member" = AirPlayEvent.o ]; then
 			# Redirect only DealWithSendHIDReport's no-body response.  Other
-			# AirPlay response builders remain byte-for-byte vendor code.
-			"$objcopy_tool" --add-symbol \
-				carbox_airplay_event_send_fast_response=0,global \
-				"patched.o" "patched-with-ack-cache.o"
-			mv "patched-with-ack-cache.o" "patched.o"
+			# AirPlay response builders remain byte-for-byte vendor code.  An
+			# older release already references the helper as a weak symbol.
+			event_layout=$(python3 "$event_response_patcher" "patched.o" layout)
+			if [ "$event_layout" = native ]; then
+				"$objcopy_tool" --add-symbol \
+					carbox_airplay_event_send_fast_response=0,global \
+					"patched.o" "patched-with-ack-cache.o"
+				mv "patched-with-ack-cache.o" "patched.o"
+			fi
 			python3 "$event_response_patcher" "patched.o" "$ack_timing_prints"
 		fi
 		if [ "$event_readahead_fix" = 1 ] && [ "$member" = AirPlayEvent.o ]; then

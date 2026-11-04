@@ -23,6 +23,7 @@ ACCESSORY_SHA256S = {
     # instructions and the lib_x264_init relocation retain the audited layout.
     "1655c6a094eeb95837c75e724de7444b8d6c368d236354d24786ffbaae4e1e6a",
 }
+MONO_ACCESSORY_SHA256 = "829b9e730ae5e325bb4617248a1274f2de5c2de5423021e0119cac33b5951cdf"
 SECTION_NAME = b".text.CAccessory_CreateUi"
 CALL_OFFSET = 0x502
 OLD = bytes.fromhex("0a9b099a")  # visible height, width: [sp,#40], [sp,#36]
@@ -65,11 +66,20 @@ def main():
     ar, objcopy, source, output = sys.argv[1], sys.argv[2], Path(sys.argv[3]).resolve(), Path(sys.argv[4]).resolve()
     objdump = objcopy.replace("objcopy", "objdump")
     original = subprocess.check_output([ar, "p", str(source), "Accessory.o"])
-    if hashlib.sha256(original).hexdigest() not in ACCESSORY_SHA256S:
+    digest = hashlib.sha256(original).hexdigest()
+    mono = digest == MONO_ACCESSORY_SHA256
+    if digest not in ACCESSORY_SHA256S and not mono:
         raise ValueError("unknown customer Accessory.o; audit before patching")
+    # Mono bundle keeps aligned RGB conversion but moves the callsites and
+    # derives bpp from configuration. x264 still receives visible dimensions.
+    call_offset = 0x4ae if mono else CALL_OFFSET
+    init_offset = 0x4d0 if mono else 0x522
+    convert_offset = 0x4b8 if mono else 0x50a
+    accepted = (bytes.fromhex("089b90fbf1f1079a2846"),) if mono else (OLD, NEW)
+    width = len(accepted[0])
     start, size = section_bytes(original, SECTION_NAME)
-    original_instructions = original[start + CALL_OFFSET:start + CALL_OFFSET + len(OLD)]
-    if size <= CALL_OFFSET + len(OLD) or original_instructions not in (OLD, NEW):
+    original_instructions = original[start + call_offset:start + call_offset + width]
+    if size <= call_offset + width or original_instructions not in accepted:
         raise ValueError("unexpected UI conversion instructions")
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -80,21 +90,21 @@ def main():
         archive = work / "lib_SystemLib.a"
         member.write_bytes(original)
         before_relocs = relocations(objdump, member)
-        expected = "00000522 R_ARM_THM_CALL    lib_x264_init"
-        if before_relocs.count(expected) != 1 or "0000050a R_ARM_THM_CALL    carbox_ui_inplace" not in before_relocs:
+        expected = f"{init_offset:08x} R_ARM_THM_CALL    lib_x264_init"
+        if before_relocs.count(expected) != 1 or f"{convert_offset:08x} R_ARM_THM_CALL    carbox_ui_inplace" not in before_relocs:
             raise ValueError("unexpected UI call relocations")
         subprocess.run([objcopy, "--redefine-sym=lib_x264_init=carbox_ui_x264_init_aligned",
                         str(member), str(renamed)], check=True)
         data = bytearray(renamed.read_bytes())
         renamed_start, renamed_size = section_bytes(data, SECTION_NAME)
-        if renamed_size != size or data[renamed_start + CALL_OFFSET:renamed_start + CALL_OFFSET + len(OLD)] != original_instructions:
+        if renamed_size != size or data[renamed_start + call_offset:renamed_start + call_offset + width] != original_instructions:
             raise ValueError("objcopy changed UI code unexpectedly")
         if original_instructions == OLD:
             data[renamed_start + CALL_OFFSET:renamed_start + CALL_OFFSET + len(OLD)] = NEW
         member.write_bytes(data)
         after_relocs = relocations(objdump, member)
         if after_relocs != before_relocs.replace(
-                expected, "00000522 R_ARM_THM_CALL    carbox_ui_x264_init_aligned"):
+                expected, f"{init_offset:08x} R_ARM_THM_CALL    carbox_ui_x264_init_aligned"):
             raise ValueError("unexpected relocation change")
         shutil.copyfile(source, archive)
         subprocess.run([ar, "r", str(archive), str(member)], check=True)

@@ -43,6 +43,7 @@
 #if LWIP_SOCKET /* don't build if not configured for use in lwipopts.h */
 
 #include "lwip/sockets.h"
+#include "nav_tx_trace.h"
 #include "lwip/priv/sockets_priv.h"
 #include "lwip/api.h"
 #include "lwip/igmp.h"
@@ -2618,6 +2619,8 @@ lwip_sendto(int s, const void *data, size_t size, int flags,
     }
 #endif /* LWIP_IPV4 && LWIP_IPV6 */
 
+    /* Trace only the exact pbuf passed to this datagram send. */
+    navtx_prepared(buf.p);
     /* send the data */
     err = netconn_send(sock->conn, &buf);
   }

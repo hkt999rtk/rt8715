@@ -89,6 +89,7 @@
 #include "usb_hcd_profiler.h"
 #include "ncm/ncm_tx_batch.h"
 #include "car_ack_timestamp.h"
+#include "nav_tx_trace.h"
 #endif
 #endif
 
@@ -1233,6 +1234,9 @@ void rltk_ncm_tx_priority_set_car_flow(u16_t local_port, u16_t peer_port)
 
 struct ncm_tx_async_item {
 	struct pbuf *p;
+#if CONFIG_AUDIO_NAV_TX_TRACE
+	u32_t nav_trace;
+#endif
 #if CONFIG_CAR_ACK_TIMESTAMP
 	u32_t ack_trace;
 #endif
@@ -1258,6 +1262,9 @@ static QueueHandle_t g_ncm_tx_async_queue;
 static TaskHandle_t g_ncm_tx_async_task;
 #if CONFIG_NCM_TX_PIPELINE
 struct ncm_tx_pipeline_slot {
+#if CONFIG_AUDIO_NAV_TX_TRACE
+	u32_t nav_trace[CARBOX_NCM_TX_BATCH_MAX_DATAGRAMS];
+#endif
 	u8_t buffer[NCM_TX_PIPELINE_NTB_CAPACITY] __attribute__((aligned(32)));
 	size_t len;
 	u16_t frames;
@@ -1659,7 +1666,23 @@ static void ncm_tx_usb_worker(void *arg)
 #if CONFIG_CAR_ACK_TIMESTAMP
 		car_ack_timestamp_usb_begin(slot->ack_trace, slot->buffer);
 #endif
+#if CONFIG_AUDIO_NAV_TX_TRACE
+        {
+            unsigned nav_i;
+            for(nav_i=0;nav_i<slot->frames;nav_i++)
+                navtx_mark(slot->nav_trace[nav_i], NT_USB);
+        }
+#endif
 		status = carbox_ncm_tx_send_prebuilt(slot->buffer, slot->len);
+#if CONFIG_AUDIO_NAV_TX_TRACE
+        {
+            unsigned nav_i;
+            for(nav_i=0;nav_i<slot->frames;nav_i++) {
+                navtx_transport_end(slot->nav_trace[nav_i], status);
+                slot->nav_trace[nav_i]=0;
+            }
+        }
+#endif
 #if CONFIG_CAR_ACK_TIMESTAMP
 		car_ack_timestamp_usb_end(slot->ack_trace, status);
 		slot->ack_trace = 0U;
@@ -1727,6 +1750,9 @@ static void ncm_tx_async_worker(void *arg)
 			 * wake this owner without polling.  Stale events are harmless. */
 			if (items[0].timer_event != 0U || items[0].p == NULL)
 				continue;
+#if CONFIG_AUDIO_NAV_TX_TRACE
+			navtx_mark(items[0].nav_trace, NT_DEQUEUE);
+#endif
 
 			/* Drain frames already queued before deciding whether a bounded
 			 * coalescing wait can be hidden behind an active USB transfer. */
@@ -1735,8 +1761,12 @@ static void ncm_tx_async_worker(void *arg)
 			       xQueueReceive(g_ncm_tx_async_queue, &items[item_count],
 					     0) == pdTRUE) {
 				if (items[item_count].timer_event == 0U &&
-				    items[item_count].p != NULL)
-					item_count++;
+                    items[item_count].p != NULL) {
+#if CONFIG_AUDIO_NAV_TX_TRACE
+                    navtx_mark(items[item_count].nav_trace, NT_DEQUEUE);
+#endif
+                    item_count++;
+                }
 			}
 #endif
 
@@ -1798,6 +1828,9 @@ static void ncm_tx_async_worker(void *arg)
 								}
 								continue;
 							}
+#if CONFIG_AUDIO_NAV_TX_TRACE
+                            navtx_mark(next.nav_trace, NT_DEQUEUE);
+#endif
 							items[item_count++] = next;
 						}
 						if (timed_out == 0U) {
@@ -1831,8 +1864,12 @@ static void ncm_tx_async_worker(void *arg)
 
 				if (xQueueReceive(g_ncm_tx_async_queue, &next, 0) != pdTRUE)
 					break;
-				if (next.timer_event == 0U && next.p != NULL)
-					items[item_count++] = next;
+                if (next.timer_event == 0U && next.p != NULL) {
+#if CONFIG_AUDIO_NAV_TX_TRACE
+                    navtx_mark(next.nav_trace, NT_DEQUEUE);
+#endif
+                    items[item_count++] = next;
+                }
 			}
 #endif
 
@@ -1911,6 +1948,10 @@ static void ncm_tx_async_worker(void *arg)
 					}
 				}
 				if (slot != NULL) {
+#if CONFIG_AUDIO_NAV_TX_TRACE
+                    for(item_index=0;item_index<built_frames;item_index++)
+                        navtx_mark(items[send_index+item_index].nav_trace, NT_BUILD);
+#endif
 					build_start_us = hal_read_curtime_us();
 					batch_status = carbox_ncm_tx_build_batch(
 						&batch, slot->buffer, sizeof(slot->buffer),
@@ -1921,6 +1962,12 @@ static void ncm_tx_async_worker(void *arg)
 
 						slot->len = ntb_len;
 						slot->frames = sent_frames;
+#if CONFIG_AUDIO_NAV_TX_TRACE
+                        for(item_index=0;item_index<sent_frames;item_index++) {
+                            slot->nav_trace[item_index]=items[send_index+item_index].nav_trace;
+                            navtx_mark(slot->nav_trace[item_index], NT_READY);
+                        }
+#endif
 						slot->priority = priority_slot;
 #if CONFIG_CAR_ACK_TIMESTAMP
 						slot->ack_trace = items[send_index].ack_trace;
@@ -1984,6 +2031,9 @@ static void ncm_tx_async_worker(void *arg)
 				 * pipelining is disabled.  A one-frame pipeline build is legal,
 				 * so reaching this path there means malformed input. */
 #if CONFIG_NCM_TX_PIPELINE
+#if CONFIG_AUDIO_NAV_TX_TRACE
+                navtx_transport_end(items[send_index].nav_trace, ERR_BUF);
+#endif
 				result = ERR_BUF;
 				send_index++;
 #else
@@ -2132,6 +2182,9 @@ static int ncm_tx_async_enqueue(struct pbuf *p)
 		return 0;
 	}
 	item.p = p;
+#if CONFIG_AUDIO_NAV_TX_TRACE
+	item.nav_trace = navtx_ncm(p, uxQueueMessagesWaiting(g_ncm_tx_async_queue));
+#endif
 #if CONFIG_CAR_ACK_TIMESTAMP
 	item.ack_trace = car_ack_timestamp_ncm(p);
 	if (item.ack_trace != 0U)
@@ -2167,6 +2220,9 @@ static int ncm_tx_async_enqueue(struct pbuf *p)
 	 * extra reference and releases that reference after TX completion. */
 	pbuf_ref(p);
 	if (xQueueSend(g_ncm_tx_async_queue, &item, 0) != pdPASS) {
+#if CONFIG_AUDIO_NAV_TX_TRACE
+		navtx_transport_end(item.nav_trace, ERR_BUF);
+#endif
 #if CONFIG_CAR_ACK_TIMESTAMP
 		car_ack_timestamp_usb_end(item.ack_trace, ERR_BUF);
 #endif

@@ -62,6 +62,9 @@
 #include "lwip_intf.h"
 #endif
 
+#if defined(CONFIG_AUDIO_NAV_DIAG) && CONFIG_AUDIO_NAV_DIAG
+#include "nav_udp_diag.h"
+#endif
 #include <string.h>
 
 /* netconns are polled once per second (e.g. continue write on memory error) */
@@ -352,6 +355,9 @@ recv_udp(void *arg, struct udp_pcb *pcb, struct pbuf *p,
   struct netbuf *buf;
   struct netconn *conn;
   u16_t len;
+#if defined(CONFIG_AUDIO_NAV_DIAG) && CONFIG_AUDIO_NAV_DIAG
+  uint32_t nav_token = carbox_nav_udp_begin(pcb ? pcb->local_port : 0, p);
+#endif
 #if LWIP_SO_RCVBUF
   int recv_avail;
 #endif /* LWIP_SO_RCVBUF */
@@ -362,6 +368,9 @@ recv_udp(void *arg, struct udp_pcb *pcb, struct pbuf *p,
   conn = (struct netconn *)arg;
 
   if (conn == NULL) {
+#if defined(CONFIG_AUDIO_NAV_DIAG) && CONFIG_AUDIO_NAV_DIAG
+    carbox_nav_udp_finish(nav_token, NAV_UDP_NO_CONN);
+#endif
     pbuf_free(p);
     return;
   }
@@ -370,17 +379,29 @@ recv_udp(void *arg, struct udp_pcb *pcb, struct pbuf *p,
 
 #if LWIP_SO_RCVBUF
   SYS_ARCH_GET(conn->recv_avail, recv_avail);
-  if (!NETCONN_MBOX_VALID(conn, &conn->recvmbox) ||
-      ((recv_avail + (int)(p->tot_len)) > conn->recv_bufsize)) {
-#else  /* LWIP_SO_RCVBUF */
-  if (!NETCONN_MBOX_VALID(conn, &conn->recvmbox)) {
 #endif /* LWIP_SO_RCVBUF */
+  if (!NETCONN_MBOX_VALID(conn, &conn->recvmbox)) {
+#if defined(CONFIG_AUDIO_NAV_DIAG) && CONFIG_AUDIO_NAV_DIAG
+    carbox_nav_udp_finish(nav_token, NAV_UDP_INVALID_MBOX);
+#endif
     pbuf_free(p);
     return;
   }
+#if LWIP_SO_RCVBUF
+  if ((recv_avail + (int)(p->tot_len)) > conn->recv_bufsize) {
+#if defined(CONFIG_AUDIO_NAV_DIAG) && CONFIG_AUDIO_NAV_DIAG
+    carbox_nav_udp_finish(nav_token, NAV_UDP_RCVBUF_FULL);
+#endif
+    pbuf_free(p);
+    return;
+  }
+#endif /* LWIP_SO_RCVBUF */
 
   buf = (struct netbuf *)memp_malloc(MEMP_NETBUF);
   if (buf == NULL) {
+#if defined(CONFIG_AUDIO_NAV_DIAG) && CONFIG_AUDIO_NAV_DIAG
+    carbox_nav_udp_finish(nav_token, NAV_UDP_NETBUF_NOMEM);
+#endif
     pbuf_free(p);
     return;
   } else {
@@ -401,9 +422,15 @@ recv_udp(void *arg, struct udp_pcb *pcb, struct pbuf *p,
 
   len = p->tot_len;
   if (sys_mbox_trypost(&conn->recvmbox, buf) != ERR_OK) {
+#if defined(CONFIG_AUDIO_NAV_DIAG) && CONFIG_AUDIO_NAV_DIAG
+    carbox_nav_udp_finish(nav_token, NAV_UDP_MBOX_FULL);
+#endif
     netbuf_delete(buf);
     return;
   } else {
+#if defined(CONFIG_AUDIO_NAV_DIAG) && CONFIG_AUDIO_NAV_DIAG
+    carbox_nav_udp_finish(nav_token, NAV_UDP_ACCEPTED);
+#endif
 #if LWIP_SO_RCVBUF
     SYS_ARCH_INC(conn->recv_avail, len);
 #endif /* LWIP_SO_RCVBUF */

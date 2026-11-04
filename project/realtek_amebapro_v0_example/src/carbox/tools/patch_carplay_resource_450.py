@@ -16,7 +16,12 @@ import tempfile
 
 MEMBER = "AirPlayResponse.o"
 VENDOR_SHA256 = "df2f9654df237f6fd28fe2e36a86eb46ebd2ca0f8a28db7ea0089b80972ac6a4"
+VENDOR_SHA256S = {
+    VENDOR_SHA256,  # Previous release.
+    "c3ab80949a077f9239eac16cf5debf7ca6f783823c168ebf427bbaf8456d509c",  # Mono 20261103.
+}
 FUNCTION = ".text.AirPlayResponse_GetInfoInfoModes"
+FUNCTION_SHA256 = "5953075ff9f0bf91aea3a844f02e1fac62dd7c8d840b36c7f8394e39aae0db77"
 CALLS = (0x1F8, 0x234)
 ORIGINAL = "AirPlayResponse_ParseResource"
 SHIM = "carbox_parse_resource_450_compat"
@@ -49,6 +54,8 @@ def patch_member(path):
     if FUNCTION not in by_name or ".rel" + FUNCTION not in by_name:
         fail("missing GetInfoInfoModes function or relocations")
     function_index, function = by_name[FUNCTION]
+    if hashlib.sha256(section_data(function)).hexdigest() != FUNCTION_SHA256:
+        fail("GetInfoInfoModes code changed; re-audit before patching")
     _, relocations = by_name[".rel" + FUNCTION]
     tables = [(index, section) for index, section in enumerate(sections)
               if section[1] == 2]
@@ -95,7 +102,7 @@ def main(ar, objcopy, source, output):
     source = Path(source)
     output = Path(output)
     vendor = subprocess.check_output([ar, "p", str(source), MEMBER])
-    if hashlib.sha256(vendor).hexdigest() != VENDOR_SHA256:
+    if hashlib.sha256(vendor).hexdigest() not in VENDOR_SHA256S:
         fail(MEMBER + " changed; re-audit before patching")
     with tempfile.TemporaryDirectory(prefix="resource450-", dir=output.parent) as tmp:
         work = Path(tmp)

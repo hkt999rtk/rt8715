@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Redirect only the HID report's empty response to the cached responder."""
 
+import hashlib
 import struct
 import sys
 
@@ -28,8 +29,9 @@ def c_string(blob, offset):
     return blob[offset:end].decode("ascii")
 
 
-def main(path, timing_prints=False):
-    image = bytearray(open(path, "rb").read())
+def main(path, timing_prints=False, inspect_only=False):
+    with open(path, "rb") as stream:
+        image = bytearray(stream.read())
     header = ELF32_HEADER.unpack_from(image, 0)
     if header[0][:6] != b"\x7fELF\x01\x01" or header[1] != 1 or header[2] != 40:
         fail("expected ARM ELF32 little-endian relocatable object")
@@ -61,7 +63,7 @@ def main(path, timing_prints=False):
         fields = ELF32_SYMBOL.unpack_from(image, offset)
         symbol = {"index": index, "offset": offset,
                   "name": c_string(strings, fields[0]), "value": fields[1],
-                  "size": fields[2], "section": fields[5]}
+                  "size": fields[2], "binding": fields[3] >> 4, "section": fields[5]}
         symbols.append(symbol)
         if symbol["name"]:
             by_symbol.setdefault(symbol["name"], []).append(symbol)
@@ -74,11 +76,45 @@ def main(path, timing_prints=False):
 
     function = unique("AirPlayEvent_DealWithSendHIDReport")
     old = unique("AirPlayEvent_SendResponse")
-    new = unique("carbox_airplay_event_send_fast_response")
     text = by_name.get(".text.AirPlayEvent_DealWithSendHIDReport")
     rel = by_name.get(".rel.text.AirPlayEvent_DealWithSendHIDReport")
     if text is None or rel is None or rel["type"] != SHT_REL:
         fail("missing validated event-handler sections")
+    if rel["link"] != symtab["index"] or rel["info"] != text["index"] or \
+            rel["entsize"] != ELF32_REL.size:
+        fail("unexpected event-handler relocation section")
+    if function["section"] != text["index"] or function["value"] != 1 or \
+            function["size"] != text["size"]:
+        fail("invalid HID handler symbol")
+    code = image[text["offset"]:text["offset"] + text["size"]]
+    code_hashes = {
+        0x1A: "2dfc76a55684a42f08a58972360df4465040bfc81e8faf430f80a3e93054daad",
+        0x2C: "2d13c46ea5135a15f081ff6a73d889298dd7b860226a66aafb3c67d070f9c0f5",
+    }
+    if text["size"] in code_hashes and \
+            hashlib.sha256(code).hexdigest() != code_hashes[text["size"]]:
+        fail("HID handler code hash changed; re-audit before patching")
+    if text["size"] == 0x2C:
+        # Previous release tests the weak helper, calls it with (NULL, 0),
+        # and falls back to the native responder if absent.  Do not inject a
+        # duplicate symbol or alter this already integrated customer path.
+        new = unique("carbox_airplay_event_send_fast_response")
+        hid = unique("AirPlayResponse_GetInfoHIDReportCommand")
+        if new["section"] != SHN_UNDEF or new["value"] != 0 or new["binding"] != 2:
+            fail("integrated cached responder must be weak undefined")
+        if old["section"] == SHN_UNDEF or hid["section"] != SHN_UNDEF:
+            fail("unexpected integrated HID response symbols")
+        expected = [(0xE, new["index"] << 8 | 10),
+                    (0x16, hid["index"] << 8 | 10),
+                    (0x20, old["index"] << 8 | 10),
+                    (0x28, new["index"] << 8 | 2)]
+        actual = [ELF32_REL.unpack_from(image, pos)
+                  for pos in range(rel["offset"], rel["offset"] + rel["size"], 8)]
+        if actual != expected:
+            fail("integrated HID response relocation layout changed")
+        print("integrated" if inspect_only else
+              "AirPlay event response patch: validated integrated cached responder; retained")
+        return
     # The diagnostic customer archive adds GetTickCount/printf before and
     # after the original response/HID calls. Validate the entire call layout
     # before redirecting the response and optionally removing timing calls.
@@ -98,8 +134,6 @@ def main(path, timing_prints=False):
                       for offset, name in expected_names.items()}
     if old["section"] == SHN_UNDEF:
         fail("old response target unexpectedly undefined")
-    if new["section"] != SHN_ABS or new["value"] != 0:
-        fail("new target is not the injected ABS placeholder")
     matches = []
     seen_calls = {}
     for index in range(rel["size"] // ELF32_REL.size):
@@ -115,6 +149,12 @@ def main(path, timing_prints=False):
         fail("unexpected HID handler call layout")
     if len(matches) != 1 or matches[0][1] != old["index"] or matches[0][2] != R_ARM_THM_CALL:
         fail("HID-handler+0x%x is not the expected SendResponse call" % call_offset)
+    if inspect_only:
+        print("native")
+        return
+    new = unique("carbox_airplay_event_send_fast_response")
+    if new["section"] != SHN_ABS or new["value"] != 0:
+        fail("new target is not the injected ABS placeholder")
     if text["size"] == 0x3C and not timing_prints:
         for offset in (0x06, 0x0E, 0x22, 0x2A):
             pos = text["offset"] + offset
@@ -132,13 +172,15 @@ def main(path, timing_prints=False):
     struct.pack_into("<H", image, new["offset"] + 14, SHN_UNDEF)
     struct.pack_into("<I", image, matches[0][0] + 4,
                      (new["index"] << 8) | R_ARM_THM_CALL)
-    open(path, "wb").write(image)
+    with open(path, "wb") as stream:
+        stream.write(image)
     print("AirPlay event response patch: redirected HID-handler+0x%x" % call_offset)
     if text["size"] == 0x3C:
         print("AirPlay event timing prints: " + ("enabled" if timing_prints else "disabled"))
 
 
 if __name__ == "__main__":
-    if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] not in ("0", "1")):
-        fail("usage: patch_airplay_event_response.py AirPlayEvent.o [TIMING_PRINTS=0|1]")
-    main(sys.argv[1], len(sys.argv) == 3 and sys.argv[2] == "1")
+    if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] not in ("0", "1", "layout")):
+        fail("usage: patch_airplay_event_response.py AirPlayEvent.o [0|1|layout]")
+    main(sys.argv[1], len(sys.argv) == 3 and sys.argv[2] == "1",
+         len(sys.argv) == 3 and sys.argv[2] == "layout")

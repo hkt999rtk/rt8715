@@ -202,4 +202,17 @@ int tcp_wake_active(struct tcp_wake_record *out)
   SYS_ARCH_UNPROTECT(level);
   return found;
 }
+#else
+/* ABI required by the customer mono archive. Keep production diagnostics
+ * disabled: these calls allocate nothing and do not touch TCP state. */
+void tcp_wake_poll_begin(int fd)
+{
+  (void)fd;
+}
+void tcp_wake_poll_end(int fd, int result, int revents)
+{
+  (void)fd;
+  (void)result;
+  (void)revents;
+}
 #endif

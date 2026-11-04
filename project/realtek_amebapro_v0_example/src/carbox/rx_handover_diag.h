@@ -8,6 +8,18 @@
 #define CONFIG_RX_HANDOVER_DIAG 0
 #endif
 
+#ifndef CONFIG_AUDIO_MUSIC_DIAG
+#define CONFIG_AUDIO_MUSIC_DIAG 0
+#endif
+
+#ifndef CONFIG_AUDIO_NAV_DIAG
+#define CONFIG_AUDIO_NAV_DIAG 0
+#endif
+
+#ifndef CONFIG_SCREEN_TX_BATCH_DIAG
+#define CONFIG_SCREEN_TX_BATCH_DIAG 0
+#endif
+
 #if CONFIG_RX_HANDOVER_DIAG
 enum rxhd_counter {
     RXHD_WLAN_IN, RXHD_COPY, RXHD_ZC, RXHD_PBUF_FAIL, RXHD_COPY_FAIL,
@@ -54,7 +66,6 @@ void carbox_rxhd_timer_task_deleted(void *task);
 void carbox_rxhd_timer_snapshot(struct rxhd_timer_state *out);
 void carbox_rxhd_report(void);
 /* Only the common diagnostic task may call these reporters/logger. */
-void carbox_rxhd_log(const char *fmt, ...);
 void carbox_recvframe_trace_report(void);
 /* Caller holds a critical section; 0 means not a registered active free pool. */
 uint32_t carbox_recvframe_trace_epoch(const void *queue);
@@ -62,9 +73,15 @@ uint32_t carbox_recvframe_trace_epoch(const void *queue);
 #define RXHD_ADD(id, n) ((void)0)
 #define RXHD_INC(id) ((void)0)
 #define carbox_rxhd_report() ((void)0)
-#define carbox_rxhd_log(...) ((void)0)
 #define carbox_recvframe_trace_report() ((void)0)
 #define carbox_recvframe_trace_epoch(queue) (0U)
+#endif
+
+#if CONFIG_RX_HANDOVER_DIAG || CONFIG_AUDIO_NAV_DIAG || CONFIG_AUDIO_MUSIC_DIAG || CONFIG_SCREEN_TX_BATCH_DIAG
+void carbox_rxhd_log(const char *fmt, ...);
+uint32_t carbox_diag_log_skipped(void);
+#else
+#define carbox_rxhd_log(...) ((void)0)
 #endif
 
 #endif

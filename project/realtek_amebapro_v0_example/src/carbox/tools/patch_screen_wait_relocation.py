@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Redirect validated AirPlayScreen.o wait and frame-diagnostic relocations.
 
-The customer object is built with one ELF section per function.  This tool is
-deliberately strict: it only accepts the validated AirPlayScreen_ScreenThread
-layout and changes the R_ARM_THM_CALL at offset 0xee.  The optional tx-poll
-mode changes only the normal-frame EAGAIN delay at offset 0xe2.  Frame-ID
-modes redirect only the normal-frame dispatch and its EAGAIN print.
-The tx-write mode preserves early USB screen RTO opt-in in quiet builds.
+The customer's native poll loop is validated and left intact. Only necessary
+early USB screen RTO and quiet-log relocations remain. A frame profile is
+rejected because the native poll bypasses
+our frame poll observer.  No section replacement is used: relocations survive.
 """
 
+import hashlib
+import os
 import struct
 import sys
 
@@ -23,7 +23,9 @@ SHT_REL = 9
 SHN_UNDEF = 0
 SHN_ABS = 0xFFF1
 R_ARM_THM_CALL = 10
-R_ARM_THM_JUMP24 = 30
+NORMAL_HASHES = {
+    0x178: "74047ffafdeb501380b8aef313c9c30da5f8a4a0b8d88bc0c3de003d5b349b12",
+}
 
 
 def fail(message):
@@ -123,6 +125,57 @@ def main(path, mode="queue"):
             fail("expected exactly one symbol named %s" % name)
         return symbols[indices[0]]
 
+    def normal_layout():
+        name = "AirPlayScreen_SendScreenNormalFrame"
+        function = unique_symbol(name)
+        section = by_name.get(".text." + name)
+        size = function["size"]
+        if section is None or function["section"] != section["index"] or \
+                function["value"] != 1 or size not in NORMAL_HASHES or \
+                section["size"] != size:
+            fail("unrecognized normal-frame layout")
+        rel = by_name.get(".rel.text." + name)
+        if rel is None or rel["type"] != SHT_REL or \
+                rel["info"] != section["index"] or rel["link"] != symtab["index"] or \
+                rel["entry_size"] != ELF32_REL.size:
+            fail("unexpected normal-frame relocation section")
+        records = {}
+        for off in range(rel["offset"], rel["offset"] + rel["size"], ELF32_REL.size):
+            pc, info = ELF32_REL.unpack_from(image, off)
+            if info >> 8 >= len(symbols) or pc in records:
+                fail("invalid or duplicate normal-frame relocation")
+            target = symbols[info >> 8]
+            target_name = target["name"]
+            if not target_name and target["section"] < len(sections):
+                target_name = sections[target["section"]]["name"]
+            records[pc] = (info & 255, target_name)
+        code = bytearray(image[section["offset"]:section["offset"] + size])
+        if hashlib.sha256(code).hexdigest() != NORMAL_HASHES[size]:
+            fail("normal-frame code hash changed; re-audit before patching")
+        if size == 0x178:
+            # Hash pins pollfd stack fields, POLLOUT, 250 ms timeout, retry
+            # branches and the 10-tick error delay.  Relocations pin callees
+            # and the r5 socket source, which the code hash alone cannot prove.
+            required = {
+                0xF4: (10, "lwip_usb_screen_rto_enable"),
+                0xFA: (10, "tcp_wake_poll_begin"),
+                0x104: (10, "lwip_poll"),
+                0x112: (10, "tcp_wake_poll_end"),
+                0x11E: (10, "vTaskDelay"),
+                0x150: (2, ".data.sockScreen"),
+            }
+            for pc, expected in required.items():
+                if records.get(pc) != expected:
+                    fail("native poll relocation mismatch at +%#x" % pc)
+        return size
+
+    normal_size = normal_layout() if mode != "queue" else None
+    if mode == "native-poll":
+        if os.environ.get("SCREEN_TX_POLL_TIMEOUT_MS", "250") != "250":
+            fail("mono native poll requires SCREEN_TX_POLL_TIMEOUT_MS=250")
+        print("screen-wait relocation patch: validated native 250 ms poll; retained")
+        return
+
     if mode == "queue":
         function_name = "AirPlayScreen_ScreenThread"
         new_name = "carbox_screen_queue_wait"
@@ -130,33 +183,18 @@ def main(path, mode="queue"):
         call_position = 0xEE
         old_name = "vTaskDelay"
         relocation_kind = R_ARM_THM_CALL
-    elif mode == "tx-poll":
-        function_name = "AirPlayScreen_SendScreenNormalFrame"
-        new_name = "carbox_screen_tx_poll_wait"
-        function_size = 0x13C
-        call_position = 0xE2
-        old_name = "vTaskDelay"
-        relocation_kind = R_ARM_THM_CALL
     elif mode == "tx-write":
         function_name = "AirPlayScreen_SendScreenNormalFrame"
         new_name = "carbox_screen_tcp_write"
-        function_size = 0x13C
-        call_position = 0xCA
+        function_size = normal_size
+        call_position = 0xC8
         old_name = "lwip_write"
         relocation_kind = R_ARM_THM_CALL
-    elif mode == "frame-dispatch":
-        function_name = "AirPlayScreen_SendScreenFrame"
-        new_name = "carbox_screen_normal_frame_probe"
-        function_size = 0x24
-        call_position = 0x18
-        old_name = "AirPlayScreen_SendScreenNormalFrame"
-        relocation_kind = R_ARM_THM_JUMP24
-    elif mode in ("frame-block", "frame-block-quiet"):
+    elif mode == "frame-block-quiet":
         function_name = "AirPlayScreen_SendScreenNormalFrame"
-        new_name = ("carbox_screen_block_note" if mode == "frame-block"
-                    else "carbox_screen_block_quiet")
-        function_size = 0x13C
-        call_position = 0xDC
+        new_name = "carbox_screen_block_quiet"
+        function_size = normal_size
+        call_position = 0xDA
         old_name = "puts"
         relocation_kind = R_ARM_THM_CALL
     else:
@@ -172,11 +210,7 @@ def main(path, mode="queue"):
             screen_section["size"] != function_size:
         fail("unrecognized %s layout (expected size %#x)" %
              (function_name, function_size))
-    if mode == "frame-dispatch":
-        normal_section = by_name.get(".text.AirPlayScreen_SendScreenNormalFrame")
-        if normal_section is None or old_target["section"] != normal_section["index"]:
-            fail("normal-frame function is not in its expected section")
-    elif old_target["section"] != SHN_UNDEF:
+    if old_target["section"] != SHN_UNDEF:
         fail("%s is unexpectedly defined in the customer object" % old_name)
     if new_target["section"] != SHN_ABS or new_target["value"] != 0:
         fail("injected queue-wait symbol does not have the expected ABS placeholder")
@@ -206,20 +240,9 @@ def main(path, mode="queue"):
 
     call_offset = screen_section["offset"] + call_position
     first_halfword, second_halfword = struct.unpack_from("<HH", image, call_offset)
-    second_mask = 0x9000 if relocation_kind == R_ARM_THM_JUMP24 else 0xD000
     if (first_halfword & 0xF800) != 0xF000 or \
-            (second_halfword & 0xD000) != second_mask:
+            (second_halfword & 0xD000) != 0xD000:
         fail("target does not contain the expected Thumb branch encoding")
-
-    if mode == "tx-poll":
-        # The preceding instruction passes the old 10-tick delay.  Pass the
-        # current screen socket instead; r5 points to .data.sockScreen here.
-        arg_offset = screen_section["offset"] + 0xE0
-        if struct.unpack_from("<H", image, arg_offset)[0] != 0x200A:
-            fail("normal-frame delay argument is not movs r0, #10")
-        if struct.unpack_from("<H", image, screen_section["offset"] + 0xC8)[0] != 0x6828:
-            fail("r5 does not contain the expected screen socket pointer")
-        struct.pack_into("<H", image, arg_offset, 0x6828)  # ldr r0, [r5]
 
     # Convert the symbol objcopy injected as ABS into a normal unresolved
     # reference, then retarget only the selected relocation to that symbol.
@@ -236,5 +259,5 @@ def main(path, mode="queue"):
 
 if __name__ == "__main__":
     if len(sys.argv) not in (2, 3):
-        fail("usage: patch_screen_wait_relocation.py AirPlayScreen.o [queue|tx-poll|tx-write|frame-dispatch|frame-block|frame-block-quiet]")
+        fail("usage: patch_screen_wait_relocation.py AirPlayScreen.o [queue|native-poll|tx-write|frame-block-quiet]")
     main(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "queue")

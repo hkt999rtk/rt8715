@@ -1,6 +1,6 @@
 #include "rx_handover_diag.h"
 
-#if CONFIG_RX_HANDOVER_DIAG
+#if CONFIG_RX_HANDOVER_DIAG || CONFIG_AUDIO_NAV_DIAG || CONFIG_AUDIO_MUSIC_DIAG || CONFIG_SCREEN_TX_BATCH_DIAG
 #include <stdarg.h>
 #include <string.h>
 #include "FreeRTOS.h"
@@ -8,7 +8,9 @@
 #include "semphr.h"
 #include "rt_printf.h"
 
+#if CONFIG_RX_HANDOVER_DIAG
 uint32_t rxhd_counters[RXHD_COUNT];
+#endif
 
 extern SemaphoreHandle_t printf_lock_handle(void);
 
@@ -103,6 +105,9 @@ void carbox_rxhd_log(const char *fmt, ...)
     }
 }
 
+uint32_t carbox_diag_log_skipped(void) { return rxhd_log_skipped; }
+
+#if CONFIG_RX_HANDOVER_DIAG
 static unsigned long ticks_ms(uint32_t ticks)
 {
     return (unsigned long)(((uint64_t)ticks * 1000U) / configTICK_RATE_HZ);
@@ -205,3 +210,5 @@ void carbox_rxhd_report(void)
     initialized = 1U;
 }
 #endif
+
+#endif /* CONFIG_RX_HANDOVER_DIAG || CONFIG_AUDIO_NAV_DIAG */

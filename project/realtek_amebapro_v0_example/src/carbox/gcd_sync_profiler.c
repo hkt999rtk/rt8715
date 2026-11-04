@@ -35,6 +35,10 @@
 #define CONFIG_AUDIO_DECODER_TASK_PRIORITY (-1)
 #endif
 
+#ifndef CONFIG_AUDIO_OUTPUT_TASK_PRIORITY
+#define CONFIG_AUDIO_OUTPUT_TASK_PRIORITY (-1)
+#endif
+
 #ifndef CONFIG_USBH_ISR_TASK_PRIORITY
 #define CONFIG_USBH_ISR_TASK_PRIORITY (-1)
 #endif
@@ -48,6 +52,7 @@
 #endif
 
 #if CONFIG_GCD_WORK_PRIORITY >= 0 || CONFIG_AUDIO_DECODER_TASK_PRIORITY >= 0 || \
+	CONFIG_AUDIO_OUTPUT_TASK_PRIORITY >= 0 || \
 	CONFIG_USBH_ISR_TASK_PRIORITY >= 0 || \
 	CONFIG_USBH_MAIN_TASK_PRIORITY >= 0 || CONFIG_TCP_CLIENT_PRIORITY >= 0
 
@@ -153,6 +158,16 @@ BaseType_t __wrap_xTaskCreate(TaskFunction_t task_code,
 #if CONFIG_GCD_WORK_PRIORITY >= 0
 	if (gcdprof_is_worker_name(task_name)) {
 		priority = (UBaseType_t)CONFIG_GCD_WORK_PRIORITY;
+		if (priority >= (UBaseType_t)configMAX_PRIORITIES) {
+			priority = (UBaseType_t)configMAX_PRIORITIES - 1U;
+		}
+	}
+#endif
+#if CONFIG_AUDIO_OUTPUT_TASK_PRIORITY >= 0
+	/* Both music and navigation use this exact name. Do not elevate screen
+	 * work or the other audio threads by matching an ambiguous prefix. */
+	if (task_name != NULL && strcmp(task_name, "AudioOutput") == 0) {
+		priority = (UBaseType_t)CONFIG_AUDIO_OUTPUT_TASK_PRIORITY;
 		if (priority >= (UBaseType_t)configMAX_PRIORITIES) {
 			priority = (UBaseType_t)configMAX_PRIORITIES - 1U;
 		}

@@ -1,6 +1,9 @@
 #ifndef LWIP_TCP_WAKE_TRACE_H
 #define LWIP_TCP_WAKE_TRACE_H
 #include "lwip/opt.h"
+/* The customer mono archive imports these hooks even when tracing is off. */
+void tcp_wake_poll_begin(int fd);
+void tcp_wake_poll_end(int fd, int result, int revents);
 #if CONFIG_SCREEN_WAKE_TRACE
 #include "lwip/arch.h"
 struct tcp_pcb;
@@ -32,8 +35,6 @@ void tcp_wake_ack(struct tcp_pcb *pcb, u32_t ackno, u32_t advanced,
                   u32_t freed, u32_t input_ms);
 void tcp_wake_socket_event(int fd, int plus, int already_ready, unsigned waiters);
 void tcp_wake_signal(int fd);
-void tcp_wake_poll_begin(int fd);
-void tcp_wake_poll_end(int fd, int result, int revents);
 void tcp_wake_write_begin(int fd, u32_t frame);
 void tcp_wake_write_end(int fd, int result, int error);
 void tcp_wake_frame_end(int fd);
