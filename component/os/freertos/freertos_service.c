@@ -670,6 +670,21 @@ static int _freertos_create_task(struct task_struct *ptask, const char *name,
 	void *task_ctx = NULL;
 	int ret = 0;
 
+#if defined(CONFIG_MP_INCLUDED) && CONFIG_MP_INCLUDED
+	/* MP 发包路径包含 HALMAC/newlib 格式化调用。原厂 256 words 的栈
+	 * 在本 SDK 的 libc wrapper 下会触发 STKOF；只扩大这个 MP 任务，
+	 * 不修改普通 Wi-Fi 任务，也不缩小调用者已配置的更大栈。 */
+	if (name && strcmp(name, "MPXmitThread") == 0) {
+		u32 requested = stack_size;
+		u32 minimum = 4096U / sizeof(StackType_t);
+		if (stack_size < minimum)
+			stack_size = minimum;
+		printf("[MP_STACK] create MPXmitThread requested_bytes=%lu actual_bytes=%lu\r\n",
+		       (unsigned long)(requested * sizeof(StackType_t)),
+		       (unsigned long)(stack_size * sizeof(StackType_t)));
+	}
+#endif
+
 	ptask->task_name = name;
 
 	if(func){

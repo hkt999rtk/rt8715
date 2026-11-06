@@ -2375,6 +2375,7 @@ u8 rltk_mii_recv_data_check(u8 *mac)
 	return check_res;
 #endif
 }
+#if defined(CONFIG_ETHERNET) && CONFIG_ETHERNET
 void rltk_mii_recv(struct eth_drv_sg *sg_list, int sg_len){
 	struct eth_drv_sg *last_sg;
 	u8* pbuf = RX_BUFFER;
@@ -2386,6 +2387,8 @@ void rltk_mii_recv(struct eth_drv_sg *sg_list, int sg_len){
 		}			 
 	}
 }
+#endif
+
 void ethernetif_mii_recv(u8 *buf, u32 frame_len)
 {
 #if (defined(CONFIG_ETHERNET) && CONFIG_ETHERNET)

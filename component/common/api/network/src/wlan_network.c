@@ -19,6 +19,10 @@
 #include "wifi_constants.h"
 #endif
 #include "lwip_netconf.h"
+#if CARBOX_RECOVERY
+#include "recovery_mp.h"
+extern void sta_ota_wifi_init(void);
+#endif
 #include <platform/platform_stdlib.h>
 #include "etharp.h"
 
@@ -38,6 +42,16 @@ extern struct netif xnetif[NET_IF_NUM];
    
 void init_thread(void *param)
 {
+#if CARBOX_RECOVERY
+    /* MP=4已通过重启选择单STA校准分支。即使误调用wlan_network，
+     * 也必须在LwIP/Wi-Fi/AP/STA_OTA/自动重连初始化之前退出。
+     * 不可只屏蔽promisc，留下后台任务以后再次启用AP或修改RX过滤器。 */
+    if (!recovery_mp_ota_allowed()) {
+        printf("[REC_MP] AP/STA_OTA startup blocked in MP/transition mode\r\n");
+        vTaskDelete(NULL);
+        return;
+    }
+#endif
 
 #if CONFIG_INIT_NET
 #if CONFIG_LWIP_LAYER
@@ -53,6 +67,9 @@ void init_thread(void *param)
 	wifi_on(RTW_MODE_STA_AP);
 #else
 	wifi_on(RTW_MODE_STA);
+#endif
+#if CARBOX_RECOVERY
+	sta_ota_wifi_init();
 #endif
 #if CONFIG_AUTO_RECONNECT
 	//setup reconnection flag

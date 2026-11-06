@@ -147,7 +147,11 @@
 /**
  * For Ethernet configurations
  */
+#if CARBOX_RECOVERY
+#define CONFIG_ETHERNET 0
+#else
 #define CONFIG_ETHERNET 1
+#endif
 #if CONFIG_ETHERNET
 
 #define CONFIG_LWIP_LAYER	1

@@ -547,36 +547,44 @@ int __wrap_sprintf(char *buf, const char * fmt,...)
 /* Forward: newlib's real snprintf (bypassed by --wrap) */
 extern int __real_vsnprintf(char *buf, size_t size, const char *fmt, va_list args);
 
-static int wrapped_vsnprintf(char *buf, size_t size, const char *fmt, va_list args)
+/* 通用格式化路径不分配格式转换缓冲区，避免小栈 MP 任务额外消耗 256 字节。
+ * 保留 va_copy 和 C99 截断长度语义；不能直接改成 ROM snprintf。 */
+static int format_vsnprintf(char *buf, size_t size, const char *fmt, va_list args)
+{
+	va_list copy;
+	int count;
+	va_copy(copy, args);
+	count = __real_vsnprintf(buf, size, fmt, copy);
+	va_end(copy);
+	if (count >= 0 && size > 0U && (size_t)count >= size) {
+		int total;
+		va_copy(copy, args);
+		total = __real_vsnprintf(NULL, 0, fmt, copy);
+		va_end(copy);
+		if (total > count)
+			return total;
+	}
+	return count;
+}
+
+/* 禁止内联：只有确实包含 %z 转换的调用才占用这段栈。 */
+static __attribute__((noinline)) int format_vsnprintf_z(
+	char *buf, size_t size, const char *fmt, va_list args)
 {
 	char fix_fmt_buf[256];
 	const char *fixed_fmt = prepare_fmt_z(fmt, fix_fmt_buf, sizeof(fix_fmt_buf));
-	va_list copy;
-	int count;
-
-	if (fixed_fmt == NULL) {
+	if (fixed_fmt == NULL)
 		return -1;
-	}
+	return format_vsnprintf(buf, size, fixed_fmt, args);
+}
 
-	va_copy(copy, args);
-	count = __real_vsnprintf(buf, size, fixed_fmt, copy);
-	va_end(copy);
-	if (count < 0) {
-		return count;
-	}
-
-	/* Preserve C99's would-be length when this newlib reports truncation. */
-	if ((size > 0U) && ((size_t)count >= size)) {
-		int total;
-
-		va_copy(copy, args);
-		total = __real_vsnprintf(NULL, 0, fixed_fmt, copy);
-		va_end(copy);
-		if (total > count) {
-			return total;
-		}
-	}
-	return count;
+static int wrapped_vsnprintf(char *buf, size_t size, const char *fmt, va_list args)
+{
+	if (fmt == NULL)
+		return -1;
+	if (format_needs_z_fix(fmt))
+		return format_vsnprintf_z(buf, size, fmt, args);
+	return format_vsnprintf(buf, size, fmt, args);
 }
 
 int __wrap_snprintf(char *buf, size_t size, const char *fmt,...)

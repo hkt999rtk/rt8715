@@ -68,6 +68,21 @@ uint32_t update_ota_get_curr_fw_start_offset(void){
 		return pfw_image_info->fw2_start_offset;
 }
 
+#if CARBOX_RECOVERY
+static uint32_t g_ota_target_slot = 1; /* 1=OTA1/fw1（默认），2=OTA2/fw2 */
+
+void update_ota_set_target_slot(uint32_t slot)
+{
+	g_ota_target_slot = (slot == 2) ? 2 : 1;
+}
+
+uint32_t update_ota_get_target_slot(void)
+{
+	return g_ota_target_slot;
+}
+
+#endif
+
 uint32_t update_ota_prepare_addr(void){
 	uint32_t NewFWAddr; 
 	fw_img_export_info_type_t *pfw_image_info;
@@ -75,6 +90,10 @@ uint32_t update_ota_prepare_addr(void){
 	pfw_image_info = get_fw_img_info_tbl();
 	
 	printf("\n\r[%s] Get loaded_fw_idx %d\n\r", __FUNCTION__, pfw_image_info->loaded_fw_idx);
+#if CARBOX_RECOVERY
+	/* Recovery HTTP库显式选择目标槽；普通A/B OTA保留原有行为。 */
+	NewFWAddr = g_ota_target_slot == 2 ? pfw_image_info->fw2_start_offset : pfw_image_info->fw1_start_offset;
+#else
 	if(pfw_image_info->loaded_fw_idx == 1)
 		NewFWAddr = pfw_image_info->fw2_start_offset;
 	else if(pfw_image_info->loaded_fw_idx == 2)
@@ -83,6 +102,8 @@ uint32_t update_ota_prepare_addr(void){
 		printf("\n\r[%s] Unexpected index %d", __FUNCTION__, pfw_image_info->loaded_fw_idx);
 		return -1;
 	}
+
+#endif
 
 	printf("\n\r[%s] NewFWAddr %08X\n\r", __FUNCTION__, NewFWAddr);
 	return NewFWAddr;

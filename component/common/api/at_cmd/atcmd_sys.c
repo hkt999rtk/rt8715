@@ -18,6 +18,10 @@
 #include "main.h"
 #include "atcmd_wifi.h"
 #include "device_lock.h"
+#include "hal_flash_boot.h"
+#include "osdep_service.h"
+#include "fw_img.h"
+extern void sys_reset(void);
 #include "hal_timer.h"
 #include "semphr.h"
 
@@ -674,6 +678,83 @@ void fATSR(void *arg)
 	AT_DBG_MSG(AT_FLAG_OTA, AT_DBG_ALWAYS, "[ATSR]: _AT_SYSTEM_RECOVER_OTA_SIGNATURE_");
 	sys_recover_ota_signature();
 }
+
+/* ---- 手动 OTA 槽切换（诊断用） ----
+ * OTARECOVER：切到 OTA2（fw2），OTACLEAR：切到 OTA1（fw1）。
+ * 通过翻转 fw1 首扇区 signature 首字节使 fw1 有效<->无效，重启后由 boot
+ * 根据 fw1_valid 选择加载 fw1 还是 fw2。 */
+#define CARBOX_OTA_SECTOR_SIZE 0x1000
+
+static int carbox_ota_toggle_fw1_signature(uint32_t fw1_addr)
+{
+	flash_t flash;
+	uint8_t *pbuf;
+
+	pbuf = malloc(CARBOX_OTA_SECTOR_SIZE);
+	if (!pbuf) {
+		AT_PRINTK("[OTA] alloc sector buf fail");
+		return -1;
+	}
+
+	/* 先取得互斥锁，再关中断；不能在临界区阻塞等待另一个flash任务。 */
+	device_mutex_lock(RT_DEV_LOCK_FLASH);
+	rtw_enter_critical(NULL, NULL);
+	flash_stream_read(&flash, fw1_addr, CARBOX_OTA_SECTOR_SIZE, pbuf);
+	pbuf[0] = ~(pbuf[0]); /* 翻转 signature 首字节：有效<->无效 */
+	flash_erase_sector(&flash, fw1_addr);
+	flash_burst_write(&flash, fw1_addr, CARBOX_OTA_SECTOR_SIZE, pbuf);
+	rtw_exit_critical(NULL, NULL);
+	device_mutex_unlock(RT_DEV_LOCK_FLASH);
+
+	free(pbuf);
+	return 0;
+}
+
+/* OTARECOVER：切到 OTA2（fw2），重启生效 */
+void fOTARECOVER(void *arg)
+{
+	fw_img_export_info_type_t *info = (fw_img_export_info_type_t *)get_fw_img_info_tbl();
+	(void)arg;
+
+	if (info == NULL) { AT_PRINTK("[OTARECOVER] slot info unavailable"); return; }
+    if (info->loaded_fw_idx == 2 && info->fw1_valid == 0) {
+        AT_PRINTK("[OTARECOVER] already in recovery"); return;
+    }
+    /* 主线默认镜像可能仅含FW1；没有有效FW2时不得清除当前启动签名。 */
+    if (info->fw2_valid != 1) {
+        AT_PRINTK("[OTARECOVER] no valid recovery FW2; switch rejected"); return;
+    }
+    AT_PRINTK("[OTARECOVER] fw1_valid=%d fw2_valid=%d loaded=%d",
+		  info->fw1_valid, info->fw2_valid, info->loaded_fw_idx);
+
+	if (info->fw1_valid == 1) {
+		if (carbox_ota_toggle_fw1_signature(info->fw1_start_offset) != 0) return;
+		AT_PRINTK("[OTARECOVER] fw1 signature cleared, switch to fw2");
+	} else {
+		AT_PRINTK("[OTARECOVER] fw1 already invalid");
+	}
+	sys_reset();
+}
+
+/* OTACLEAR：切到 OTA1（fw1），重启生效 */
+void fOTACLEAR(void *arg)
+{
+	fw_img_export_info_type_t *info = (fw_img_export_info_type_t *)get_fw_img_info_tbl();
+	(void)arg;
+
+	if (info == NULL) { AT_PRINTK("[OTACLEAR] slot info unavailable"); return; }
+    AT_PRINTK("[OTACLEAR] fw1_valid=%d fw2_valid=%d loaded=%d",
+		  info->fw1_valid, info->fw2_valid, info->loaded_fw_idx);
+
+	if (info->fw1_valid == 0) {
+		if (carbox_ota_toggle_fw1_signature(info->fw1_start_offset) != 0) return;
+		AT_PRINTK("[OTACLEAR] fw1 signature recovered, switch to fw1");
+	} else {
+		AT_PRINTK("[OTACLEAR] fw1 already valid");
+	}
+	sys_reset();
+}
+
 
 #if CONFIG_UART_YMODEM
 void fATSY(void *arg)
@@ -2182,6 +2263,8 @@ log_item_t at_sys_items[] = {
 #endif
 // Unlock the flash status 
 #if defined(CONFIG_PLATFORM_8195BHP)
+        {"OTARECOVER", fOTARECOVER,}, /* 切换到 Recovery FW2 */
+        {"OTACLEAR", fOTACLEAR,}, /* 返回 Normal FW1 */
         {"ATSF", fATSF,},	 // wakelock test
 #endif
 };

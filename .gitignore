@@ -50,9 +50,12 @@ project/realtek_amebapro_v0_example/GCC-RELEASE/**
 !project/realtek_amebapro_v0_example/GCC-RELEASE/ota_rollback_tool.py
 !project/realtek_amebapro_v0_example/GCC-RELEASE/test_ota_rollback_tool.py
 !project/realtek_amebapro_v0_example/GCC-RELEASE/application.is.mk
+!project/realtek_amebapro_v0_example/GCC-RELEASE/application.recovery.mk
+!project/realtek_amebapro_v0_example/GCC-RELEASE/filter_firmware_images.py
 !project/realtek_amebapro_v0_example/GCC-RELEASE/usb_lib/
 !project/realtek_amebapro_v0_example/GCC-RELEASE/usb_lib/build/
 !project/realtek_amebapro_v0_example/GCC-RELEASE/usb_lib/build/lib_usbsmart_ota.a
+!project/realtek_amebapro_v0_example/GCC-RELEASE/usb_lib/build/lib_usbsmart_mp.a
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/
 !project/realtek_amebapro_v0_example/GCC-RELEASE/carplay_app/patch_video_handover_archive.sh
 !project/realtek_amebapro_v0_example/GCC-RELEASE/rtl8195bhp_ram_is.ld

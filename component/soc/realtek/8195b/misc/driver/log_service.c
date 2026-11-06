@@ -210,7 +210,7 @@ void* log_handler(char *cmd)
 	char *copy=buf;
 	char *token = NULL;
 	char *param = NULL;
-	char tok[5] = {0};//'\0'
+	char tok[LOG_SERVICE_BUFLEN] = {0};//'\0'
 #if CONFIG_LOG_HISTORY
 	strcpy(log_history[((log_history_count++)%LOG_HISTORY_LEN)], log_buf);
 #endif
@@ -223,12 +223,38 @@ void* log_handler(char *cmd)
 	token = strtok(copy, "=");
 	param = strtok(NULL, NULL);
 #endif
-	if(token && (strlen(token) <= 4))
+
+	/* Support "cmd arg1 arg2 ..." (space separated) format,
+	 * e.g. "efuse rmap 0x11a 6". When there is no '=' parameter,
+	 * token holds the whole input line, split command and params here. */
+	if (token != NULL && (param == NULL || param[0] == '\0')) {
+		char *sp = strchr(token, ' ');
+		if (sp != NULL) {
+			*sp = '\0';
+			param = sp + 1;
+			while (*param == ' ' || *param == '\t') {
+				param++;
+			}
+		}
+	}
+
+	if(token && (strlen(token) < sizeof(tok)))
 		strcpy(tok, token);
 	else{
 		//printf("\n\rAT Cmd format error!\n");
 		return NULL;
 	};
+
+	/* UART 输入末尾带 \r/\n，无参数单命令（如 OTACLEAR）会因换行符与命令表
+	 * 中的命令名 strcmp 失配；有参数命令（如 efuse rmap ...）换行符被空格分到
+	 * param 里所以不受影响。这里统一去掉命令名末尾的换行。 */
+	{
+		size_t _tlen = strlen(tok);
+		while (_tlen > 0 && (tok[_tlen - 1] == '\r' || tok[_tlen - 1] == '\n')) {
+			tok[--_tlen] = '\0';
+		}
+	}
+
 	//printf(" Command %s \n\r ", tok);
 	//printf(" Param %s \n\r", param);
 	action = (log_act_t)log_action(tok);
@@ -339,6 +365,55 @@ void legency_interactive_handler(unsigned char argc, unsigned char **argv)
 #ifndef WLAN1_NAME
   #define WLAN1_NAME		"wlan1"
 #endif
+#if CARBOX_RECOVERY
+#include "recovery_mp.h"
+#include "mp_calibration.h"
+/* 只在命令边界采样，不在发包循环打印。快照存于 BSS，避免增加命令栈。
+ * 复制任务名匹配结果时暂停调度，防止任务退出后访问已释放的 TCB 名称；
+ * 恢复调度后只使用数值快照，不保存或解引用任务句柄。 */
+static void mp_report_stack(const char *phase)
+{
+    static TaskStatus_t tasks[32];
+    UBaseType_t n, i, id = 0;
+    unsigned long minimum_bytes = 0;
+    int found = 0;
+    vTaskSuspendAll();
+    n = uxTaskGetSystemState(tasks, sizeof(tasks) / sizeof(tasks[0]), NULL);
+    for (i = 0; i < n; ++i) {
+        if (strcmp(tasks[i].pcTaskName, "MPXmitThread") == 0) {
+            id = tasks[i].xTaskNumber;
+            minimum_bytes = (unsigned long)tasks[i].usStackHighWaterMark * sizeof(StackType_t);
+            found = 1;
+            break;
+        }
+    }
+    xTaskResumeAll();
+    if (found)
+        printf("[MP_STACK] phase=%s task=MPXmitThread id=%lu min_free_bytes=%lu\r\n",
+               phase, (unsigned long)id, minimum_bytes);
+    else if (!n)
+        printf("[MP_STACK] snapshot unavailable (capacity=32)\r\n");
+}
+
+int mp_commnad_handler(char *cmd)
+{
+    int ret;
+    if (strncmp(cmd, "iwpriv", 6) != 0 ||
+        (cmd[6] != ' ' && cmd[6] != '\t' && cmd[6] != '\0'))
+        return -1;
+    mp_report_stack("before");
+    ret = recovery_mp_is_active() ? mp_calibration_command(cmd, 1) : MP_CALIBRATION_NOT_READY;
+    mp_report_stack("after");
+    if (ret < 0) {
+        printf("\r\n[MP_REA] command error=%d phase=%s\r\n", ret, recovery_mp_phase_name());
+        recovery_mp_print_status();
+        printf("[REC_MP] STOP TEST: MP command rejected; query MP=STATUS before calibration\r\n");
+    }
+    /* 已处理的命令即使失败也不能再次进入其他 handler。 */
+    return 0;
+}
+
+#else
 int mp_commnad_handler(char *cmd)
 {
 	char buf[64];
@@ -355,6 +430,7 @@ int mp_commnad_handler(char *cmd)
 	}
 	return -1;
 }
+#endif
 #endif
 void print_help_msg(void){
 #if CONFIG_WLAN
@@ -397,6 +473,21 @@ void log_service(void *param)
 {
 	_AT_DBG_MSG(AT_FLAG_COMMON, AT_DBG_ALWAYS, "\n\rStart LOG SERVICE MODE\n\r");
 	_AT_DBG_MSG(AT_FLAG_COMMON, AT_DBG_ALWAYS, "\n\r# ");        
+#if CARBOX_RECOVERY
+    /* 在命令任务真正启动后宣布READY，避免创建任务失败却误报可用。 */
+    if (recovery_mp_is_active() && mp_calibration_is_ready()) {
+        at_printf("[REC_MP] READY; baud=1500000; mp_started=1; MP=0 returns to recovery OTA\r\n");
+        /*
+         * MP=4 在旧命令任务返回前重启，无法执行通常的命令完成打印。
+         * 只在新启动的 MP 驱动和命令任务均已就绪后补发完成回覆，
+         * 兼容仪器等待 MEM 的流程；初始化失败时不得提前回报成功。
+         */
+        at_printf("MP=4: OK\r\n");
+        at_printf("\r\n[MEM] After do cmd, available heap %u\r\n",
+                  (unsigned int)xPortGetFreeHeapSize());
+        at_printf("\r\n# ");
+    }
+#endif
 	while(1){
 		while(xSemaphoreTake(log_rx_interrupt_sema, portMAX_DELAY) != pdTRUE);
 #if CONFIG_LOG_SERVICE_LOCK
@@ -408,7 +499,12 @@ void log_service(void *param)
 		 * section without violating FreeRTOS ISR rules.
 		 */
 		at_printf("%s\r\n", log_buf);
-		if(log_handler((char *)log_buf) == NULL){
+		#if CARBOX_RECOVERY
+        if (!recovery_mp_allow_console((char *)log_buf)) {
+            at_printf("[REC_MP] command blocked in MP/transition mode\r\n");
+        } else
+#endif
+        if(log_handler((char *)log_buf) == NULL){
 #if CONFIG_WLAN
 			if(mp_commnad_handler((char *)log_buf) < 0)
 #endif                        

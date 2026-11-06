@@ -106,3 +106,8 @@ symbols:
 
 text:
 	@$(MAKE) -f application.is.mk text ADDR="$(ADDR)"
+
+# Recovery MP 与普通 ram_is 共用输出目录，切换前必须 clean，再构建 ram_lp。
+.PHONY: ram_recovery
+ram_recovery: toolchain
+	@$(MAKE) -f application.recovery.mk all

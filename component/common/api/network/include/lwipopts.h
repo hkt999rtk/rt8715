@@ -350,11 +350,19 @@ extern unsigned int sys_now(void);
  * prevents delayed TCP consumers from exhausting the WLAN skb data pool;
  * allocation/clone failures transparently use the existing copy path.
  */
+#if CARBOX_RECOVERY
+#define CONFIG_WLAN_RX_ZERO_COPY 0
+#else
 #define CONFIG_WLAN_RX_ZERO_COPY       1
+#endif
 #define WLAN_RX_ZERO_COPY_MIN_LEN      1024
 #define WLAN_RX_ZERO_COPY_POOL_SIZE    256
 #define WLAN_RX_ZERO_COPY_STATS        0
+#if CARBOX_RECOVERY
+#define WLAN_RX_ZERO_COPY_SELFTEST 0
+#else
 #define WLAN_RX_ZERO_COPY_SELFTEST     1
+#endif
 #define WLAN_RX_ZERO_COPY_DRAIN_TIMEOUT_MS 5000
 
 #undef MEMP_NUM_NETBUF
