@@ -1,7 +1,6 @@
 /* Observe each vendor RX frame pool without printing in the RX critical section. */
 #include <stdint.h>
 #include "nav_tx_trace.h"
-#include "screen_tx_poll_wait.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -174,15 +173,13 @@ static void wlan_recvframe_diag_task(void *argument)
 	carbox_audio_diag_log("[MUSIC_DIAG] enabled=1 lifecycle=1 progress=1 output=1 period_ms=5000 reporter=wlan_rx_diag\n");
 #endif
 
-#if CONFIG_RX_HANDOVER_DIAG || CONFIG_AUDIO_STREAM_DIAG || CONFIG_AUDIO_NAV_DIAG || CONFIG_AUDIO_MUSIC_DIAG || CONFIG_SCREEN_TX_BATCH_DIAG
+#if CONFIG_RX_HANDOVER_DIAG || CONFIG_AUDIO_STREAM_DIAG || CONFIG_AUDIO_NAV_DIAG || CONFIG_AUDIO_MUSIC_DIAG
 	for (;;) {
 #if CONFIG_RX_HANDOVER_DIAG
 		uint32_t i;
 #endif
 		vTaskDelay(pdMS_TO_TICKS(WLAN_RECVFRAME_REPORT_MS));
-#if CONFIG_SCREEN_TX_BATCH_DIAG
-		carbox_screen_write_report();
-#endif
+
 #if CONFIG_AUDIO_MUSIC_DIAG
 		carbox_music_lifecycle_report();
 		carbox_music_progress_report();

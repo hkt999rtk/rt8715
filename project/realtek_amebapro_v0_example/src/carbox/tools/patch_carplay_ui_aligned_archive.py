@@ -24,6 +24,9 @@ ACCESSORY_SHA256S = {
     "1655c6a094eeb95837c75e724de7444b8d6c368d236354d24786ffbaae4e1e6a",
 }
 MONO_ACCESSORY_SHA256 = "829b9e730ae5e325bb4617248a1274f2de5c2de5423021e0119cac33b5951cdf"
+# v14 仅将 UI 提示改为 Please Connect BT，四个字符串 addend 随之变化。
+# 已核对转换/编码调用指令、位置及全部重定位，仍使用 mono 的调用布局。
+V14_ACCESSORY_SHA256 = "6da7ef10a4dd8bfa2c2ad70579705552a2d7b2afa071973eca5ec205958dabe5"
 SECTION_NAME = b".text.CAccessory_CreateUi"
 CALL_OFFSET = 0x502
 OLD = bytes.fromhex("0a9b099a")  # visible height, width: [sp,#40], [sp,#36]
@@ -67,7 +70,7 @@ def main():
     objdump = objcopy.replace("objcopy", "objdump")
     original = subprocess.check_output([ar, "p", str(source), "Accessory.o"])
     digest = hashlib.sha256(original).hexdigest()
-    mono = digest == MONO_ACCESSORY_SHA256
+    mono = digest in (MONO_ACCESSORY_SHA256, V14_ACCESSORY_SHA256)
     if digest not in ACCESSORY_SHA256S and not mono:
         raise ValueError("unknown customer Accessory.o; audit before patching")
     # Mono bundle keeps aligned RGB conversion but moves the callsites and

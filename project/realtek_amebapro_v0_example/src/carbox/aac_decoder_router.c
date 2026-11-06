@@ -680,6 +680,31 @@ out:
 #endif
 }
 
+extern CStreamInfo *__real_aacDecoder_GetStreamInfo(HANDLE_AACDECODER decoder);
+
+CStreamInfo *__wrap_aacDecoder_GetStreamInfo(HANDLE_AACDECODER decoder)
+{
+	if (decoder == NULL) {
+		return NULL;
+	}
+#if CARBOX_AAC_DECODER_MODE == CARBOX_AAC_DECODER_FDK_ONLY
+	return __real_aacDecoder_GetStreamInfo(decoder);
+#else
+	aac_router_t *router = aac_router_from_handle(decoder);
+
+	if (router == NULL) {
+		return __real_aacDecoder_GetStreamInfo(decoder);
+	}
+	/* AAC-ELD 始终使用 FDK；客户 converter 用此接口核对实际 PCM 格式。
+	 * Helix 没有对应的 FDK stream info，返回 NULL，禁止读取未解码的
+	 * 备用 FDK 状态。此查询不会切换 backend 或丢弃待解码数据。 */
+	if (router->backend != AAC_ROUTER_BACKEND_FDK) {
+		return NULL;
+	}
+	return __real_aacDecoder_GetStreamInfo(router->fdk);
+#endif
+}
+
 AAC_DECODER_ERROR __wrap_aacDecoder_SetParam(const HANDLE_AACDECODER decoder,
 	const AACDEC_PARAM parameter, const INT value)
 {

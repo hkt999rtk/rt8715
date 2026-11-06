@@ -908,11 +908,10 @@ SRAM_C += ../src/carbox/large_memcpy_gdma.c
 SRAM_C += ../src/carbox/video_handover_zero_copy.c
 SRAM_C += ../src/carbox/screen_rx_poly_buffer.c
 SRAM_C += ../src/carbox/screen_queue_wait.c
-# Customer mono library owns the 250 ms poll loop. This switch retains
-# early USB RTO opt-in and quiet EAGAIN logging; no delay-to-poll patch remains.
+# v17 原生实现 4KB、写入前 USB RTO 和 250ms poll；此开关仅校验并静默 EAGAIN 日志。
 SCREEN_TX_POLL_WAIT ?= 1
 SCREEN_TX_POLL_TIMEOUT_MS ?= 250
-# Keep the reporter available independently of the archive's poll opt-in.
+# 仅保留日志静默函数，不再替换 write 或统计每次写入。
 SRAM_C += ../src/carbox/screen_tx_poll_wait.c
 SRAM_C += ../src/carbox/screen_tx_direct_crypto.c
 # The current customer USB archive contains ncm_tx.o and ncm_tx_async.o.
@@ -1171,11 +1170,8 @@ TCP_CLIENT_PRIORITY ?= -1
 # precedence over the priority-5 audio output worker without delaying the
 # priority-10 networking and USB workers.
 AUDIO_DECODER_TASK_PRIORITY ?= 6
-# Ready music/navigation output preempts screen TX (priority 4) at core unlock.
-AUDIO_OUTPUT_TASK_PRIORITY ?= 5
-# Cap the normal screen sender even when its diagnostic wrappers are disabled.
-SCREEN_TX_WRITE_CHUNK_BYTES ?= 4096
-SCREEN_TX_BATCH_DIAG ?= 0
+# v17 原生 AudioOutput=5、ScreenThread=4；不再覆写客户输出优先级。
+AUDIO_OUTPUT_TASK_PRIORITY ?= -1
 # Overnight UI-freeze diagnosis: trace the CarPlay screen RX, handover queue,
 # and TX stages in the existing 10-second profiler report.
 SCREEN_QUEUE_PROFILE ?= 0
@@ -1273,15 +1269,29 @@ AUDIO_DECODE_PROFILE_SLOW_US ?= 10000
 # Opt-in comparison of navigation RTP at WLAN, UDP input, and SocketRecvFrom.
 AUDIO_STREAM_DIAG ?= 0
 AUDIO_JITTER_ADAPTIVE ?= 0
-# Tested navigation policies (mono customer library). Keep these enabled in
-# release builds; logging is independently controlled by AUDIO_DIAG_LOG.
-AUDIO_NAV_PURGE_FIX ?= 1
-AUDIO_NAV_PLAYOUT ?= 1
-AUDIO_NAV_CONTINUITY ?= 1
-AUDIO_NAV_PACING ?= 1
-# Historical DIAG names also enable the hooks/lifetimes used by these policies.
-AUDIO_NAV_DIAG ?= 1
-AUDIO_MUSIC_DIAG ?= 1
+# 客户 v17 已实现导航 purge/条件唤醒、PLC 检查及 PCM 发送 pacing。
+# 禁止重复套用旧布局的补丁；GetStreamInfo 必须与其余 FDK API 一起路由。
+# AudioOutput 优先级和画面 4KB/poll 均由客户库实现，不重复安装发送补丁。
+CARBOX_CUSTOMER_NAV_NATIVE ?= 1
+AUDIO_NAV_PURGE_FIX ?= $(if $(filter 1,$(CARBOX_CUSTOMER_NAV_NATIVE)),0,1)
+AUDIO_NAV_PLAYOUT ?= $(if $(filter 1,$(CARBOX_CUSTOMER_NAV_NATIVE)),0,1)
+AUDIO_NAV_CONTINUITY ?= $(if $(filter 1,$(CARBOX_CUSTOMER_NAV_NATIVE)),0,1)
+AUDIO_NAV_DIAG ?= $(if $(filter 1,$(CARBOX_CUSTOMER_NAV_NATIVE)),0,1)
+AUDIO_NAV_PACING ?= 0
+ifeq ($(CARBOX_CUSTOMER_NAV_NATIVE),1)
+ifneq ($(filter 1,$(AUDIO_NAV_PURGE_FIX) $(AUDIO_NAV_PLAYOUT) $(AUDIO_NAV_CONTINUITY) $(AUDIO_NAV_DIAG) $(AUDIO_JITTER_ADAPTIVE) $(AUDIO_STREAM_DIAG)),)
+$(error Native v17 navigation cannot use legacy jitter/context patches)
+endif
+# v14 Setup 已把 type 100/101 的 audioLatencyMs 下限提高到 400ms；
+# 不再叠加旧 Init 包装的 30ms，也不再访问旧 context 的私有偏移。
+endif
+# 旧输出诊断 hook 依赖旧函数布局；v17 原生 pacing 不使用这些 hook。
+AUDIO_MUSIC_DIAG ?= 0
+ifeq ($(CARBOX_CUSTOMER_NAV_NATIVE),1)
+ifneq ($(filter 1,$(AUDIO_MUSIC_DIAG) $(AUDIO_NAV_PACING)),)
+$(error Customer v17 output cannot use legacy audio output/pacing hooks)
+endif
+endif
 AUDIO_DIAG_LOG ?= 0
 GCCFLAGS += -DCONFIG_AUDIO_DIAG_LOG=$(AUDIO_DIAG_LOG)
 GCCFLAGS += -DCONFIG_AUDIO_NAV_PURGE_FIX=$(AUDIO_NAV_PURGE_FIX)
@@ -1745,11 +1755,11 @@ $(DIAGNOSTIC_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.diagnostic_profile_*
 	@touch $@
-# Separate short stamp: priority/cap/stats changes must rebuild all consumers.
-SCREEN_WRITE_BATCH_STAMP := $(OBJ_DIR)/.screen_write_batch_v1-audio$(AUDIO_OUTPUT_TASK_PRIORITY)-bytes$(SCREEN_TX_WRITE_CHUNK_BYTES)-diag$(SCREEN_TX_BATCH_DIAG)
+# v17 原生输出切换及优先级配置变化必须使相关对象重新编译。
+SCREEN_WRITE_BATCH_STAMP := $(OBJ_DIR)/.screen_write_native_v17-audio$(AUDIO_OUTPUT_TASK_PRIORITY)
 $(SCREEN_WRITE_BATCH_STAMP):
 	@mkdir -p $(OBJ_DIR)
-	@rm -f $(OBJ_DIR)/.screen_write_batch_*
+	@rm -f $(OBJ_DIR)/.screen_write_batch_* $(OBJ_DIR)/.screen_write_native_*
 	@touch $@
 ../src/carbox/gcd_sync_profiler.o ../src/carbox/screen_tx_poll_wait.o \
 	../src/carbox/rx_handover_diag.o ../src/carbox/wlan_recvframe_diag.o: \
@@ -2032,8 +2042,6 @@ GCCFLAGS += -DCONFIG_GCD_SYNC_PROFILE=$(GCD_SYNC_PROFILE)
 GCCFLAGS += -DCONFIG_GCD_WORK_PRIORITY=$(GCD_WORK_PRIORITY)
 GCCFLAGS += -DCONFIG_AUDIO_DECODER_TASK_PRIORITY=$(AUDIO_DECODER_TASK_PRIORITY)
 GCCFLAGS += -DCONFIG_AUDIO_OUTPUT_TASK_PRIORITY=$(AUDIO_OUTPUT_TASK_PRIORITY)
-GCCFLAGS += -DCONFIG_SCREEN_TX_WRITE_CHUNK_BYTES=$(SCREEN_TX_WRITE_CHUNK_BYTES)
-GCCFLAGS += -DCONFIG_SCREEN_TX_BATCH_DIAG=$(SCREEN_TX_BATCH_DIAG)
 GCCFLAGS += -DCONFIG_USBH_ISR_TASK_PRIORITY=$(USBH_ISR_TASK_PRIORITY)
 GCCFLAGS += -DCONFIG_USBH_MAIN_TASK_PRIORITY=$(USBH_MAIN_TASK_PRIORITY)
 GCCFLAGS += -DCONFIG_CAR_ACK_TIMESTAMP=$(CAR_ACK_TIMESTAMP)
@@ -2487,6 +2495,7 @@ endif
 LFLAGS += -Wl,--wrap=aacDecoder_Open -Wl,--wrap=aacDecoder_ConfigRaw
 LFLAGS += -Wl,--wrap=aacDecoder_Fill -Wl,--wrap=aacDecoder_DecodeFrame
 LFLAGS += -Wl,--wrap=aacDecoder_SetParam -Wl,--wrap=aacDecoder_Close
+LFLAGS += -Wl,--wrap=aacDecoder_GetStreamInfo
 ##noisy warning option
 ##LFLAGS += -Wl,--warn-section-align
 # libc api wrapper
@@ -2601,6 +2610,12 @@ endif
 ifeq ($(CARBOX_EXPERIMENTAL_SMART_A_LINK),1)
 CARBOX_SMART_CARPLAY_LIB_DIR := carplay_app
 CARBOX_CARPLAY_VENDOR_ARCHIVE := $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_CarPlay.a
+ifeq ($(CARBOX_CUSTOMER_NAV_NATIVE),1)
+.PHONY: verify_customer_native_nav
+verify_customer_native_nav:
+	python3 ../src/carbox/tools/verify_customer_native_nav.py $(AR) $(CARBOX_SMART_CARPLAY_LIB_DIR)
+application: verify_customer_native_nav
+endif
 CARBOX_CARPLAY_CHACHA_DIR := ../tools/legacy_chacha
 CARBOX_CARPLAY_DERIVED_DIR := $(CARBOX_SMART_CARPLAY_LIB_DIR)/build
 CARBOX_CARPLAY_LOCAL_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/lib_CarPlay_chacha_m33.a
@@ -2649,7 +2664,7 @@ $(CARBOX_PAIR_VERIFY_STAMP):
 CARBOX_SCREEN_WAIT_RELOC_PATCH := ../src/carbox/tools/patch_screen_wait_relocation.py
 CARBOX_EVENT_RESPONSE_PATCH := ../src/carbox/tools/patch_airplay_event_response.py
 CARBOX_EVENT_READAHEAD_PATCH := ../src/carbox/tools/patch_airplay_event_readahead.py
-CARBOX_ACCESSORY_PATCH_STAMP := $(OBJ_DIR)/.accessory_patch_v19-ackcache$(CAR_ACK_RESPONSE_CACHE)-zc$(VIDEO_HANDOVER_ZERO_COPY)-direct$(SCREEN_TX_DIRECT_CRYPTO)-wait$(SCREEN_QUEUE_EVENT_WAIT)-txpoll$(SCREEN_TX_POLL_WAIT)-block$(SCREEN_BLOCK_PROFILE)-readahead$(CAR_EVENT_READAHEAD_FIX)-iap2wait$(IAP2_COND_TIMEDWAIT_FIX)-ackts$(CAR_ACK_TIMESTAMP)
+CARBOX_ACCESSORY_PATCH_STAMP := $(OBJ_DIR)/.accessory_patch_v20-native-output-ackcache$(CAR_ACK_RESPONSE_CACHE)-zc$(VIDEO_HANDOVER_ZERO_COPY)-direct$(SCREEN_TX_DIRECT_CRYPTO)-wait$(SCREEN_QUEUE_EVENT_WAIT)-txpoll$(SCREEN_TX_POLL_WAIT)-block$(SCREEN_BLOCK_PROFILE)-readahead$(CAR_EVENT_READAHEAD_FIX)-iap2wait$(IAP2_COND_TIMEDWAIT_FIX)-ackts$(CAR_ACK_TIMESTAMP)
 $(CARBOX_ACCESSORY_PATCH_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.accessory_patch_*

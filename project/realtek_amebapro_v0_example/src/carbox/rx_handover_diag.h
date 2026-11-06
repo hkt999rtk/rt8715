@@ -16,9 +16,6 @@
 #define CONFIG_AUDIO_NAV_DIAG 0
 #endif
 
-#ifndef CONFIG_SCREEN_TX_BATCH_DIAG
-#define CONFIG_SCREEN_TX_BATCH_DIAG 0
-#endif
 
 #if CONFIG_RX_HANDOVER_DIAG
 enum rxhd_counter {
@@ -77,7 +74,7 @@ uint32_t carbox_recvframe_trace_epoch(const void *queue);
 #define carbox_recvframe_trace_epoch(queue) (0U)
 #endif
 
-#if CONFIG_RX_HANDOVER_DIAG || CONFIG_AUDIO_NAV_DIAG || CONFIG_AUDIO_MUSIC_DIAG || CONFIG_SCREEN_TX_BATCH_DIAG
+#if CONFIG_RX_HANDOVER_DIAG || CONFIG_AUDIO_NAV_DIAG || CONFIG_AUDIO_MUSIC_DIAG
 void carbox_rxhd_log(const char *fmt, ...);
 uint32_t carbox_diag_log_skipped(void);
 #else

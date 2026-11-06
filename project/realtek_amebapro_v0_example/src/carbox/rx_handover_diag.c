@@ -1,6 +1,6 @@
 #include "rx_handover_diag.h"
 
-#if CONFIG_RX_HANDOVER_DIAG || CONFIG_AUDIO_NAV_DIAG || CONFIG_AUDIO_MUSIC_DIAG || CONFIG_SCREEN_TX_BATCH_DIAG
+#if CONFIG_RX_HANDOVER_DIAG || CONFIG_AUDIO_NAV_DIAG || CONFIG_AUDIO_MUSIC_DIAG
 #include <stdarg.h>
 #include <string.h>
 #include "FreeRTOS.h"

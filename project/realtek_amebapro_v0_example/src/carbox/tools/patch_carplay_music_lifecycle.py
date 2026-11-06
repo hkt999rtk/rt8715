@@ -8,7 +8,11 @@ from pathlib import Path
 HASHES={
  ('AirPlayReceiverServer.o','_HandleHTTPConnectionClose'):'90f0e701d42df6121aa54db0126e88f643b423ac036382489b1d0413aa696d51',
  ('AirPlayReceiverServer.o','_HandleHTTPConnectionMessage'):'ff8ccedb52dc17c19a436d90c20d412192750609308af0f3ac502e4c00b1cabd',
- ('AirPlayReceiverSession.o','AirPlayReceiverSessionSetup'):'d5caa1037884f5cf969c023af70dbcdfae209b778602a8a8fd418f2c8b2eee92',
+ # v14 只在 +0x10fa/+0x1108 将最小缓冲值 300 改为 400；
+ # 所有调用点、重定位和其余指令已逐项比较，不放宽其它函数的校验。
+ ('AirPlayReceiverSession.o','AirPlayReceiverSessionSetup'):(
+  'd5caa1037884f5cf969c023af70dbcdfae209b778602a8a8fd418f2c8b2eee92',
+  '883d752a06f420c60f5ab6f15c850ded3a212ac250029c6a80e6104d92e272b0'),
  ('AirPlayReceiverSession.o','AirPlayReceiverSessionTearDown'):'b0cd13d813b2b5b292ba34edcfaf016b8071534ef1b88bea6b346f4655c095aa',
 }
 SITES=[
@@ -31,7 +35,8 @@ def patch(path,member):
  def st(x,o):return x[o:].split(b'\0',1)[0].decode('ascii')
  names=data(ss[h[13]]);secs={st(names,s[0]):(i,s) for i,s in enumerate(ss)}
  for (m,f),sha in HASHES.items():
-  if m==member and hashlib.sha256(data(secs['.text.'+f][1])).hexdigest()!=sha:fail('unknown code '+f)
+  accepted = (sha,) if isinstance(sha, str) else sha
+  if m==member and hashlib.sha256(data(secs['.text.'+f][1])).hexdigest() not in accepted:fail('unknown code '+f)
  tabs=[(i,s) for i,s in enumerate(ss) if s[1]==2]
  if len(tabs)!=1:fail('symbol table')
  ti,tab=tabs[0];strings=data(ss[tab[6]]);syms={}

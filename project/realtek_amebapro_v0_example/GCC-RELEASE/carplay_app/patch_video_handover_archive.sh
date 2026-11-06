@@ -144,15 +144,7 @@ cp "$input_archive" "$output_archive"
 			mv "patched-with-screen-wait.o" "patched.o"
 			python3 "$screen_wait_patcher" "patched.o"
 		fi
-		if [ "$screen_tx_poll_wait" = 1 ] && [ "$member" = AirPlayScreen.o ]; then
-			"$objcopy_tool" --add-symbol \
-				carbox_screen_tcp_write=0,global \
-				"patched.o" "patched-with-tx-poll.o"
-			mv "patched-with-tx-poll.o" "patched.o"
-			# Enable the tested USB RTO policy before the first write, even
-			# when the diagnostic write wrapper is compiled out.
-			python3 "$screen_wait_patcher" "patched.o" tx-write
-		fi
+		# v17 已原生限制 4KB 并在 write 前启用 USB RTO，不再替换 write。
 		if [ "$screen_frame_id_profile" = 1 ] && [ "$member" = AirPlayScreen.o ]; then
 			echo "mono native poll has no frame poll observer; frame profile unsupported" >&2
 			exit 1

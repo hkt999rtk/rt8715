@@ -2,7 +2,7 @@
 """Redirect validated AirPlayScreen.o wait and frame-diagnostic relocations.
 
 The customer's native poll loop is validated and left intact. Only necessary
-early USB screen RTO and quiet-log relocations remain. A frame profile is
+quiet-log relocations remain; v17 owns 4KB writes and early USB RTO. A frame profile is
 rejected because the native poll bypasses
 our frame poll observer.  No section replacement is used: relocations survive.
 """
@@ -24,7 +24,7 @@ SHN_UNDEF = 0
 SHN_ABS = 0xFFF1
 R_ARM_THM_CALL = 10
 NORMAL_HASHES = {
-    0x178: "74047ffafdeb501380b8aef313c9c30da5f8a4a0b8d88bc0c3de003d5b349b12",
+    0x188: "87fd07c15cde187f7c4b5ad0632d419fc1640ae41bdc23533223b6a94066de96",
 }
 
 
@@ -152,17 +152,19 @@ def main(path, mode="queue"):
         code = bytearray(image[section["offset"]:section["offset"] + size])
         if hashlib.sha256(code).hexdigest() != NORMAL_HASHES[size]:
             fail("normal-frame code hash changed; re-audit before patching")
-        if size == 0x178:
+        if size == 0x188:
             # Hash pins pollfd stack fields, POLLOUT, 250 ms timeout, retry
             # branches and the 10-tick error delay.  Relocations pin callees
             # and the r5 socket source, which the code hash alone cannot prove.
             required = {
-                0xF4: (10, "lwip_usb_screen_rto_enable"),
-                0xFA: (10, "tcp_wake_poll_begin"),
-                0x104: (10, "lwip_poll"),
-                0x112: (10, "tcp_wake_poll_end"),
-                0x11E: (10, "vTaskDelay"),
-                0x150: (2, ".data.sockScreen"),
+                0xBA: (10, "lwip_usb_screen_rto_enable"),
+                0xCE: (10, "lwip_write"),
+                0xFA: (10, "lwip_usb_screen_rto_enable"),
+                0x100: (10, "tcp_wake_poll_begin"),
+                0x10A: (10, "lwip_poll"),
+                0x118: (10, "tcp_wake_poll_end"),
+                0x124: (10, "vTaskDelay"),
+                0x160: (2, ".data.sockScreen"),
             }
             for pc, expected in required.items():
                 if records.get(pc) != expected:
@@ -183,18 +185,11 @@ def main(path, mode="queue"):
         call_position = 0xEE
         old_name = "vTaskDelay"
         relocation_kind = R_ARM_THM_CALL
-    elif mode == "tx-write":
-        function_name = "AirPlayScreen_SendScreenNormalFrame"
-        new_name = "carbox_screen_tcp_write"
-        function_size = normal_size
-        call_position = 0xC8
-        old_name = "lwip_write"
-        relocation_kind = R_ARM_THM_CALL
     elif mode == "frame-block-quiet":
         function_name = "AirPlayScreen_SendScreenNormalFrame"
         new_name = "carbox_screen_block_quiet"
         function_size = normal_size
-        call_position = 0xDA
+        call_position = 0xE2
         old_name = "puts"
         relocation_kind = R_ARM_THM_CALL
     else:
@@ -259,5 +254,5 @@ def main(path, mode="queue"):
 
 if __name__ == "__main__":
     if len(sys.argv) not in (2, 3):
-        fail("usage: patch_screen_wait_relocation.py AirPlayScreen.o [queue|native-poll|tx-write|frame-block-quiet]")
+        fail("usage: patch_screen_wait_relocation.py AirPlayScreen.o [queue|native-poll|frame-block-quiet]")
     main(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "queue")
