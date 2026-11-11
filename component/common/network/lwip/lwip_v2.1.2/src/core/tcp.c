@@ -108,6 +108,7 @@
 #include "lwip/tcp.h"
 #include "lwip/priv/tcp_priv.h"
 #include "lwip/priv/tcp_recovery.h"
+#include "lwip/priv/tcp_output_wait.h"
 #include "lwip/debug.h"
 #include "lwip/stats.h"
 #include "lwip/ip6.h"
@@ -606,6 +607,7 @@ void
 tcp_free(struct tcp_pcb *pcb)
 {
   LWIP_ASSERT("tcp_free: LISTEN", pcb->state != LISTEN);
+  tcp_wait_cancel(pcb, TCP_WAIT_CLOSED);
 #if CONFIG_SCREEN_WAKE_TRACE
   tcp_wake_forget(pcb);
 #endif

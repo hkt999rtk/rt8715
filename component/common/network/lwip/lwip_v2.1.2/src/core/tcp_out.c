@@ -66,6 +66,7 @@
 
 #include "lwip/priv/tcp_priv.h"
 #include "lwip/priv/tcp_recovery.h"
+#include "lwip/priv/tcp_output_wait.h"
 #include "lwip/def.h"
 #include "lwip/mem.h"
 #include "lwip/memp.h"
@@ -1628,6 +1629,7 @@ tcp_output(struct tcp_pcb *pcb)
 #endif
 
   if (seg == NULL) {
+    tcp_wait_cancel(pcb, TCP_WAIT_EMPTY);
     LWIP_DEBUGF(TCP_OUTPUT_DEBUG, ("tcp_output: nothing to send (%p)\n",
                                    (void *)pcb->unsent));
     LWIP_DEBUGF(TCP_CWND_DEBUG, ("tcp_output: snd_wnd %"TCPWNDSIZE_F
@@ -1667,6 +1669,7 @@ tcp_output(struct tcp_pcb *pcb)
 
   /* Handle the current segment not fitting within the window */
   if (lwip_ntohl(seg->tcphdr->seqno) - pcb->lastack + seg->len > wnd) {
+    tcp_wait_window(pcb, seg, wnd);
     /* We need to start the persistent timer when the next unsent segment does not fit
      * within the remaining (could be 0) send window and RTO timer is not running (we
      * have no in-flight data). If window is still too small after persist timer fires,
@@ -1706,6 +1709,7 @@ tcp_output(struct tcp_pcb *pcb)
      */
     if ((tcp_do_output_nagle(pcb) == 0) &&
         ((pcb->flags & (TF_NAGLEMEMERR | TF_FIN)) == 0)) {
+      tcp_wait_block(pcb, seg, TCP_WAIT_NAGLE);
       break;
     }
 #if TCP_CWND_DEBUG
@@ -1784,6 +1788,7 @@ tcp_output(struct tcp_pcb *pcb)
     wnd = tcp_recovery_output_window(pcb);
 #endif
   }
+  tcp_wait_window(pcb, pcb->unsent, wnd);
 #if TCP_OVERSIZE
   if (pcb->unsent == NULL) {
     /* last unsent has been removed, reset unsent_oversize */

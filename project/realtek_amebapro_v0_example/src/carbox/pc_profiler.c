@@ -1,3 +1,8 @@
+#include "move_lag_diag.h"
+#include "http_owner_diag.h"
+#include "car_rx_diag.h"
+#include "airplay_timer_clock.h"
+#include "audio_tx_evidence.h"
 #include "pc_profiler.h"
 #include "i2c_bitbang_pacing.h"
 #include "iap2_cond_timedwait_fix.h"
@@ -32,6 +37,7 @@
 #include "ncm/ncm_tx_profile.h"
 #include "ethernetif.h"
 #include "lwip/priv/tcp_recovery.h"
+#include "lwip/priv/tcp_output_wait.h"
 
 /* The customer crypto API no longer needs the legacy alias wrapper that
  * supplied this optional per-record latency report. */
@@ -144,7 +150,11 @@ void carbox_pc_profiler_set_clock_boot_status(int status)
  * the 1 ms USB cadence, the RTOS tick, or 30/60 Hz media work.
  */
 #define PCPROF_SAMPLE_PERIOD_US       2003U
+#if defined(CONFIG_MOVE_LAG_PROFILE) && CONFIG_MOVE_LAG_PROFILE
+#define PCPROF_REPORT_PERIOD_MS       2000U
+#else
 #define PCPROF_REPORT_PERIOD_MS      10000U
+#endif
 #define PCPROF_RECORDS_PER_BUFFER     6144U
 #define PCPROF_PC_BUCKET_BYTES          64U
 #define PCPROF_HASH_SIZE              4096U
@@ -1747,6 +1757,46 @@ static void pcprof_tcp_recovery_causes(void)
 			n, (unsigned long)dropped, (unsigned long)evicted);
 }
 
+#if CONFIG_MOVE_LAG_PROFILE
+static void pcprof_tcp_wait_report(void)
+{
+    struct tcp_wait_row r;
+    struct tcp_wait_event e;
+    u32_t evicted = 0, dropped = 0;
+    unsigned i, emitted = 0;
+    static int explained;
+    if (!explained) {
+        rt_printf("[TCPWAIT_CFG] scope=usb_screen cumulative=1 reason_bits=cwnd:1/rwnd:2/nagle:4 result=sent:1/empty:2/closed:3/skipped:4 slow_ms=20 unknown_ms=4294967295 rto_id=latest_due start_fields=frozen\r\n");
+        explained = 1;
+    }
+    for (i = 0; i < TCP_WAIT_ROWS; ++i) {
+        if (!tcp_wait_snapshot(i, &r, &evicted)) continue;
+        rt_printf("[TCPWAIT] conn=%lu ports=%u/%u episodes/sent/cancel=%lu/%lu/%lu checks/cwnd/rwnd/nagle=%lu/%lu/%lu/%lu max_ms=%lu active/age_ms=%u/%lu closed=%u seq=%lu reasons=%u rto_id=%lu\r\n",
+            (unsigned long)r.connection, r.current.local_port, r.current.remote_port,
+            (unsigned long)r.started, (unsigned long)r.resumed, (unsigned long)r.cancelled,
+            (unsigned long)r.checks, (unsigned long)r.cwnd_checks, (unsigned long)r.rwnd_checks,
+            (unsigned long)r.nagle_checks, (unsigned long)r.max_ms, r.active,
+            (unsigned long)(r.active ? r.snapshot_ms - r.current.start_ms : 0), r.closed,
+            (unsigned long)r.current.seq, r.current.reason_mask, (unsigned long)r.last_rto_id);
+    }
+    /* 有界打印；明细使用 TCPREC 的 conn/rto_id 与设备 ms 对齐。 */
+    for (i = 0; i < 8; ++i) {
+        if (!tcp_wait_pop(&e, &dropped)) break;
+        ++emitted;
+#define TW(x) ((unsigned long)e.x)
+        rt_printf("[TCPWAIT_BEGIN] conn=%lu episode=%lu ms=%lu ports=%u/%u seq/len=%lu/%lu flight/need=%lu/%lu cwnd/rwnd/effective=%lu/%lu/%lu flags=%x reasons=%u rto_id=%lu\r\n",
+            TW(connection), TW(episode), TW(start_ms), e.local_port, e.remote_port, TW(seq), TW(length),
+            TW(flight), TW(need), TW(cwnd), TW(wnd), TW(effective_wnd), e.flags, e.reason_mask, TW(rto_id));
+        rt_printf("[TCPWAIT_END] conn=%lu episode=%lu ms=%lu result=%u wait_ms=%lu ack_progress=%lu first/last_ack_to_end_ms=%lu/%lu tx_seq/len=%lu/%lu\r\n",
+            TW(connection), TW(episode), TW(end_ms), e.result, TW(duration_ms), TW(ack_count),
+            TW(first_ack_ms), TW(last_ack_ms), TW(resume_seq), TW(resume_len));
+#undef TW
+    }
+    rt_printf("[TCPWAIT_QUEUE] emitted=%u dropped_new_total=%lu rows_evicted_total=%lu\r\n",
+        emitted, (unsigned long)dropped, (unsigned long)evicted);
+}
+#endif
+
 static void pcprof_tcp_recovery_events(void)
 {
 	static int config_printed;
@@ -1764,6 +1814,9 @@ static void pcprof_tcp_recovery_events(void)
 		config_printed = 1;
 	}
 	pcprof_tcp_recovery_causes();
+#if CONFIG_MOVE_LAG_PROFILE
+    pcprof_tcp_wait_report();
+#endif
 	/* RTO evidence first; IDs/timestamps restore chronology across queues.
 	 * Bound work even if the TCP task keeps producing while UART is active. */
 	for (urgent = 1; urgent >= 0; --urgent) {
@@ -1972,6 +2025,14 @@ static void pcprof_task(void *arg)
 #endif
 		pcprof_watch_progress(PCPROF_PHASE_TOUCH, sequence);
 		carbox_iap2_cond_timedwait_fix_report(sequence);
+#if CONFIG_MOVE_LAG_PROFILE && CONFIG_SCREEN_USB_PROBE
+        usb_hcd_profiler_report(sequence);
+#endif
+		carbox_move_lag_report(sequence);
+		car_rx_report(sequence);
+		http_owner_report(sequence);
+		carbox_airplay_clock_report(sequence);
+		carbox_audio_tx_evidence_report(sequence);
 		carbox_touch_path_profiler_report(sequence);
 		pcprof_watch_progress(PCPROF_PHASE_RX_RECORD, sequence);
 		carbox_screen_rx_record_profiler_report(sequence);

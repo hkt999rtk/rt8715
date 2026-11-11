@@ -145,7 +145,7 @@ cp "$input_archive" "$output_archive"
 			python3 "$screen_wait_patcher" "patched.o"
 		fi
 		# v17 已原生限制 4KB 并在 write 前启用 USB RTO，不再替换 write。
-		if [ "$screen_frame_id_profile" = 1 ] && [ "$member" = AirPlayScreen.o ]; then
+		if [ "$screen_frame_id_profile" = 1 ] && [ "${MOVE_LAG_PROFILE:-0}" != 1 ] && [ "$member" = AirPlayScreen.o ]; then
 			echo "mono native poll has no frame poll observer; frame profile unsupported" >&2
 			exit 1
 		elif [ "$screen_tx_poll_wait" = 1 ] && [ "$member" = AirPlayScreen.o ]; then
@@ -155,6 +155,13 @@ cp "$input_archive" "$output_archive"
 				"patched.o" "patched-with-block-quiet.o"
 			mv "patched-with-block-quiet.o" "patched.o"
 			python3 "$screen_wait_patcher" "patched.o" frame-block-quiet
+		fi
+		if [ "${MOVE_LAG_PROFILE:-0}" = 1 ] && [ "$member" = AirPlayScreen.o ]; then
+			"$objcopy_tool" --add-symbol carbox_move_screen_frame=0,global \
+				--redefine-sym free=carbox_move_screen_free \
+				"patched.o" "patched-move.o"
+			mv "patched-move.o" "patched.o"
+			python3 "$screen_wait_patcher" "patched.o" move-observe
 		fi
 		if [ "$ack_cache" = 1 ] && [ "$member" = AirPlayEvent.o ]; then
 			# Redirect only DealWithSendHIDReport's no-body response.  Other

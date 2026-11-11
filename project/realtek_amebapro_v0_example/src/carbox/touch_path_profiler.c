@@ -1,3 +1,6 @@
+#include "move_lag_diag.h"
+#include "http_owner_diag.h"
+#include "car_rx_diag.h"
 #include "touch_path_profiler.h"
 #include "airplay_mutex_profiler.h"
 #include "car_ack_response_cache.h"
@@ -1253,6 +1256,7 @@ static int32_t touch_http_bypass_drain(void *client)
 	if (touch_http_pointer_at(client, TOUCH_HTTP_CLIENT_HEAD_OFFSET) != NULL) {
 		taskENTER_CRITICAL();
 		touch_path_stats.http_bypass_drain_blocked_vendor++;
+		http_owner_guard(client);
 		taskEXIT_CRITICAL();
 		return TOUCH_OSSTATUS_WOULD_BLOCK;
 	}
@@ -1309,8 +1313,18 @@ static int32_t touch_http_bypass_drain(void *client)
 		}
 		taskEXIT_CRITICAL();
 
-		result = read_f(buffer, sizeof(buffer),
-			&out_length, read_context);
+		{
+#if defined(CONFIG_MOVE_LAG_PROFILE) && CONFIG_MOVE_LAG_PROFILE
+			uint32_t read_start = hal_read_curtime_us();
+#endif
+			result = read_f(buffer, sizeof(buffer), &out_length, read_context);
+			http_owner_drain(client, buffer, out_length, result);
+			/* detail 是进入 read 前的可读字节数，最高位表示已有明文。 */
+			carbox_move_lag_record(MOVE_HID_DRAIN, 0U, read_start,
+				hal_read_curtime_us() - read_start,
+				ready_plain ? 0x80000000U | (uint32_t)(plain_end - plain_cur) : pending_bytes,
+				result);
+		}
 
 		taskENTER_CRITICAL();
 		touch_path_stats.http_bypass_drain_calls++;
@@ -1772,6 +1786,7 @@ int32_t __wrap_AirPlayResponse_GetInfoType(
 	TaskHandle_t current = xTaskGetCurrentTaskHandle();
 	uint32_t call_start_us = hal_read_curtime_us();
 	int32_t result = __real_AirPlayResponse_GetInfoType(body, length, type);
+	car_rx_type(type, length, result);
 
 	if (touch_path_is_hid_send_report(type)) {
 		uint32_t now_us = hal_read_curtime_us();
@@ -2412,6 +2427,10 @@ void carbox_touch_dispatch_sync_complete(uint32_t token,
 			uint32_t exec_us = callback_end_us - callback_start_us;
 			uint32_t total_us = return_us - submit_us;
 
+			carbox_move_lag_record(MOVE_DISPATCH_WAIT,
+				touch_path_state.dispatch_sequence, submit_us, wait_us, 0U, 0);
+			carbox_move_lag_record(MOVE_DISPATCH_EXEC,
+				touch_path_state.dispatch_sequence, callback_start_us, exec_us, 0U, 0);
 			touch_path_stage_add(&touch_path_stats.dispatch_wait,
 				wait_us);
 			touch_path_stage_add(&touch_path_stats.dispatch_exec,
@@ -2482,6 +2501,10 @@ int32_t __wrap_HTTPClientSendMessage(void *client, void *message)
 	}
 	taskEXIT_CRITICAL();
 
+http_owner_enqueue(client, message,
+		CONFIG_AIRPLAY_HID_HTTP_BYPASS && matched,
+		(uintptr_t)__builtin_return_address(0));
+
 #if CONFIG_AIRPLAY_HID_HTTP_BYPASS
 	if (matched) {
 		result = touch_http_bypass_enqueue(client, message);
@@ -2499,6 +2522,7 @@ int32_t __wrap_HTTPClientSendMessage(void *client, void *message)
 #endif
 		result = __real_HTTPClientSendMessage(client, message);
 	}
+	http_owner_enqueue_result(message, result);
 	if (matched && (result != 0)) {
 		taskENTER_CRITICAL();
 		{
@@ -2600,6 +2624,9 @@ int32_t __wrap_HTTPMessageWriteMessage(
 						start_us -
 							touch_path_state.last_http_response_us);
 				}
+				carbox_move_lag_record(MOVE_HID_QUEUE, slot->sequence,
+					slot->enqueue_us, start_us - slot->enqueue_us,
+					slot->is_release ? 2U : slot->is_down ? 1U : 0U, 0);
 				slot->write_started = 1U;
 				slot->write_start_us = start_us;
 				touch_path_stage_add(
@@ -2616,8 +2643,10 @@ int32_t __wrap_HTTPMessageWriteMessage(
 	} else
 #endif
 	{
+		http_owner_write_begin(message, write_context);
 		result = __real_HTTPMessageWriteMessage(
 			message, write_f, write_context);
+		http_owner_write_end(message, result);
 	}
 
 	taskENTER_CRITICAL();
@@ -2648,6 +2677,9 @@ int32_t __wrap_HTTPMessageWriteMessage(
 	if (touch_http) {
 		touch_http_slot_t *slot = touch_http_find(message);
 		if (slot != NULL) {
+			carbox_move_lag_record(MOVE_HID_WRITE, slot->sequence, start_us,
+				hal_read_curtime_us() - start_us,
+				slot->is_release ? 2U : slot->is_down ? 1U : 0U, result);
 #if CONFIG_AIRPLAY_HID_HTTP_PIPELINE_DEPTH > 0
 			if (!pipeline_pump_write && !pipeline_fake_complete) {
 				if (result == TOUCH_OSSTATUS_WOULD_BLOCK) {
@@ -2730,7 +2762,10 @@ ssize_t __wrap_lwip_read(int socket_fd, void *buffer, size_t length)
 {
 	TaskHandle_t current = xTaskGetCurrentTaskHandle();
 	uint32_t start_us = hal_read_curtime_us();
+	int rx_token = car_rx_begin(CAR_RX_READ, socket_fd);
 	ssize_t result = __real_lwip_read(socket_fd, buffer, length);
+	int rx_errno = lwip_err;
+	car_rx_end(rx_token, result, result < 0 ? rx_errno : 0);
 	uint32_t end_us = hal_read_curtime_us();
 	touch_http_slot_t *slot = NULL;
 	struct lwip_rx_post_diag post;
@@ -2852,7 +2887,12 @@ int32_t __wrap_HTTPMessageReadMessage(
 		taskEXIT_CRITICAL();
 	}
 
-	result = __real_HTTPMessageReadMessage(message, read_f, read_context);
+    {
+        /* context 可能是加密 transport 指针，不能当成 fd；raw socket 行单独关联。 */
+        int rx_token = car_rx_begin(CAR_RX_HTTP, -1);
+        result = http_owner_vendor_read(message, read_f, read_context);
+        car_rx_end(rx_token, result, 0);
+    }
 	car_ack_timestamp_http_done(result);
 	if (touch_http) {
 		taskENTER_CRITICAL();
@@ -3087,6 +3127,15 @@ void carbox_touch_path_profiler_report(uint32_t sequence)
 	}
 	taskEXIT_CRITICAL();
 
+#if defined(CONFIG_MOVE_LAG_PROFILE) && CONFIG_MOVE_LAG_PROFILE
+	rt_printf("[MOVE_HIDQ][%lu] at_us=%lu tracked/queued/wire=%lu/%lu/%lu oldest_us=%lu slot_full=%lu seq_in/hid/enq/write=%lu/%lu/%lu/%lu\r\n",
+		(unsigned long)sequence, (unsigned long)now_us,
+		(unsigned long)http_depth, (unsigned long)http_queued,
+		(unsigned long)http_wire_inflight, (unsigned long)http_oldest_age_us,
+		(unsigned long)stats.http_slot_full,
+		(unsigned long)last_car_sequence, (unsigned long)last_hid_sequence,
+		(unsigned long)last_http_enqueue_sequence, (unsigned long)last_http_write_sequence);
+#endif
 	if (car_socket_valid && !car_socket_nodelay_valid) {
 		int nodelay = 0;
 		socklen_t option_length = sizeof(nodelay);

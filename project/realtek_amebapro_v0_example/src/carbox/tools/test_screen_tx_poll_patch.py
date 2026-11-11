@@ -71,6 +71,34 @@ class ScreenTxPollPatchTest(unittest.TestCase):
             self.assertNotEqual(0, rejected.returncode)
             self.assertIn("frame poll observer", rejected.stderr)
 
+    def test_move_observer_preserves_native_code(self):
+        from test_patch_airplay_music_output import elf_object
+        with tempfile.TemporaryDirectory() as directory:
+            archive = pathlib.Path(directory) / "move.a"
+            command = ["sh", str(BUILD / "carplay_app/patch_video_handover_archive.sh"),
+                "accessory-wait", str(TOOLCHAIN / "arm-none-eabi-ar"),
+                str(TOOLCHAIN / "arm-none-eabi-objcopy"), str(NEW_ARCHIVE),
+                str(archive), "AirPlayScreen.o", "0", "0", "0", "0", "0", "1"]
+            subprocess.run(command, check=True, capture_output=True,
+                           env=dict(os.environ, MOVE_LAG_PROFILE="1"))
+            extract = lambda path: subprocess.check_output([
+                str(TOOLCHAIN / "arm-none-eabi-ar"), "p", str(path), "AirPlayScreen.o"])
+            before, old, _ = elf_object(extract(NEW_ARCHIVE))
+            after, new, _ = elf_object(extract(archive))
+            for name in before:
+                if name.startswith(".text"):
+                    self.assertEqual(before[name], after[name], name)
+            for name, records in old.items():
+                expected = []
+                for pc, kind, target in records:
+                    if target == "free": target = "carbox_move_screen_free"
+                    if name == ".rel.text.AirPlayScreen_ScreenThread" and pc in (0xBA, 0xF8):
+                        target = "carbox_move_screen_frame"
+                    if name == ".rel.text.AirPlayScreen_SendScreenNormalFrame" and pc == 0xE2:
+                        target = "carbox_screen_block_quiet"
+                    expected.append((pc, kind, target))
+                self.assertEqual(expected, new[name], name)
+
     def test_mono_rejects_changed_poll_code_and_relocation(self):
         import patch_screen_wait_relocation as patch
         vendor = subprocess.check_output([

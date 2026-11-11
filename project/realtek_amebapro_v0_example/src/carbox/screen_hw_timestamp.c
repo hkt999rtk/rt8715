@@ -5,6 +5,8 @@
 #include "hal_timer.h"
 
 #include "screen_queue_profiler.h"
+#include "screen_hw_timestamp.h"
+#include "airplay_timer_clock.h"
 
 #ifndef CONFIG_SCREEN_HW_TIMESTAMP
 #define CONFIG_SCREEN_HW_TIMESTAMP 0
@@ -114,13 +116,36 @@ static uint64_t screen_us_to_ntp(uint64_t time_us)
 }
 #endif
 
+uint64_t carbox_media_monotonic_us(void)
+{
+#if CONFIG_SCREEN_HW_TIMESTAMP
+	uint32_t sample_us;
+	/* 与视频共用同一个 epoch、回绕扩展和单调性状态。 */
+	return screen_hw_time_us(&sample_us);
+#else
+	TimeOut_t state;
+	uint64_t ticks;
+	vTaskSetTimeOutState(&state);
+	ticks = ((uint64_t)(uint32_t)state.xOverflowCount << 32) |
+		(uint64_t)state.xTimeOnEntering;
+	return (ticks / configTICK_RATE_HZ) * 1000000ULL +
+		((ticks % configTICK_RATE_HZ) * 1000000ULL) / configTICK_RATE_HZ;
+#endif
+}
+
 uint64_t __wrap_UpTicksToNTP(uint64_t ticks)
 {
 	uint32_t sample_us;
 	uint64_t ntp;
 
 #if CONFIG_SCREEN_HW_TIMESTAMP
+#if CONFIG_SCREEN_TIMER_ORIGIN
+	/* 保留 timing 原厂起点；只调整 video，不改变音频 RTP sample 轴。 */
+	ntp = screen_us_to_ntp(carbox_media_video_us());
+	sample_us = hal_read_curtime_us();
+#else
 	ntp = screen_us_to_ntp(screen_hw_time_us(&sample_us));
+#endif
 #else
 	sample_us = hal_read_curtime_us();
 	ntp = __real_UpTicksToNTP(ticks);

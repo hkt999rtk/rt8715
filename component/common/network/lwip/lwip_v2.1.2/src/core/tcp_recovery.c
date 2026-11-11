@@ -6,6 +6,7 @@
 #if LWIP_TCP && LWIP_TCP_RECOVERY
 #include "lwip/priv/tcp_priv.h"
 #include "lwip/priv/tcp_recovery.h"
+#include "lwip/priv/tcp_output_wait.h"
 #include "lwip/sys.h"
 #include "lwip/ip.h"
 #include "lwip/netif.h"
@@ -155,6 +156,7 @@ static void trace_record(struct tcp_pcb *pcb, u8_t kind, u8_t urgent)
     e.unsent_len = TCP_TCPLEN(pcb->unsent);
     e.unsent_ref = pcb->unsent->p->ref;
   }
+  if (kind == TCP_TRACE_RTO_DUE) tcp_wait_rto(pcb, e.id);
   cause_event(&e);
   /* Only the TCP core produces records; reporter protects its bounded copy.
    * All formatting is deferred. Overwrite oldest within this class only. */
@@ -263,6 +265,9 @@ tcp_recovery_usb_screen(struct tcp_pcb *pcb)
         ip_route(&pcb->local_ip, &pcb->remote_ip);
   if (out == NULL || out->name[0] != 'e' || out->name[1] != 'n') return 0;
   r->usb_screen_rto = 1;
+#if CONFIG_TCP_RECOVERY_TRACE
+  trace_init(pcb);
+#endif
   /* An already-running RTO/Karn recovery must keep its backed-off deadline.
    * A later clean RTT sample will apply the USB floor. Do not restart the
    * clock: enabling this during EAGAIN must not extend a stalled flight. */
@@ -327,6 +332,7 @@ tcp_recovery_sent(struct tcp_pcb *pcb, const struct tcp_seg *seg)
     r->trace.rto_wait_tx = 0;
   }
 #endif
+  tcp_wait_sent(pcb, seg);
   /* Called only after successful output, before snd_nxt is advanced. */
   if (TCP_SEQ_GEQ(seq, pcb->snd_nxt) && TCP_TCPLEN(seg)) {
     if (r->lt_credit && pcb->dupacks <= 2 && !(pcb->flags & (TF_INFR | TF_RTO))) {
@@ -432,6 +438,7 @@ tcp_recovery_ack(struct tcp_pcb *pcb, tcpwnd_size_t acked, u8_t was_in_recovery)
   struct tcp_recovery_state *r = &pcb->recovery;
   u32_t now = sys_now();
   r->last_ack_advance = acked;
+  if (acked) tcp_wait_ack(pcb);
   if (r->heuristic_wait_ack) {
     ++recovery_stats.heuristic_progress;
     recovery_stats.heuristic_progress_max_ms = LWIP_MAX(

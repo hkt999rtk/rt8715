@@ -178,6 +178,34 @@ def main(path, mode="queue"):
         print("screen-wait relocation patch: validated native 250 ms poll; retained")
         return
 
+    if mode == "move-observe":
+        # 只接入观测入口，原函数体和 4KB/write/poll 均不修改。
+        sec = by_name.get(".text.AirPlayScreen_ScreenThread")
+        if sec is None or hashlib.sha256(image[sec["offset"]:sec["offset"] + sec["size"]]).hexdigest() != \
+                "bdbfee3b004f45c7fdb3a7fe3583142454bd0f4e89790926d538e917cf0245be":
+            fail("move observer: unknown ScreenThread code")
+        old = unique_symbol("AirPlayScreen_SendScreenFrame")
+        new = unique_symbol("carbox_move_screen_frame")
+        if new["section"] != SHN_ABS or new["value"] != 0:
+            fail("move observer: bad placeholder")
+        rel = by_name[".rel.text.AirPlayScreen_ScreenThread"]
+        found = []
+        for off in range(rel["offset"], rel["offset"] + rel["size"], ELF32_REL.size):
+            pc, info = ELF32_REL.unpack_from(image, off)
+            if pc in (0xBA, 0xF8):
+                if info != (old["index"] << 8 | R_ARM_THM_CALL):
+                    fail("move observer: frame call mismatch")
+                found.append(off)
+        if len(found) != 2:
+            fail("move observer: missing frame calls")
+        struct.pack_into("<H", image, new["offset"] + 14, SHN_UNDEF)
+        for off in found:
+            struct.pack_into("<I", image, off + 4, new["index"] << 8 | R_ARM_THM_CALL)
+        with open(path, "wb") as stream:
+            stream.write(image)
+        print("move observer: two ScreenThread frame calls redirected; native code retained")
+        return
+
     if mode == "queue":
         function_name = "AirPlayScreen_ScreenThread"
         new_name = "carbox_screen_queue_wait"

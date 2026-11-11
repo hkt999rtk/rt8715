@@ -453,6 +453,7 @@ ITCM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_in.c
 ITCM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_out.c
 ITCM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_recovery.c
 SRAM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_wake_trace.c
+SRAM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_output_wait.c
 ITCM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/timeouts.c
 ITCM_C += ../../../component/common/network/lwip/lwip_v2.1.2/src/core/udp.c
 ##ITMC -> DTCM
@@ -835,6 +836,7 @@ ifeq ($(UI_H264_DIAG),1)
 SRC_C += ../src/carbox/ui_h264_handover_diag.c
 endif
 SRC_C += ../src/carbox/screen_hw_timestamp.c
+SRC_C += ../src/carbox/airplay_timer_clock.c
 SRC_C += ../src/carbox/screen_rx_record_profiler.c
 SRC_C += ../src/carbox/screen_rx_stage_profiler.c
 # The direct-crypto-disabled object supplies the stage-report no-op itself.
@@ -1066,6 +1068,38 @@ $(NCM_TX_PROFILE_STAMP):
 	@touch $@
 ../../../component/common/network/lwip/lwip_v2.1.2/port/realtek/freertos/ethernetif.o: $(NCM_TX_PROFILE_STAMP)
 # Opt-in CPU sampling and subsystem reports for diagnostic builds.
+# 发布版默认关闭本轮观测；正常构建不传测试覆盖参数。
+# timing/video 修复独立于这些开关，关闭日志不会关闭修复。
+# 触控/画面联合观测。仅测试版开启，复用统计线程，每 2 秒输出。
+MOVE_LAG_PROFILE ?= 0
+# 独立观测开关；回归对照版只开观测，不启用生命周期行为修改。
+SCREEN_SESSION_FIX ?= 0
+SCREEN_SETUP_EVIDENCE ?= $(SCREEN_SESSION_FIX)
+ifeq ($(SCREEN_SESSION_FIX),1)
+ifneq ($(SCREEN_SETUP_EVIDENCE),1)
+$(error SCREEN_SESSION_FIX requires SCREEN_SETUP_EVIDENCE=1)
+endif
+SRC_C += ../src/carbox/screen_session.c
+endif
+ifeq ($(SCREEN_SETUP_EVIDENCE),1)
+ifneq ($(MOVE_LAG_PROFILE),1)
+$(error SCREEN_SETUP_EVIDENCE requires MOVE_LAG_PROFILE=1)
+endif
+SRC_C += ../src/carbox/screen_setup_evidence.c
+endif
+GCCFLAGS += -DCONFIG_SCREEN_SESSION_FIX=$(SCREEN_SESSION_FIX) -DCONFIG_SCREEN_SETUP_EVIDENCE=$(SCREEN_SETUP_EVIDENCE)
+ifeq ($(MOVE_LAG_PROFILE),1)
+PC_PROFILER ?= 1
+TOUCH_PATH_PROFILE ?= 1
+TOUCH_PATH_REPORT_DETAIL ?= 0
+# 复用旧 TCP/NCM/USB 统计，MOVE 只负责帧关联，保持唯一 write wrapper。
+SCREEN_BLOCK_PROFILE ?= 1
+SCREEN_TCP_ACK_PROFILE ?= 1
+SCREEN_USB_PROBE ?= 1
+TCP_RECOVERY_TRACE ?= 1
+SRC_C += ../src/carbox/move_lag_diag.c ../src/carbox/http_owner_diag.c ../src/carbox/car_rx_diag.c
+endif
+GCCFLAGS += -DCONFIG_MOVE_LAG_PROFILE=$(MOVE_LAG_PROFILE)
 PC_PROFILER ?= 0
 # Enable the task CPU table separately when collecting diagnostic evidence.
 PC_PROFILER_SELF_REPORT ?= 0
@@ -1572,6 +1606,58 @@ SCREEN_TIMESTAMP_PROFILE ?= 0
 # Generate AirPlay screen wire timestamps from the microsecond hardware system
 # timer. FreeRTOS's 64-bit tick epoch is used only to resolve 32-bit HW wraps.
 SCREEN_HW_TIMESTAMP ?= 1
+# 车机 timing 与 video 共用单调时钟，避免 iAP2 校时令 timing 回复跳变。
+# 仅替换派生库内 AirPlayTimer.o 的导入符号，原厂库保持不变。
+AIRPLAY_TIMER_MONOTONIC ?= 1
+AIRPLAY_TIMER_CLOCK_PROFILE ?= 0
+# 默认保留 timing 原厂起点；video 减去相同整数秒。shared=1 保留上一版 A/B。
+AIRPLAY_TIMER_SHARED_ORIGIN ?= 0
+SCREEN_TIMER_ORIGIN ?= $(AIRPLAY_TIMER_MONOTONIC)
+ifeq ($(SCREEN_TIMER_ORIGIN),1)
+ifneq ($(AIRPLAY_TIMER_MONOTONIC)$(SCREEN_HW_TIMESTAMP),11)
+$(error SCREEN_TIMER_ORIGIN requires AIRPLAY_TIMER_MONOTONIC=1 and SCREEN_HW_TIMESTAMP=1)
+endif
+endif
+# 本帧采时后再填写 header，避免沿用上一帧（尤其长时间空闲前）的时间。
+SCREEN_CURRENT_TIMESTAMP ?= 1
+# v17 原生音频只读观测；不启用旧版音频 wrapper/调速补丁。
+AUDIO_TX_EVIDENCE ?= 0
+ifeq ($(AUDIO_TX_EVIDENCE),1)
+SRC_C += ../src/carbox/audio_tx_evidence.c
+ifneq ($(PC_PROFILER),1)
+$(error AUDIO_TX_EVIDENCE requires PC_PROFILER=1)
+endif
+ifneq ($(filter 1,$(AUDIO_MUSIC_DIAG) $(AUDIO_STREAM_DIAG)),)
+$(error AUDIO_TX_EVIDENCE requires native v17 audio without legacy audio diagnostics)
+endif
+endif
+GCCFLAGS += -DCONFIG_AUDIO_TX_EVIDENCE=$(AUDIO_TX_EVIDENCE)
+AUDIO_TX_EVIDENCE_STAMP := $(OBJ_DIR)/.audio_tx_evidence_$(AUDIO_TX_EVIDENCE)
+$(AUDIO_TX_EVIDENCE_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.audio_tx_evidence_*
+	@touch $@
+../src/carbox/audio_tx_evidence.o ../src/carbox/pc_profiler.o: $(AUDIO_TX_EVIDENCE_STAMP)
+ifeq ($(AIRPLAY_TIMER_MONOTONIC),1)
+ifneq ($(SCREEN_HW_TIMESTAMP),1)
+$(error AIRPLAY_TIMER_MONOTONIC requires SCREEN_HW_TIMESTAMP=1 for the shared media clock)
+endif
+endif
+ifeq ($(AIRPLAY_TIMER_CLOCK_PROFILE),1)
+ifneq ($(AIRPLAY_TIMER_MONOTONIC)$(PC_PROFILER)$(SCREEN_SETUP_EVIDENCE),111)
+$(error AIRPLAY_TIMER_CLOCK_PROFILE requires monotonic fix, PC_PROFILER and SCREEN_SETUP_EVIDENCE)
+endif
+endif
+GCCFLAGS += -DCONFIG_AIRPLAY_TIMER_CLOCK_PROFILE=$(AIRPLAY_TIMER_CLOCK_PROFILE)
+GCCFLAGS += -DCONFIG_AIRPLAY_TIMER_SHARED_ORIGIN=$(AIRPLAY_TIMER_SHARED_ORIGIN)
+GCCFLAGS += -DCONFIG_SCREEN_TIMER_ORIGIN=$(SCREEN_TIMER_ORIGIN)
+GCCFLAGS += -DCONFIG_SCREEN_CURRENT_TIMESTAMP=$(SCREEN_CURRENT_TIMESTAMP)
+MEDIA_CLOCK_STAMP := $(OBJ_DIR)/.media_clock_m$(AIRPLAY_TIMER_MONOTONIC)-p$(AIRPLAY_TIMER_CLOCK_PROFILE)-current$(SCREEN_CURRENT_TIMESTAMP)-origin$(AIRPLAY_TIMER_SHARED_ORIGIN)-video$(SCREEN_TIMER_ORIGIN)
+$(MEDIA_CLOCK_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.media_clock_m*
+	@touch $@
+../src/carbox/screen_hw_timestamp.o ../src/carbox/airplay_timer_clock.o ../src/carbox/pc_profiler.o ../src/carbox/screen_setup_evidence.o: $(MEDIA_CLOCK_STAMP)
 # Keep the generic select() timing probe separate from frame/timestamp
 # profiling. It touches pre-session control sockets and is not needed for the
 # iPhone-NTP to outgoing-wire-NTP comparison.
@@ -1669,7 +1755,8 @@ endif
 # bytes without interpreting the HTTP response.
 AIRPLAY_HID_HTTP_BYPASS ?= 1
 # Synchronize the system wall clock from the first valid iAP2 DeviceTimeUpdate.
-# This arrives before the AirPlay/RTSP session. The vendor handler first applies
+# The vehicle AirPlay session can precede this update: its timing must use
+# a monotonic clock. The vendor handler first applies
 # the iPhone timezone offset, then passes local calendar fields to its callback;
 # synchronize that local wall clock while preserving the original callback.
 IAP2_DEVICE_TIME_SYNC ?= 1
@@ -1721,6 +1808,17 @@ NET_QUEUE_PROFILE ?= 0
 # Make the RX/queue/TX diagnostic switches safe for incremental builds. These
 # options affect both the wrappers and lwIP internals, so changing one must
 # recompile every consumer instead of silently retaining yesterday's objects.
+ifeq ($(MOVE_LAG_PROFILE),1)
+ifneq ($(PC_PROFILER)$(TOUCH_PATH_PROFILE)$(SCREEN_TX_POLL_WAIT),111)
+$(error MOVE_LAG_PROFILE requires PC_PROFILER=1 TOUCH_PATH_PROFILE=1 SCREEN_TX_POLL_WAIT=1)
+endif
+ifeq ($(SCREEN_SELECT_PROFILE),1)
+$(error MOVE_LAG_PROFILE already observes select; disable SCREEN_SELECT_PROFILE)
+endif
+ifneq ($(SCREEN_QUEUE_PROFILE)$(SCREEN_FPS_PROFILE)$(SCREEN_TX_DIRECT_CRYPTO)$(VIDEO_HANDOVER_ZERO_COPY)$(SCREEN_RX_RATE_LIMIT_ACTIVE),00000)
+$(error MOVE_LAG_PROFILE uses native v17 hooks; disable legacy video profiles and rate limiter)
+endif
+endif
 SCREEN_FLOW_PROFILE_STAMP := $(OBJ_DIR)/.screen_flow_profile_q$(SCREEN_QUEUE_PROFILE)-fps$(SCREEN_FPS_PROFILE)-dp$(SCREEN_DATAPATH_PROFILE)-rxlimprof$(SCREEN_RX_RATE_LIMIT_PROFILE)-ingress$(VIDEO_INGRESS_PROFILE)-fmt$(SCREEN_FRAME_FORMAT_PROFILE)-buf$(SCREEN_TCP_BUFFER_PROFILE)-block$(SCREEN_BLOCK_PROFILE)-screenusb$(SCREEN_USB_PROBE)-ack$(SCREEN_TCP_ACK_PROFILE)-stamp$(SCREEN_TIMESTAMP_PROFILE)-hwstamp$(SCREEN_HW_TIMESTAMP)-select$(SCREEN_SELECT_PROFILE)-rxlim$(SCREEN_RX_RATE_LIMIT_ACTIVE)-rxbps$(SCREEN_RX_RATE_LIMIT_BPS)-rxvmax$(SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS)-rxstack$(SCREEN_RX_RATE_LIMIT_TASK_STACK)
 UI_H264_DIAG_STAMP := $(OBJ_DIR)/.ui_h264_diag_$(UI_H264_DIAG)
 $(UI_H264_DIAG_STAMP):
@@ -1733,6 +1831,7 @@ $(SCREEN_FLOW_PROFILE_STAMP):
 	@rm -f $(OBJ_DIR)/.screen_flow_profile_*
 	@touch $@
 ../src/carbox/pc_profiler.o \
+	../src/carbox/move_lag_diag.o \
 	../src/carbox/screen_queue_profiler.o \
 	../src/carbox/screen_rx_rate_limit.o \
 	../src/carbox/screen_rx_stage_profiler.o \
@@ -1750,11 +1849,13 @@ $(SCREEN_FLOW_PROFILE_STAMP):
 # These switches affect several standalone profiler/wrapper objects.  Track
 # them explicitly so a diagnostic override cannot reuse release-mode objects.
 CRYPTO_ENGINE_PROFILE ?= 0
-DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_pc$(PC_PROFILER)-pcreport$(PC_PROFILER_SELF_REPORT)-platform$(PC_PROFILER_PLATFORM_REPORT)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)-touch$(TOUCH_PATH_PROFILE)-aa$(TOUCH_AA_COMMAND)-touchdetail$(TOUCH_PATH_REPORT_DETAIL)-airmutex$(AIRPLAY_MUTEX_PROFILE)-carack$(CAR_ACK_TCP_PROFILE)-iphonerx$(IPHONE_HTTP_RX_PROFILE)-gmttime$(GMT_TIME_PROFILE)-hidpipe$(AIRPLAY_HID_HTTP_PIPELINE_DEPTH)-hidbypass$(AIRPLAY_HID_HTTP_BYPASS)-touchsample$(TOUCH_MOVE_SAMPLE_HZ)-touchframe$(TOUCH_FRAME_PROFILE)-gcd$(GCD_SYNC_PROFILE)-gcdprio$(GCD_WORK_PRIORITY)-audioprio$(AUDIO_DECODER_TASK_PRIORITY)-uisr$(USBH_ISR_TASK_PRIORITY)-umain$(USBH_MAIN_TASK_PRIORITY)-tcpclient$(TCP_CLIENT_PRIORITY)-rxrec$(SCREEN_RX_RECORD_PROFILE)-crypto$(CRYPTO_ENGINE_PROFILE)-rftherm$(RF_THERMAL_USAGE_LOG)
+DIAGNOSTIC_PROFILE_STAMP := $(OBJ_DIR)/.diagnostic_profile_move$(MOVE_LAG_PROFILE)-ss$(SCREEN_SESSION_FIX)-se$(SCREEN_SETUP_EVIDENCE)-pc$(PC_PROFILER)-pcreport$(PC_PROFILER_SELF_REPORT)-platform$(PC_PROFILER_PLATFORM_REPORT)-irq$(IRQ_PROFILE)-audio$(AUDIO_DECODE_PROFILE)-touch$(TOUCH_PATH_PROFILE)-aa$(TOUCH_AA_COMMAND)-touchdetail$(TOUCH_PATH_REPORT_DETAIL)-airmutex$(AIRPLAY_MUTEX_PROFILE)-carack$(CAR_ACK_TCP_PROFILE)-iphonerx$(IPHONE_HTTP_RX_PROFILE)-gmttime$(GMT_TIME_PROFILE)-hidpipe$(AIRPLAY_HID_HTTP_PIPELINE_DEPTH)-hidbypass$(AIRPLAY_HID_HTTP_BYPASS)-touchsample$(TOUCH_MOVE_SAMPLE_HZ)-touchframe$(TOUCH_FRAME_PROFILE)-gcd$(GCD_SYNC_PROFILE)-gcdprio$(GCD_WORK_PRIORITY)-audioprio$(AUDIO_DECODER_TASK_PRIORITY)-uisr$(USBH_ISR_TASK_PRIORITY)-umain$(USBH_MAIN_TASK_PRIORITY)-tcpclient$(TCP_CLIENT_PRIORITY)-rxrec$(SCREEN_RX_RECORD_PROFILE)-crypto$(CRYPTO_ENGINE_PROFILE)-rftherm$(RF_THERMAL_USAGE_LOG)
 $(DIAGNOSTIC_PROFILE_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.diagnostic_profile_*
 	@touch $@
+../src/carbox/move_lag_diag.o ../src/carbox/http_owner_diag.o ../src/carbox/car_rx_diag.o \
+	../src/carbox/screen_tx_probe.o ../src/carbox/usb_hcd_profiler.o: $(DIAGNOSTIC_PROFILE_STAMP)
 # v17 原生输出切换及优先级配置变化必须使相关对象重新编译。
 SCREEN_WRITE_BATCH_STAMP := $(OBJ_DIR)/.screen_write_native_v17-audio$(AUDIO_OUTPUT_TASK_PRIORITY)
 $(SCREEN_WRITE_BATCH_STAMP):
@@ -2200,6 +2301,11 @@ CPPFLAGS += -w
 CPPFLAGS += -Wall -Wpointer-arith -Wundef -Wno-write-strings -Wno-maybe-uninitialized
 
 LFLAGS = 
+ifeq ($(MOVE_LAG_PROFILE),1)
+LFLAGS += -Wl,--wrap=lwip_read -Wl,--wrap=lwip_recvfrom -Wl,--wrap=lwip_connect -Wl,--wrap=lwip_select
+LFLAGS += -Wl,--wrap=AirPlayScreen_SendVideo -Wl,--wrap=lwip_recv
+LFLAGS += -Wl,--wrap=lwip_write -Wl,--wrap=lwip_poll
+endif
 ifeq ($(AUDIO_MUSIC_DIAG),1)
 LFLAGS += -Wl,--wrap=AirPlayAudio_StartAudio -Wl,--wrap=AirPlayAudio_StopAudio \
 	-Wl,--wrap=AirPlayClient_SendMessageTearDown -Wl,--wrap=lib_pcm_exit
@@ -2664,7 +2770,7 @@ $(CARBOX_PAIR_VERIFY_STAMP):
 CARBOX_SCREEN_WAIT_RELOC_PATCH := ../src/carbox/tools/patch_screen_wait_relocation.py
 CARBOX_EVENT_RESPONSE_PATCH := ../src/carbox/tools/patch_airplay_event_response.py
 CARBOX_EVENT_READAHEAD_PATCH := ../src/carbox/tools/patch_airplay_event_readahead.py
-CARBOX_ACCESSORY_PATCH_STAMP := $(OBJ_DIR)/.accessory_patch_v20-native-output-ackcache$(CAR_ACK_RESPONSE_CACHE)-zc$(VIDEO_HANDOVER_ZERO_COPY)-direct$(SCREEN_TX_DIRECT_CRYPTO)-wait$(SCREEN_QUEUE_EVENT_WAIT)-txpoll$(SCREEN_TX_POLL_WAIT)-block$(SCREEN_BLOCK_PROFILE)-readahead$(CAR_EVENT_READAHEAD_FIX)-iap2wait$(IAP2_COND_TIMEDWAIT_FIX)-ackts$(CAR_ACK_TIMESTAMP)
+CARBOX_ACCESSORY_PATCH_STAMP := $(OBJ_DIR)/.accessory_patch_v21-move$(MOVE_LAG_PROFILE)-native-output-ackcache$(CAR_ACK_RESPONSE_CACHE)-zc$(VIDEO_HANDOVER_ZERO_COPY)-direct$(SCREEN_TX_DIRECT_CRYPTO)-wait$(SCREEN_QUEUE_EVENT_WAIT)-txpoll$(SCREEN_TX_POLL_WAIT)-block$(SCREEN_BLOCK_PROFILE)-readahead$(CAR_EVENT_READAHEAD_FIX)-iap2wait$(IAP2_COND_TIMEDWAIT_FIX)-ackts$(CAR_ACK_TIMESTAMP)
 $(CARBOX_ACCESSORY_PATCH_STAMP):
 	@mkdir -p $(OBJ_DIR)
 	@rm -f $(OBJ_DIR)/.accessory_patch_*
@@ -2805,7 +2911,7 @@ $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
 	@set -e; \
 		tmp_archive="$@.pair.tmp"; \
 		trap 'rm -f "$$tmp_archive"' 0; \
-		SCREEN_TX_POLL_TIMEOUT_MS=$(SCREEN_TX_POLL_TIMEOUT_MS) sh $(CARBOX_VIDEO_HANDOVER_PATCH) \
+		MOVE_LAG_PROFILE=$(MOVE_LAG_PROFILE) SCREEN_TX_POLL_TIMEOUT_MS=$(SCREEN_TX_POLL_TIMEOUT_MS) sh $(CARBOX_VIDEO_HANDOVER_PATCH) \
 			accessory-wait \
 			$(AR) $(OBJCOPY) $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) "$$tmp_archive" \
 			"$(if $(filter 1,$(SCREEN_TX_POLL_WAIT)),AirPlayScreen.o) $(if $(filter 1,$(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX)),AirPlayEvent.o) $(if $(filter 1,$(IAP2_COND_TIMEDWAIT_FIX)),iAP2Ctrl.o)" \
@@ -2845,7 +2951,7 @@ $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE): $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH) $(CARBOX_SCREEN_WAIT_RELOC_PATCH) \
 		$(CARBOX_EVENT_READAHEAD_PATCH) \
 		$(CARBOX_ACCESSORY_PATCH_STAMP)
-	SCREEN_TX_POLL_TIMEOUT_MS=$(SCREEN_TX_POLL_TIMEOUT_MS) sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
+	MOVE_LAG_PROFILE=$(MOVE_LAG_PROFILE) SCREEN_TX_POLL_TIMEOUT_MS=$(SCREEN_TX_POLL_TIMEOUT_MS) sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
 		$(CARBOX_ACCESSORY2_VENDOR_ARCHIVE) $@ \
 		"AirPlayScreen.o $(if $(filter 1,$(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX)),AirPlayEvent.o) $(if $(filter 1,$(IAP2_COND_TIMEDWAIT_FIX)),iAP2Ctrl.o)" \
 		$(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX) $(CAR_ACK_TIMESTAMP) $(SCREEN_TX_POLL_WAIT)
@@ -2854,12 +2960,12 @@ endif
 ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW)),)
 $(CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE): $(CARBOX_SYSTEMLIB_VENDOR_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH)
-	SCREEN_TX_POLL_TIMEOUT_MS=$(SCREEN_TX_POLL_TIMEOUT_MS) sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
+	MOVE_LAG_PROFILE=$(MOVE_LAG_PROFILE) SCREEN_TX_POLL_TIMEOUT_MS=$(SCREEN_TX_POLL_TIMEOUT_MS) sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
 		$(CARBOX_SYSTEMLIB_VENDOR_ARCHIVE) $@ "Accessory.o Image.o" 0 0 0 0
 application: $(CARBOX_SYSTEMLIB_PRIVATE_MEM_ARCHIVE)
 $(CARBOX_UILIB_PRIVATE_MEM_ARCHIVE): $(CARBOX_UILIB_VENDOR_ARCHIVE) \
 		$(CARBOX_VIDEO_HANDOVER_PATCH)
-	SCREEN_TX_POLL_TIMEOUT_MS=$(SCREEN_TX_POLL_TIMEOUT_MS) sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
+	MOVE_LAG_PROFILE=$(MOVE_LAG_PROFILE) SCREEN_TX_POLL_TIMEOUT_MS=$(SCREEN_TX_POLL_TIMEOUT_MS) sh $(CARBOX_VIDEO_HANDOVER_PATCH) private-memory $(AR) $(OBJCOPY) \
 		$(CARBOX_UILIB_VENDOR_ARCHIVE) $@ "Surface.o ImageView.o" 0 0 0 0
 application: $(CARBOX_UILIB_PRIVATE_MEM_ARCHIVE)
 endif
@@ -2980,18 +3086,65 @@ LIBFLAGS += $(CARBOX_FDK_AAC_ARCHIVE)
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_init.a
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_zlib.a
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_AndroidAuto.a
-ifeq ($(AUDIO_MUSIC_DIAG),1)
-LIBFLAGS += $(CARBOX_MUSIC_OUTPUT_ARCHIVE)
-else ifeq ($(AUDIO_STREAM_DIAG),1)
-LIBFLAGS += $(CARBOX_ACCESSORY2_PCM_TX_DIAG_ARCHIVE)
-else ifeq ($(CARBOX_RESOURCE_450_COMPAT),1)
-LIBFLAGS += $(CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE)
-else ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
-LIBFLAGS += $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE)
-else ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO) $(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX) $(SCREEN_TX_POLL_WAIT)),)
-LIBFLAGS += $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
+ifeq ($(SCREEN_SETUP_EVIDENCE),1)
+ifneq ($(CARBOX_RESOURCE_450_COMPAT),1)
+$(error SCREEN_SETUP_EVIDENCE requires the reviewed resource450 archive)
+endif
+ifneq ($(filter 1,$(AUDIO_MUSIC_DIAG) $(AUDIO_STREAM_DIAG) $(CARBOX_MODE_DIAG)),)
+$(error SCREEN_SETUP_EVIDENCE test image cannot combine alternate accessory diagnostics)
+endif
+ifeq ($(SCREEN_SESSION_FIX),1)
+CARBOX_SCREEN_SESSION_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/lib_Accessory2_screen_session.a
+CARBOX_SCREEN_PATCH_MODE :=
 else
-LIBFLAGS += $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE)
+CARBOX_SCREEN_SESSION_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/lib_Accessory2_screen_evidence.a
+CARBOX_SCREEN_PATCH_MODE := --evidence-only
+endif
+$(CARBOX_SCREEN_SESSION_ARCHIVE): $(CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE) ../src/carbox/tools/patch_screen_session.py
+	python3 ../src/carbox/tools/patch_screen_session.py $(AR) $(OBJCOPY) $< $@ $(CARBOX_SCREEN_PATCH_MODE)
+application: $(CARBOX_SCREEN_SESSION_ARCHIVE)
+CARBOX_ACCESSORY2_CLOCK_BASE := $(CARBOX_SCREEN_SESSION_ARCHIVE)
+else ifeq ($(AUDIO_MUSIC_DIAG),1)
+CARBOX_ACCESSORY2_CLOCK_BASE := $(CARBOX_MUSIC_OUTPUT_ARCHIVE)
+else ifeq ($(AUDIO_STREAM_DIAG),1)
+CARBOX_ACCESSORY2_CLOCK_BASE := $(CARBOX_ACCESSORY2_PCM_TX_DIAG_ARCHIVE)
+else ifeq ($(CARBOX_RESOURCE_450_COMPAT),1)
+CARBOX_ACCESSORY2_CLOCK_BASE := $(CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE)
+else ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
+CARBOX_ACCESSORY2_CLOCK_BASE := $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE)
+else ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO) $(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX) $(SCREEN_TX_POLL_WAIT)),)
+CARBOX_ACCESSORY2_CLOCK_BASE := $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
+else
+CARBOX_ACCESSORY2_CLOCK_BASE := $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE)
+endif
+# 最后一级派生：覆盖当前实际选中的 Accessory2 版本，避免诊断分支漏掉修复。
+ifeq ($(AIRPLAY_TIMER_MONOTONIC),1)
+CARBOX_ACCESSORY2_CLOCK_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/$(notdir $(CARBOX_ACCESSORY2_CLOCK_BASE:.a=))_mono_p$(AIRPLAY_TIMER_CLOCK_PROFILE).a
+$(CARBOX_ACCESSORY2_CLOCK_ARCHIVE): $(CARBOX_ACCESSORY2_CLOCK_BASE) ../src/carbox/tools/patch_airplay_timer_clock.py ../src/carbox/tools/patch_screen_session.py
+	python3 ../src/carbox/tools/patch_airplay_timer_clock.py $(AR) $(OBJCOPY) $< $@ $(AIRPLAY_TIMER_CLOCK_PROFILE)
+application: $(CARBOX_ACCESSORY2_CLOCK_ARCHIVE)
+CARBOX_ACCESSORY2_TIMESTAMP_BASE := $(CARBOX_ACCESSORY2_CLOCK_ARCHIVE)
+else
+CARBOX_ACCESSORY2_TIMESTAMP_BASE := $(CARBOX_ACCESSORY2_CLOCK_BASE)
+endif
+# 必须在 session/evidence 等派生步骤之后处理，独立于 profile 开关。
+ifeq ($(SCREEN_CURRENT_TIMESTAMP),1)
+CARBOX_ACCESSORY2_TIMESTAMP_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/$(notdir $(CARBOX_ACCESSORY2_TIMESTAMP_BASE:.a=))_current_ts.a
+$(CARBOX_ACCESSORY2_TIMESTAMP_ARCHIVE): $(CARBOX_ACCESSORY2_TIMESTAMP_BASE) ../src/carbox/tools/patch_screen_current_timestamp.py ../src/carbox/tools/patch_screen_session.py
+	python3 ../src/carbox/tools/patch_screen_current_timestamp.py $(AR) $< $@
+application: $(CARBOX_ACCESSORY2_TIMESTAMP_ARCHIVE)
+CARBOX_ACCESSORY2_AUDIO_BASE := $(CARBOX_ACCESSORY2_TIMESTAMP_ARCHIVE)
+else
+CARBOX_ACCESSORY2_AUDIO_BASE := $(CARBOX_ACCESSORY2_TIMESTAMP_BASE)
+endif
+ifeq ($(AUDIO_TX_EVIDENCE),1)
+CARBOX_ACCESSORY2_AUDIO_EVIDENCE := $(CARBOX_CARPLAY_DERIVED_DIR)/$(notdir $(CARBOX_ACCESSORY2_AUDIO_BASE:.a=))_audio_evidence.a
+$(CARBOX_ACCESSORY2_AUDIO_EVIDENCE): $(CARBOX_ACCESSORY2_AUDIO_BASE) ../src/carbox/tools/patch_audio_tx_evidence.py ../src/carbox/tools/patch_screen_session.py
+	python3 ../src/carbox/tools/patch_audio_tx_evidence.py $(AR) $(OBJCOPY) $< $@
+application: $(CARBOX_ACCESSORY2_AUDIO_EVIDENCE)
+LIBFLAGS += $(CARBOX_ACCESSORY2_AUDIO_EVIDENCE)
+else
+LIBFLAGS += $(CARBOX_ACCESSORY2_AUDIO_BASE)
 endif
 LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_jpeg.a
 # LIBFLAGS += $(CARBOX_SMART_CARPLAY_LIB_DIR)/lib_usbdev.a
@@ -3525,6 +3678,11 @@ endif
 
 # Trace state extends only the tail of tcp_pcb. Rebuild all source consumers
 # when toggling it, including memp.c, so PCB allocation sizes cannot go stale.
+../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp.o \
+../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_out.o \
+../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_recovery.o \
+../../../component/common/network/lwip/lwip_v2.1.2/src/core/tcp_output_wait.o: $(DIAGNOSTIC_PROFILE_STAMP)
+
 TCP_RECOVERY_TRACE_STAMP := $(OBJ_DIR)/.tcp_recovery_trace_$(TCP_RECOVERY_TRACE)
 $(TCP_RECOVERY_TRACE_STAMP):
 	@mkdir -p $(OBJ_DIR)
@@ -3556,3 +3714,7 @@ $(AUDIO_DIAG_LOG_STAMP):
 ../src/carbox/audio_nav_rx_diag.o ../src/carbox/audio_nav_continuity.o \
 ../src/carbox/audio_nav_playout.o ../src/carbox/nav_udp_diag.o \
 ../src/carbox/wlan_recvframe_diag.o: $(AUDIO_DIAG_LOG_STAMP) ../src/carbox/audio_diag_log.h
+
+ifeq ($(MOVE_LAG_PROFILE),1)
+LFLAGS += -Wl,--wrap=HTTPClientInvalidate
+endif

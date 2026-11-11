@@ -154,7 +154,13 @@ static void screen_tx_max(uint32_t *value, uint32_t sample)
 	if (sample > *value) *value = sample;
 }
 
+/* MOVE 共用旧观测实现，只保留一个 linker wrapper；底层 write 只调用一次。
+ * MOVE 已有帧 ID/慢事件，本文件只汇总 TCP/NCM，不启用旧版逐帧打印。 */
+#if CONFIG_MOVE_LAG_PROFILE
+ssize_t carbox_screen_tx_probe_write(int socket, const void *buffer, size_t bytes)
+#else
 ssize_t __wrap_lwip_write(int socket, const void *buffer, size_t bytes)
+#endif
 {
 	ssize_t result;
 	uint32_t start_us;

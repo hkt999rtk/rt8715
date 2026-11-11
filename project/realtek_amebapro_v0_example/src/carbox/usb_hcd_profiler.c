@@ -687,7 +687,27 @@ void usb_hcd_profiler_isr_sema_give(int success, int task_woken)
 	(void)task_woken;
 }
 
-void usb_hcd_profiler_report(uint32_t sequence) { (void)sequence; }
+/* 原轻量 USB 计数由 MOVE 共用统计线程输出，避免另起任务或重复取样。
+ * complete 表示观察到 URB 非 IDLE，并不保证是成功传输；保留旧字段语义。
+ * 周期计数器差值用于短传输，长于 DWT 回绕周期的延迟不能据此判断。 */
+void usb_hcd_profiler_report(uint32_t sequence)
+{
+#if CONFIG_MOVE_LAG_PROFILE
+    usb_screen_probe_stats_t usb;
+    uint32_t cycles_per_us = SystemCoreClock / 1000000U;
+    usb_screen_probe_snapshot(&usb);
+    rt_printf("[SCREENUSB][%lu] usb submit/error/complete=%lu/%lu/%lu "
+              "pending now/max=%lu/%lu complete_us avg/max=%lu/%lu\r\n",
+              (unsigned long)sequence, (unsigned long)usb.submits,
+              (unsigned long)usb.submit_errors, (unsigned long)usb.completions,
+              (unsigned long)usb.pending_now, (unsigned long)usb.pending_max,
+              (unsigned long)(cycles_per_us && usb.completions ?
+                  usb.completion_cycles / cycles_per_us / usb.completions : 0U),
+              (unsigned long)(cycles_per_us ? usb.completion_cycles_max / cycles_per_us : 0U));
+#else
+    (void)sequence;
+#endif
+}
 void usb_tx_lifetime_ncm_begin(const void *source, uint32_t length)
 {
 	(void)source;
