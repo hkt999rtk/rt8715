@@ -835,8 +835,6 @@ UI_H264_DIAG ?= 0
 ifeq ($(UI_H264_DIAG),1)
 SRC_C += ../src/carbox/ui_h264_handover_diag.c
 endif
-SRC_C += ../src/carbox/screen_hw_timestamp.c
-SRC_C += ../src/carbox/airplay_timer_clock.c
 SRC_C += ../src/carbox/screen_rx_record_profiler.c
 SRC_C += ../src/carbox/screen_rx_stage_profiler.c
 # The direct-crypto-disabled object supplies the stage-report no-op itself.
@@ -1600,26 +1598,12 @@ TCP_OWNED_AGE_PROFILE ?= 0
 # switchable.  The normal screen timing/backlog profiler does not need them.
 SCREEN_FRAME_FORMAT_PROFILE ?= 0
 SCREEN_TCP_BUFFER_PROFILE ?= 0
-# When SCREEN_QUEUE_PROFILE is enabled, correlate the local tick used to
-# generate each outgoing screen NTP timestamp with that frame's receive time.
-SCREEN_TIMESTAMP_PROFILE ?= 0
-# Generate AirPlay screen wire timestamps from the microsecond hardware system
-# timer. FreeRTOS's 64-bit tick epoch is used only to resolve 32-bit HW wraps.
-SCREEN_HW_TIMESTAMP ?= 1
-# 车机 timing 与 video 共用单调时钟，避免 iAP2 校时令 timing 回复跳变。
-# 仅替换派生库内 AirPlayTimer.o 的导入符号，原厂库保持不变。
-AIRPLAY_TIMER_MONOTONIC ?= 1
-AIRPLAY_TIMER_CLOCK_PROFILE ?= 0
-# 默认保留 timing 原厂起点；video 减去相同整数秒。shared=1 保留上一版 A/B。
-AIRPLAY_TIMER_SHARED_ORIGIN ?= 0
-SCREEN_TIMER_ORIGIN ?= $(AIRPLAY_TIMER_MONOTONIC)
-ifeq ($(SCREEN_TIMER_ORIGIN),1)
-ifneq ($(AIRPLAY_TIMER_MONOTONIC)$(SCREEN_HW_TIMESTAMP),11)
-$(error SCREEN_TIMER_ORIGIN requires AIRPLAY_TIMER_MONOTONIC=1 and SCREEN_HW_TIMESTAMP=1)
+# v18 已在客户 AirPlayTimer/Screen/MediaClock 中实现全部时间修正。
+# 拒绝旧实验开关，避免把二进制补丁或失效的时钟探针误用到新库。
+ifneq ($(filter 1,$(SCREEN_TIMESTAMP_PROFILE) $(SCREEN_HW_TIMESTAMP) $(AIRPLAY_TIMER_MONOTONIC) $(AIRPLAY_TIMER_CLOCK_PROFILE) $(AIRPLAY_TIMER_SHARED_ORIGIN) $(SCREEN_TIMER_ORIGIN) $(SCREEN_CURRENT_TIMESTAMP)),)
+$(error v18 uses native AirPlayMediaClock; legacy timestamp wrappers/patches/profiles are retired)
 endif
-endif
-# 本帧采时后再填写 header，避免沿用上一帧（尤其长时间空闲前）的时间。
-SCREEN_CURRENT_TIMESTAMP ?= 1
+SCREEN_TIMESTAMP_PROFILE := 0
 # v17 原生音频只读观测；不启用旧版音频 wrapper/调速补丁。
 AUDIO_TX_EVIDENCE ?= 0
 ifeq ($(AUDIO_TX_EVIDENCE),1)
@@ -1638,26 +1622,6 @@ $(AUDIO_TX_EVIDENCE_STAMP):
 	@rm -f $(OBJ_DIR)/.audio_tx_evidence_*
 	@touch $@
 ../src/carbox/audio_tx_evidence.o ../src/carbox/pc_profiler.o: $(AUDIO_TX_EVIDENCE_STAMP)
-ifeq ($(AIRPLAY_TIMER_MONOTONIC),1)
-ifneq ($(SCREEN_HW_TIMESTAMP),1)
-$(error AIRPLAY_TIMER_MONOTONIC requires SCREEN_HW_TIMESTAMP=1 for the shared media clock)
-endif
-endif
-ifeq ($(AIRPLAY_TIMER_CLOCK_PROFILE),1)
-ifneq ($(AIRPLAY_TIMER_MONOTONIC)$(PC_PROFILER)$(SCREEN_SETUP_EVIDENCE),111)
-$(error AIRPLAY_TIMER_CLOCK_PROFILE requires monotonic fix, PC_PROFILER and SCREEN_SETUP_EVIDENCE)
-endif
-endif
-GCCFLAGS += -DCONFIG_AIRPLAY_TIMER_CLOCK_PROFILE=$(AIRPLAY_TIMER_CLOCK_PROFILE)
-GCCFLAGS += -DCONFIG_AIRPLAY_TIMER_SHARED_ORIGIN=$(AIRPLAY_TIMER_SHARED_ORIGIN)
-GCCFLAGS += -DCONFIG_SCREEN_TIMER_ORIGIN=$(SCREEN_TIMER_ORIGIN)
-GCCFLAGS += -DCONFIG_SCREEN_CURRENT_TIMESTAMP=$(SCREEN_CURRENT_TIMESTAMP)
-MEDIA_CLOCK_STAMP := $(OBJ_DIR)/.media_clock_m$(AIRPLAY_TIMER_MONOTONIC)-p$(AIRPLAY_TIMER_CLOCK_PROFILE)-current$(SCREEN_CURRENT_TIMESTAMP)-origin$(AIRPLAY_TIMER_SHARED_ORIGIN)-video$(SCREEN_TIMER_ORIGIN)
-$(MEDIA_CLOCK_STAMP):
-	@mkdir -p $(OBJ_DIR)
-	@rm -f $(OBJ_DIR)/.media_clock_m*
-	@touch $@
-../src/carbox/screen_hw_timestamp.o ../src/carbox/airplay_timer_clock.o ../src/carbox/pc_profiler.o ../src/carbox/screen_setup_evidence.o: $(MEDIA_CLOCK_STAMP)
 # Keep the generic select() timing probe separate from frame/timestamp
 # profiling. It touches pre-session control sockets and is not needed for the
 # iPhone-NTP to outgoing-wire-NTP comparison.
@@ -1819,7 +1783,7 @@ ifneq ($(SCREEN_QUEUE_PROFILE)$(SCREEN_FPS_PROFILE)$(SCREEN_TX_DIRECT_CRYPTO)$(V
 $(error MOVE_LAG_PROFILE uses native v17 hooks; disable legacy video profiles and rate limiter)
 endif
 endif
-SCREEN_FLOW_PROFILE_STAMP := $(OBJ_DIR)/.screen_flow_profile_q$(SCREEN_QUEUE_PROFILE)-fps$(SCREEN_FPS_PROFILE)-dp$(SCREEN_DATAPATH_PROFILE)-rxlimprof$(SCREEN_RX_RATE_LIMIT_PROFILE)-ingress$(VIDEO_INGRESS_PROFILE)-fmt$(SCREEN_FRAME_FORMAT_PROFILE)-buf$(SCREEN_TCP_BUFFER_PROFILE)-block$(SCREEN_BLOCK_PROFILE)-screenusb$(SCREEN_USB_PROBE)-ack$(SCREEN_TCP_ACK_PROFILE)-stamp$(SCREEN_TIMESTAMP_PROFILE)-hwstamp$(SCREEN_HW_TIMESTAMP)-select$(SCREEN_SELECT_PROFILE)-rxlim$(SCREEN_RX_RATE_LIMIT_ACTIVE)-rxbps$(SCREEN_RX_RATE_LIMIT_BPS)-rxvmax$(SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS)-rxstack$(SCREEN_RX_RATE_LIMIT_TASK_STACK)
+SCREEN_FLOW_PROFILE_STAMP := $(OBJ_DIR)/.screen_flow_profile_q$(SCREEN_QUEUE_PROFILE)-fps$(SCREEN_FPS_PROFILE)-dp$(SCREEN_DATAPATH_PROFILE)-rxlimprof$(SCREEN_RX_RATE_LIMIT_PROFILE)-ingress$(VIDEO_INGRESS_PROFILE)-fmt$(SCREEN_FRAME_FORMAT_PROFILE)-buf$(SCREEN_TCP_BUFFER_PROFILE)-block$(SCREEN_BLOCK_PROFILE)-screenusb$(SCREEN_USB_PROBE)-ack$(SCREEN_TCP_ACK_PROFILE)-stamp$(SCREEN_TIMESTAMP_PROFILE)-nativeclock18-select$(SCREEN_SELECT_PROFILE)-rxlim$(SCREEN_RX_RATE_LIMIT_ACTIVE)-rxbps$(SCREEN_RX_RATE_LIMIT_BPS)-rxvmax$(SCREEN_RX_RATE_LIMIT_VALVE_MAX_BPS)-rxstack$(SCREEN_RX_RATE_LIMIT_TASK_STACK)
 UI_H264_DIAG_STAMP := $(OBJ_DIR)/.ui_h264_diag_$(UI_H264_DIAG)
 $(UI_H264_DIAG_STAMP):
 	@mkdir -p $(OBJ_DIR)
@@ -1839,7 +1803,6 @@ $(SCREEN_FLOW_PROFILE_STAMP):
 	../src/carbox/screen_tx_probe.o \
 	../src/carbox/video_handover_zero_copy.o \
 	../src/carbox/chacha_key_alias_fix.o \
-	../src/carbox/screen_hw_timestamp.o \
 	../src/carbox/large_memcpy_gdma.o \
 	../../../component/common/network/lwip/lwip_v2.1.2/src/api/api_msg.o \
 	../../../component/common/network/lwip/lwip_v2.1.2/src/api/sockets.o \
@@ -2220,7 +2183,6 @@ GCCFLAGS += -DCONFIG_TCP_OWNED_AGE_PROFILE=$(TCP_OWNED_AGE_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_FRAME_FORMAT_PROFILE=$(SCREEN_FRAME_FORMAT_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TCP_BUFFER_PROFILE=$(SCREEN_TCP_BUFFER_PROFILE)
 GCCFLAGS += -DCONFIG_SCREEN_TIMESTAMP_PROFILE=$(SCREEN_TIMESTAMP_PROFILE)
-GCCFLAGS += -DCONFIG_SCREEN_HW_TIMESTAMP=$(SCREEN_HW_TIMESTAMP)
 GCCFLAGS += -DCONFIG_USB_HCD_PROFILE=$(USB_HCD_PROFILE)
 GCCFLAGS += -DCONFIG_USB_HCD_CHANNEL_PROFILE=$(USB_HCD_CHANNEL_PROFILE)
 GCCFLAGS += -DCONFIG_USB_NCM_RX_PROFILE=$(USB_NCM_RX_PROFILE)
@@ -2426,9 +2388,6 @@ LFLAGS += -Wl,--wrap=lwip_recv -Wl,--wrap=lwip_write
 ifeq ($(SCREEN_SELECT_PROFILE),1)
 LFLAGS += -Wl,--wrap=lwip_select
 endif
-endif
-ifneq ($(filter 1,$(SCREEN_TIMESTAMP_PROFILE) $(SCREEN_HW_TIMESTAMP)),)
-LFLAGS += -Wl,--wrap=UpTicksToNTP
 endif
 ifeq ($(SCREEN_RX_RATE_LIMIT_ACTIVE),1)
 ifeq ($(SCREEN_QUEUE_PROFILE),0)
@@ -3103,40 +3062,22 @@ endif
 $(CARBOX_SCREEN_SESSION_ARCHIVE): $(CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE) ../src/carbox/tools/patch_screen_session.py
 	python3 ../src/carbox/tools/patch_screen_session.py $(AR) $(OBJCOPY) $< $@ $(CARBOX_SCREEN_PATCH_MODE)
 application: $(CARBOX_SCREEN_SESSION_ARCHIVE)
-CARBOX_ACCESSORY2_CLOCK_BASE := $(CARBOX_SCREEN_SESSION_ARCHIVE)
+CARBOX_ACCESSORY2_MEDIA_BASE := $(CARBOX_SCREEN_SESSION_ARCHIVE)
 else ifeq ($(AUDIO_MUSIC_DIAG),1)
-CARBOX_ACCESSORY2_CLOCK_BASE := $(CARBOX_MUSIC_OUTPUT_ARCHIVE)
+CARBOX_ACCESSORY2_MEDIA_BASE := $(CARBOX_MUSIC_OUTPUT_ARCHIVE)
 else ifeq ($(AUDIO_STREAM_DIAG),1)
-CARBOX_ACCESSORY2_CLOCK_BASE := $(CARBOX_ACCESSORY2_PCM_TX_DIAG_ARCHIVE)
+CARBOX_ACCESSORY2_MEDIA_BASE := $(CARBOX_ACCESSORY2_PCM_TX_DIAG_ARCHIVE)
 else ifeq ($(CARBOX_RESOURCE_450_COMPAT),1)
-CARBOX_ACCESSORY2_CLOCK_BASE := $(CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE)
+CARBOX_ACCESSORY2_MEDIA_BASE := $(CARBOX_ACCESSORY2_RESOURCE450_ARCHIVE)
 else ifneq ($(filter 1,$(CHACHA_VENDOR_PRIVATE_MEM) $(CHACHA_VENDOR_PRIVATE_SW) $(CHACHA_PRE_RX_VENDOR)),)
-CARBOX_ACCESSORY2_CLOCK_BASE := $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE)
+CARBOX_ACCESSORY2_MEDIA_BASE := $(CARBOX_ACCESSORY2_PRIVATE_MEM_ARCHIVE)
 else ifneq ($(filter 1,$(VIDEO_HANDOVER_ZERO_COPY) $(SCREEN_TX_DIRECT_CRYPTO) $(SCREEN_QUEUE_EVENT_WAIT) $(CAR_ACK_RESPONSE_CACHE) $(CAR_EVENT_READAHEAD_FIX) $(IAP2_COND_TIMEDWAIT_FIX) $(SCREEN_TX_POLL_WAIT)),)
-CARBOX_ACCESSORY2_CLOCK_BASE := $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
+CARBOX_ACCESSORY2_MEDIA_BASE := $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
 else
-CARBOX_ACCESSORY2_CLOCK_BASE := $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE)
+CARBOX_ACCESSORY2_MEDIA_BASE := $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE)
 endif
-# 最后一级派生：覆盖当前实际选中的 Accessory2 版本，避免诊断分支漏掉修复。
-ifeq ($(AIRPLAY_TIMER_MONOTONIC),1)
-CARBOX_ACCESSORY2_CLOCK_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/$(notdir $(CARBOX_ACCESSORY2_CLOCK_BASE:.a=))_mono_p$(AIRPLAY_TIMER_CLOCK_PROFILE).a
-$(CARBOX_ACCESSORY2_CLOCK_ARCHIVE): $(CARBOX_ACCESSORY2_CLOCK_BASE) ../src/carbox/tools/patch_airplay_timer_clock.py ../src/carbox/tools/patch_screen_session.py
-	python3 ../src/carbox/tools/patch_airplay_timer_clock.py $(AR) $(OBJCOPY) $< $@ $(AIRPLAY_TIMER_CLOCK_PROFILE)
-application: $(CARBOX_ACCESSORY2_CLOCK_ARCHIVE)
-CARBOX_ACCESSORY2_TIMESTAMP_BASE := $(CARBOX_ACCESSORY2_CLOCK_ARCHIVE)
-else
-CARBOX_ACCESSORY2_TIMESTAMP_BASE := $(CARBOX_ACCESSORY2_CLOCK_BASE)
-endif
-# 必须在 session/evidence 等派生步骤之后处理，独立于 profile 开关。
-ifeq ($(SCREEN_CURRENT_TIMESTAMP),1)
-CARBOX_ACCESSORY2_TIMESTAMP_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/$(notdir $(CARBOX_ACCESSORY2_TIMESTAMP_BASE:.a=))_current_ts.a
-$(CARBOX_ACCESSORY2_TIMESTAMP_ARCHIVE): $(CARBOX_ACCESSORY2_TIMESTAMP_BASE) ../src/carbox/tools/patch_screen_current_timestamp.py ../src/carbox/tools/patch_screen_session.py
-	python3 ../src/carbox/tools/patch_screen_current_timestamp.py $(AR) $< $@
-application: $(CARBOX_ACCESSORY2_TIMESTAMP_ARCHIVE)
-CARBOX_ACCESSORY2_AUDIO_BASE := $(CARBOX_ACCESSORY2_TIMESTAMP_ARCHIVE)
-else
-CARBOX_ACCESSORY2_AUDIO_BASE := $(CARBOX_ACCESSORY2_TIMESTAMP_BASE)
-endif
+# v18 时间修正已经在客户库内完成，不再派生 mono/current_ts archive。
+CARBOX_ACCESSORY2_AUDIO_BASE := $(CARBOX_ACCESSORY2_MEDIA_BASE)
 ifeq ($(AUDIO_TX_EVIDENCE),1)
 CARBOX_ACCESSORY2_AUDIO_EVIDENCE := $(CARBOX_CARPLAY_DERIVED_DIR)/$(notdir $(CARBOX_ACCESSORY2_AUDIO_BASE:.a=))_audio_evidence.a
 $(CARBOX_ACCESSORY2_AUDIO_EVIDENCE): $(CARBOX_ACCESSORY2_AUDIO_BASE) ../src/carbox/tools/patch_audio_tx_evidence.py ../src/carbox/tools/patch_screen_session.py
@@ -3577,7 +3518,7 @@ $(DTCM_O): %.o : %.c
 # header.  The empty target lets those objects rebuild once without restoring
 # the header or any timestamp-altering code; their regenerated .d files then
 # drop the dependency.
-../src/carbox/screen_timestamp_rebase.h:
+../src/carbox/screen_timestamp_rebase.h ../src/carbox/airplay_timer_clock.h ../src/carbox/screen_hw_timestamp.h:
 	@:
 
 -include $(DEPENDENCY_LIST)

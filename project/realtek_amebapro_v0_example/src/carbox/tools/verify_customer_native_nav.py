@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""校验 v17 原生导航与发送策略对象，拒绝未知版本。"""
+"""校验 v18 原生导航与发送策略对象，拒绝未知版本。"""
 import hashlib
 from pathlib import Path
 import subprocess
@@ -15,7 +15,11 @@ EXPECTED = {
     ('lib_Accessory2.a', 'AirPlayAudio.o'):
         'acfb4ed06564cc3443dd7453101eb59a2550ebd9cbb45644a09a75207b67d43e',
     ('lib_Accessory2.a', 'AirPlayScreen.o'):
-        '6bf83ca04f71ab01f41f99a816734bab09e2b4aea3c358e4a48c96f7c4c25f96',
+        'e01a7d141a9b68443a175160041465b330e56eab0417d8e6c0846559413c2399',
+    ('lib_Accessory2.a', 'AirPlayTimer.o'):
+        'efb9d89938b8a6856b38cdfde418381c74b0dc164939ee6308efce6224976f64',
+    ('lib_Accessory2.a', 'AirPlayMediaClock.o'):
+        '4f6645a25c9717c507e2704d93b039a112b21e617b10c5177a6f0fff56391e38',
 }
 
 def main(ar, directory):
@@ -23,7 +27,7 @@ def main(ar, directory):
         blob = subprocess.check_output([ar, "p", str(Path(directory) / archive), member])
         if hashlib.sha256(blob).hexdigest() != expected:
             raise SystemExit("Customer native navigation: re-audit required: " + member)
-    print("Customer v17 native navigation / pacing / priority / 4KB output: verified")
+    print("Customer v18 native navigation / pacing / priority / 4KB output / native media clock: verified")
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:

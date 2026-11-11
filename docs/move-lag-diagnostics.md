@@ -1,6 +1,12 @@
 # 触控与画面延迟测试版
 
-## 2026-11-11 发布状态
+## 当前版本：客户 v18
+
+v18 已原生实现共享媒体时钟和当前帧时间戳，SDK 时间戳 wrapper／patch 已移除。
+集成说明、升级设置格式变化及新固件 hash 见 [v18 集成检查](carplay-app18-integration-20261111.md)。
+下文为 v17 调试与发布记录，其中旧 timestamp 开关不再适用于当前构建。
+
+## 2026-11-11 v17 发布记录
 
 客户已验证 video 拖动及 audio 恢复正常。默认构建关闭 `MOVE_LAG_PROFILE`、
 `SCREEN_SETUP_EVIDENCE`、`AIRPLAY_TIMER_CLOCK_PROFILE`、`AUDIO_TX_EVIDENCE`，

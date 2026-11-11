@@ -36,7 +36,7 @@ class ScreenTxPollPatchTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("unrecognized normal-frame layout", result.stderr)
 
-    def test_v17_native_output_and_quiet_log_only(self):
+    def test_v18_native_output_and_quiet_log_only(self):
         from test_patch_airplay_music_output import elf_object
         with tempfile.TemporaryDirectory() as directory:
             archive = pathlib.Path(directory) / "Accessory2_mono.a"
@@ -54,7 +54,7 @@ class ScreenTxPollPatchTest(unittest.TestCase):
             for name in before:
                 if name.startswith(".text"):
                     self.assertEqual(before[name], after[name], name)
-            expected = {0xE2: "carbox_screen_block_quiet"}
+            expected = {0xD4: "carbox_screen_block_quiet"}
             normal = ".rel.text.AirPlayScreen_SendScreenNormalFrame"
             for name, records in old_relocs.items():
                 updated = [(pc, kind, expected.get(pc, target))
@@ -63,9 +63,9 @@ class ScreenTxPollPatchTest(unittest.TestCase):
                 self.assertEqual(updated, new_relocs[name], name)
             self.assertNotIn("carbox_screen_tx_poll_wait", symbols)
             self.assertNotIn("carbox_screen_tcp_write", symbols)
-            # v17 的 write/4KB/RTO 保持客户原始代码和重定位。
-            self.assertIn((0xCE, 10, "lwip_write"), new_relocs[normal])
-            self.assertIn((0xBA, 10, "lwip_usb_screen_rto_enable"), new_relocs[normal])
+            # v18 的 write/4KB/RTO 保持客户原始代码和重定位。
+            self.assertIn((0xC0, 10, "lwip_write"), new_relocs[normal])
+            self.assertIn((0xAC, 10, "lwip_usb_screen_rto_enable"), new_relocs[normal])
             # Native polling does not feed the existing frame observer.  Reject this profile rather than report false zeros.
             rejected = subprocess.run(command + ["1"], capture_output=True, text=True)
             self.assertNotEqual(0, rejected.returncode)
@@ -94,7 +94,7 @@ class ScreenTxPollPatchTest(unittest.TestCase):
                     if target == "free": target = "carbox_move_screen_free"
                     if name == ".rel.text.AirPlayScreen_ScreenThread" and pc in (0xBA, 0xF8):
                         target = "carbox_move_screen_frame"
-                    if name == ".rel.text.AirPlayScreen_SendScreenNormalFrame" and pc == 0xE2:
+                    if name == ".rel.text.AirPlayScreen_SendScreenNormalFrame" and pc == 0xD4:
                         target = "carbox_screen_block_quiet"
                     expected.append((pc, kind, target))
                 self.assertEqual(expected, new[name], name)
@@ -123,10 +123,10 @@ class ScreenTxPollPatchTest(unittest.TestCase):
                     patch.main(path, "native-poll")
             self.assertEqual(vendor, path.read_bytes())
             bad_code = bytearray(vendor)
-            bad_code[normal[4] + 0x104] ^= 1  # native poll timeout
+            bad_code[normal[4] + 0xF6] ^= 1  # native poll timeout
             bad_reloc = bytearray(vendor)
-            bad_reloc[entries[0x10A] + 4:entries[0x10A] + 8] = \
-                vendor[entries[0x124] + 4:entries[0x124] + 8]
+            bad_reloc[entries[0xFC] + 4:entries[0xFC] + 8] = \
+                vendor[entries[0x116] + 4:entries[0x116] + 8]
             for changed in (bad_code, bad_reloc):
                 path.write_bytes(changed)
                 with self.assertRaises(SystemExit):

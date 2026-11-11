@@ -2,7 +2,6 @@
  * 固定 ring 由已有 2 秒统计线程打印，满时只丢观测并累计 lost。
  */
 #include "screen_setup_evidence.h"
-#include "airplay_timer_clock.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "hal_timer.h"
@@ -72,7 +71,6 @@ void carbox_screen_encrypt_observe(void *header,void *data,int length)
 {
     struct screen_nal_summary s;
     uint32_t start=hal_read_curtime_us(),elapsed,v[8];
-    carbox_airplay_clock_video(header);
     screen_nal_scan(data,length>0?(size_t)length:0,&s);
     elapsed=hal_read_curtime_us()-start;
     taskENTER_CRITICAL();

@@ -2,7 +2,7 @@
 """Redirect validated AirPlayScreen.o wait and frame-diagnostic relocations.
 
 The customer's native poll loop is validated and left intact. Only necessary
-quiet-log relocations remain; v17 owns 4KB writes and early USB RTO. A frame profile is
+quiet-log relocations remain; v17/v18 own 4KB writes and early USB RTO. A frame profile is
 rejected because the native poll bypasses
 our frame poll observer.  No section replacement is used: relocations survive.
 """
@@ -24,6 +24,7 @@ SHN_UNDEF = 0
 SHN_ABS = 0xFFF1
 R_ARM_THM_CALL = 10
 NORMAL_HASHES = {
+    0x174: "9c6a0a097cf3110ecc4152a2a70ff82b799707e74af30cd581a59e523c54dfca",
     0x188: "87fd07c15cde187f7c4b5ad0632d419fc1640ae41bdc23533223b6a94066de96",
 }
 
@@ -166,9 +167,22 @@ def main(path, mode="queue"):
                 0x124: (10, "vTaskDelay"),
                 0x160: (2, ".data.sockScreen"),
             }
-            for pc, expected in required.items():
-                if records.get(pc) != expected:
-                    fail("native poll relocation mismatch at +%#x" % pc)
+        else:
+            # v18 原生时间戳修正缩短了函数；独立校验调用位置，禁止沿用旧偏移。
+            required = {
+                0x3E: (10, "AirPlayMediaClock_VideoTimestamp"),
+                0xAC: (10, "lwip_usb_screen_rto_enable"),
+                0xC0: (10, "lwip_write"),
+                0xEC: (10, "lwip_usb_screen_rto_enable"),
+                0xF2: (10, "tcp_wake_poll_begin"),
+                0xFC: (10, "lwip_poll"),
+                0x10A: (10, "tcp_wake_poll_end"),
+                0x116: (10, "vTaskDelay"),
+                0x150: (2, ".data.sockScreen"),
+            }
+        for pc, expected in required.items():
+            if records.get(pc) != expected:
+                fail("native poll relocation mismatch at +%#x" % pc)
         return size
 
     normal_size = normal_layout() if mode != "queue" else None
@@ -217,7 +231,7 @@ def main(path, mode="queue"):
         function_name = "AirPlayScreen_SendScreenNormalFrame"
         new_name = "carbox_screen_block_quiet"
         function_size = normal_size
-        call_position = 0xE2
+        call_position = 0xD4 if normal_size == 0x174 else 0xE2
         old_name = "puts"
         relocation_kind = R_ARM_THM_CALL
     else:

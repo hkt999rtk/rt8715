@@ -5,7 +5,7 @@ HASHES = {'AirPlayScreen.o': {'AirPlayScreen_StartVideo': 'e3ed8ff4877ccbe699544
                      'AirPlayScreen_StopVideo': '6954f326b09c7b40e1c3b9223b3f3fb84df945daa67cc3e96457b3e79897ca99',
                      'AirPlayScreen_StartScreen': '27322ff8222550d8ed482712cb4b574f5014ee9866fe73ec4ffcff4bfeeb22c8',
                      'AirPlayScreen_ScreenThread': 'bdbfee3b004f45c7fdb3a7fe3583142454bd0f4e89790926d538e917cf0245be',
-                     'AirPlayScreen_SendScreenNormalFrame': '87fd07c15cde187f7c4b5ad0632d419fc1640ae41bdc23533223b6a94066de96',
+                     'AirPlayScreen_SendScreenNormalFrame': '9c6a0a097cf3110ecc4152a2a70ff82b799707e74af30cd581a59e523c54dfca',
                      'AirPlayScreen_SendScreenData': 'ae8b172a01d1f41202c2b64580147de53a4a07b628376ade4eed2ca2ec71492b',
                      'AirPlayScreen_SendVideo': '7f62b4119cdf46fd83e763427f94ae8707b893a7da4edf2cb9a272cd1ddbf696',
                      'AirPlayScreen_EncryptData': '728d6b686efb31a07ebc1468cbc3cbac86184afebf6906bccdcdd4c425f1aeae'},
@@ -102,5 +102,5 @@ def main(ar,objcopy,source,output,mode=None):
     if s[1]==9 and s[5]!=updated.named[name][5]:fail('relocations dropped '+name)
    p.write_bytes(updated.b);subprocess.run([ar,'r',str(archive),str(p)],check=True)
   subprocess.run([ar,'s',str(archive)],check=True);os.replace(archive,output)
- print('screen session: verified v17 ABI; lifecycle_fix=%d; read-only /info/NAL evidence' % (not evidence_only))
+ print('screen session: verified v18 ABI; lifecycle_fix=%d; read-only /info/NAL evidence' % (not evidence_only))
 if __name__=='__main__':main(*sys.argv[1:])

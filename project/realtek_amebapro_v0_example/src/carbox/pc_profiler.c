@@ -1,7 +1,6 @@
 #include "move_lag_diag.h"
 #include "http_owner_diag.h"
 #include "car_rx_diag.h"
-#include "airplay_timer_clock.h"
 #include "audio_tx_evidence.h"
 #include "pc_profiler.h"
 #include "i2c_bitbang_pacing.h"
@@ -2031,7 +2030,6 @@ static void pcprof_task(void *arg)
 		carbox_move_lag_report(sequence);
 		car_rx_report(sequence);
 		http_owner_report(sequence);
-		carbox_airplay_clock_report(sequence);
 		carbox_audio_tx_evidence_report(sequence);
 		carbox_touch_path_profiler_report(sequence);
 		pcprof_watch_progress(PCPROF_PHASE_RX_RECORD, sequence);
