@@ -1,0 +1,81 @@
+{
+  "lib_Accessory2.a": {
+    "changed": [
+      "AirPlayAudio.o",
+      "AirPlayScreen.o",
+      "AirPlayTimer.o",
+      "AirPlayClock.o",
+      "AudioFeedback.o",
+      "AudioSamplePacer.o"
+    ],
+    "removed": [],
+    "sha256": "8b2a0213a2c350f52f3eaac262f7a9f039c0fe8f4498ca70421e21a75adef3e9"
+  },
+  "lib_AndroidAuto.a": {
+    "changed": [],
+    "removed": [],
+    "sha256": "f0b1d7a1a7cf09bbbca5aa4c9a82fb9a92032a6845c6bfebe9453bc81e2cacc5"
+  },
+  "lib_CarPlay.a": {
+    "changed": [],
+    "removed": [],
+    "sha256": "bc864778457ea073eb0477009ee53bedd15335e2c227c07e004ed073375beb8e"
+  },
+  "lib_SystemLib.a": {
+    "changed": [],
+    "removed": [],
+    "sha256": "2f20a7377d699aa8ac7c9a80ca3435a7530e2452e89ae47d768213cb3b84e044"
+  },
+  "lib_SystemLibEx.a": {
+    "changed": [
+      "Log.o"
+    ],
+    "removed": [],
+    "sha256": "bf689d39c02415233f2fe831c7018b776ea257642e535a883058b03660f224a0"
+  },
+  "lib_UiLib.a": {
+    "changed": [],
+    "removed": [],
+    "sha256": "674fdabfba9c61803d1bbf754f8bff3fe8302c5ac8d8771144d82f76b23abd3d"
+  },
+  "lib_accessory.a": {
+    "changed": [],
+    "removed": [],
+    "sha256": "f7610cc67b92139cac244060a6c1a44e644977d1a644cf16ed5ddec6d4dfa8a6"
+  },
+  "lib_fdkaac.a": {
+    "changed": [],
+    "removed": [],
+    "sha256": "c40281c0d7cc602db1d771252499add15c2278b14c8ce9b601dd82ebc606395b"
+  },
+  "lib_init.a": {
+    "changed": [],
+    "removed": [],
+    "sha256": "98850e7d78769d14baa407718672ff2ad078674064cc9d66263a6cba7df216ee"
+  },
+  "lib_jpeg.a": {
+    "changed": [],
+    "removed": [],
+    "sha256": "8a1161a54895abb6b64dc67906adb5274fefa49eccdee0f34724e0c8b85aa8a8"
+  },
+  "lib_link.a": {
+    "changed": [],
+    "removed": [],
+    "sha256": "e1b7f969d547ebb67f17453c3700c1886e2bcfc630392066fedc64e80bd860ab"
+  },
+  "lib_png.a": {
+    "changed": [],
+    "removed": [],
+    "sha256": "01c7111b5571e721fa11fc354512d03f814ee0ef81548d3a859dfb54690099be"
+  },
+  "lib_x264.a": {
+    "changed": [],
+    "removed": [],
+    "sha256": "7394c7f500b2014797c7bfae76ff53d38e17e8b3f3a7e94698f3f77850d19eb6"
+  },
+  "lib_zlib.a": {
+    "changed": [],
+    "removed": [],
+    "sha256": "f2254a2fc085e782bc9d9e2668390e8e203cd0b1fde20b631f682daf6169ac3e"
+  }
+}

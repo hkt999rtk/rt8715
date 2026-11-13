@@ -2,6 +2,7 @@
  * 统计按输出线程的 RingBuffer_init 分代，退出后失效，防止 fd/缓冲复用串账。
  */
 #include "audio_tx_evidence.h"
+#include "media_clock_evidence.h"
 #if CONFIG_AUDIO_TX_EVIDENCE
 #include <stddef.h>
 #include <string.h>
@@ -22,6 +23,11 @@ struct audio_native_prefix {
     int audio_type, sample_rate, channels, bits;
     uint16_t port, padding2;
     void *ring;
+    /* 仅供 hash 锁定的 v18 反馈快照，不能将未审计区域当作公共 API。 */
+    unsigned char feedback_padding[688 - 48 - sizeof(void *)];
+    uint64_t feedback_delta;
+    uint32_t feedback_skew, feedback_locked, feedback_count, feedback_total;
+    uint32_t feedback_box, feedback_car;
 };
 typedef char audio_ring_offset_check[offsetof(struct audio_native_prefix, ring)==48 ? 1 : -1];
 extern struct audio_native_prefix mainAudioStream, altAudioStream;
@@ -38,8 +44,10 @@ struct audio_evidence {
     void *ring, *thread, *packet;
     int fd, rate;
     uint32_t frame_bytes, stream_type;
-    uint32_t pushes, push_fail, push_bytes, pops, pop_empty, pop_bytes;
-    uint32_t capacity, push_rejected_bytes;
+    uint32_t pushes, push_fail, pops, pop_empty;
+    uint64_t push_bytes, pop_bytes, sent_frames, push_rejected_bytes;
+    uint32_t progress_epoch;
+    uint32_t capacity;
     int fill_last, fill_min, fill_max, push_before, push_after, pop_before, pop_after;
     uint32_t packets, seq_bad, ts_bad, frame_bad, header_bad;
     uint32_t last_ts, last_frames, payload_bytes;
@@ -184,6 +192,7 @@ ssize_t carbox_audio_tx_sendto(int fd,const void *data,size_t size,int flags,
                 uint32_t gap=start-s->last_send_us;
                 if(gap>s->gap_max_us) s->gap_max_us=gap;
                 s->gap_over20ms+=gap>20000;
+                if(gap>100000)s->progress_epoch++;
             }
             s->last_send_us=start; s->sends++; s->revision++;
             break;
@@ -198,6 +207,7 @@ ssize_t carbox_audio_tx_sendto(int fd,const void *data,size_t size,int flags,
     if(found>=0 && audio_stats[found].active && audio_stats[found].generation==generation) {
         struct audio_evidence *s=&audio_stats[found];
         s->send_ok+=result==(ssize_t)size;
+        if(result==(ssize_t)size)s->sent_frames+=s->last_frames;
         s->send_error+=result<0;
         s->send_short+=result>=0 && result!=(ssize_t)size;
         s->send_total_us+=elapsed;
@@ -223,24 +233,59 @@ void carbox_audio_tx_thread_exit(void *result)
 void carbox_audio_tx_evidence_report(uint32_t sequence)
 {
     static uint32_t previous_generation[2],previous_revision[2];
+#if CONFIG_MEDIA_CLOCK_DRIFT_PROFILE
+    static struct { uint32_t gen,epoch;uint64_t hal,rtos,sent; } progress[2];
+#endif
     int i;
     for(i=0;i<2;i++) {
         struct audio_evidence s;
         uint32_t untracked;
-        taskENTER_CRITICAL(); s=audio_stats[i]; untracked=untracked_sends; taskEXIT_CRITICAL();
+#if CONFIG_MEDIA_CLOCK_DRIFT_PROFILE
+        uint64_t feedback_target;
+#endif
+        taskENTER_CRITICAL(); s=audio_stats[i]; untracked=untracked_sends;
+#if CONFIG_MEDIA_CLOCK_DRIFT_PROFILE
+        memcpy(&feedback_target,(const unsigned char *)context_at(i)+688,sizeof(feedback_target));
+#endif
+        taskEXIT_CRITICAL();
         if(!s.generation || (s.generation==previous_generation[i] && s.revision==previous_revision[i])) continue;
         previous_generation[i]=s.generation; previous_revision[i]=s.revision;
-        rt_printf("[AUDIO_TX][%lu] stream=%lu gen=%lu active=%lu fd=%d rate=%d framebytes=%lu cumulative=1 push/fail/bytes=%lu/%lu/%lu pop/empty/bytes=%lu/%lu/%lu packets=%lu seq=%u ts=%lu seqbad/tsbad/framebad/headerbad=%lu/%lu/%lu/%lu\r\n",
+#if CONFIG_MEDIA_CLOCK_DRIFT_PROFILE
+        {
+            uint64_t hal,rtos,elapsed=0,expected=0,sent=0;
+            carbox_media_clock_evidence_pair(&hal,&rtos);
+            /* 以首个非空报告建立相对 sample 起点；100ms 以上停顿单独分段。
+             * error 只作观测，不能直接追赶欠账；sendto 成功不代表车机已播放。 */
+            if(!s.active || !s.sent_frames || progress[i].gen!=s.generation || progress[i].epoch!=s.progress_epoch) {
+                progress[i].gen=s.active && s.sent_frames?s.generation:0;
+                progress[i].epoch=s.progress_epoch;progress[i].hal=hal;progress[i].rtos=rtos;progress[i].sent=s.sent_frames;
+            } else {
+                elapsed=hal-progress[i].hal;sent=s.sent_frames-progress[i].sent;
+                if(s.rate>0)expected=(elapsed/1000000)*(uint32_t)s.rate+(elapsed%1000000)*(uint32_t)s.rate/1000000;
+            }
+            rt_printf("[AUDIO_SAMPLE_CLOCK][%lu] stream=%lu gen=%lu segment=%lu valid=%u hal_us=%llu rtos_us=%llu span_hal_us=%llu span_rtos_us=%llu produced_frames=%llu consumed_frames=%llu accepted_frames=%llu expected_hal_frames=%llu accepted_delta=%llu error_hal_frames=%lld rx_plc=unavailable\r\n",
+                (unsigned long)sequence,(unsigned long)s.stream_type,(unsigned long)s.generation,(unsigned long)s.progress_epoch,(unsigned)(elapsed>0),
+                (unsigned long long)hal,(unsigned long long)rtos,(unsigned long long)elapsed,(unsigned long long)(elapsed?rtos-progress[i].rtos:0),
+                (unsigned long long)(s.frame_bytes?s.push_bytes/s.frame_bytes:0),(unsigned long long)(s.frame_bytes?s.pop_bytes/s.frame_bytes:0),
+                (unsigned long long)s.sent_frames,(unsigned long long)expected,(unsigned long long)sent,(long long)((int64_t)sent-(int64_t)expected));
+            /* v19保留+688的目标周期；旧lockFreq/count/rate字段不再代表控制器状态。
+             * 新pacer/feedback状态是库内私有数据，仅报告可核实的目标值。 */
+            rt_printf("[AUDIO_CLOCK_FEEDBACK][%lu] stream=%lu gen=%lu native_v19=1 target_period_ns=%llu applied_period=unavailable window=unavailable\r\n",
+                (unsigned long)sequence,(unsigned long)s.stream_type,(unsigned long)s.generation,
+                (unsigned long long)feedback_target);
+        }
+#endif
+        rt_printf("[AUDIO_TX][%lu] stream=%lu gen=%lu active=%lu fd=%d rate=%d framebytes=%lu cumulative=1 push/fail/bytes=%lu/%lu/%llu pop/empty/bytes=%lu/%lu/%llu packets=%lu seq=%u ts=%lu seqbad/tsbad/framebad/headerbad=%lu/%lu/%lu/%lu\r\n",
             (unsigned long)sequence,(unsigned long)s.stream_type,(unsigned long)s.generation,(unsigned long)s.active,s.fd,s.rate,(unsigned long)s.frame_bytes,
-            (unsigned long)s.pushes,(unsigned long)s.push_fail,(unsigned long)s.push_bytes,(unsigned long)s.pops,(unsigned long)s.pop_empty,(unsigned long)s.pop_bytes,
+            (unsigned long)s.pushes,(unsigned long)s.push_fail,(unsigned long long)s.push_bytes,(unsigned long)s.pops,(unsigned long)s.pop_empty,(unsigned long long)s.pop_bytes,
             (unsigned long)s.packets,(unsigned)s.last_seq,(unsigned long)s.last_ts,(unsigned long)s.seq_bad,(unsigned long)s.ts_bad,(unsigned long)s.frame_bad,(unsigned long)s.header_bad);
         rt_printf("[AUDIO_TX_NET][%lu] stream=%lu gen=%lu sends/ok/error/short=%lu/%lu/%lu/%lu last=%d wirebad=%lu gap_max_us=%lu gap20ms=%lu send_avg/max_us=%lu/%lu untracked=%lu\r\n",
             (unsigned long)sequence,(unsigned long)s.stream_type,(unsigned long)s.generation,(unsigned long)s.sends,(unsigned long)s.send_ok,(unsigned long)s.send_error,(unsigned long)s.send_short,s.last_result,
             (unsigned long)s.wire_bad,(unsigned long)s.gap_max_us,(unsigned long)s.gap_over20ms,
             (unsigned long)(s.sends?s.send_total_us/s.sends:0),(unsigned long)s.send_max_us,(unsigned long)untracked);
-        rt_printf("[AUDIO_TX_RING][%lu] stream=%lu gen=%lu sampled=1 capacity=%lu fill_last/min/max=%d/%d/%d push_before/after=%d/%d pop_before/after=%d/%d rejected_bytes=%lu\r\n",
+        rt_printf("[AUDIO_TX_RING][%lu] stream=%lu gen=%lu sampled=1 capacity=%lu fill_last/min/max=%d/%d/%d push_before/after=%d/%d pop_before/after=%d/%d rejected_bytes=%llu\r\n",
             (unsigned long)sequence,(unsigned long)s.stream_type,(unsigned long)s.generation,(unsigned long)s.capacity,
-            s.fill_last,s.fill_min,s.fill_max,s.push_before,s.push_after,s.pop_before,s.pop_after,(unsigned long)s.push_rejected_bytes);
+            s.fill_last,s.fill_min,s.fill_max,s.push_before,s.push_after,s.pop_before,s.pop_after,(unsigned long long)s.push_rejected_bytes);
     }
 }
 #endif

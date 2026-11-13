@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native v17 audio: redirect seven observed calls without changing instructions."""
+"""Native v19 audio: redirect seven observed calls without changing instructions."""
 import hashlib
 import os
 from pathlib import Path
@@ -9,7 +9,7 @@ import sys
 import tempfile
 from patch_screen_session import ELF
 
-SHA256 = 'acfb4ed06564cc3443dd7453101eb59a2550ebd9cbb45644a09a75207b67d43e'
+SHA256 = '89e071d9f76e7966ae2d1d81d101ac1457db4f8c56f3d28bbfbbd396f50809d3'
 MEMBER = 'AirPlayAudio.o'
 OUTPUT = 'AirPlayAudio_AudioOutputThread'
 HOOKS = [
@@ -19,7 +19,7 @@ HOOKS = [
     (OUTPUT,0x23e,'AirPlayAudio_SetAudioStreamPacket','carbox_audio_tx_packet'),
     (OUTPUT,0x696,'AirPlayAudio_SetAudioStreamPacket','carbox_audio_tx_packet'),
     (OUTPUT,0x3fc,'lwip_sendto','carbox_audio_tx_sendto'),
-    ('AirPlayAudio_SendAudio',0x54,'RingBuffer_push','carbox_audio_tx_ring_push'),
+    ('AirPlayAudio_SendAudio',0xcc,'RingBuffer_push','carbox_audio_tx_ring_push'),
 ]
 
 def relocations(elf):

@@ -43,6 +43,10 @@ class AudioEvidenceTest(unittest.TestCase):
                             '-DCONFIG_AUDIO_TX_EVIDENCE=1', '-I'+str(d), '-I'+str(ROOT),
                             str(ROOT/'tools/audio_tx_evidence_test.c'), '-o', str(d/'test')], check=True)
             subprocess.run([str(d/'test')], check=True)
+            subprocess.run(['cc', '-std=c99', '-Wall', '-Wextra', '-Werror', '-fsanitize=undefined',
+                            '-DCONFIG_AUDIO_TX_EVIDENCE=1', '-DCONFIG_MEDIA_CLOCK_DRIFT_PROFILE=1', '-I'+str(d), '-I'+str(ROOT),
+                            str(ROOT/'tools/audio_tx_evidence_test.c'), '-o', str(d/'clock_test')], check=True)
+            subprocess.run([str(d/'clock_test')], check=True)
             subprocess.run(['cc', '-std=c99', '-Wall', '-Wextra', '-Werror',
                             '-DCONFIG_AUDIO_TX_EVIDENCE=0', '-I'+str(d), '-I'+str(ROOT),
                             '-c', str(ROOT/'audio_tx_evidence.c'), '-o', str(d/'off.o')], check=True)

@@ -375,3 +375,82 @@ flash_is.bin 为 8298496 bytes，SHA256：
 `89be56f026370ad9b6715ab609161f466b50f9b385e89881fabb1a53033cfb9f`。
 用户补充此前版本似乎不会卡死，进一步支持优先隔离本次行为修改；仍需同条件
 A/B 及完整 log 确认。尚未收到本次故障 log，未宣称根因或实机修复已确认。
+
+
+## move-lag14：iPhone 13有声音、画面不更新（2026-11-12）
+
+### 本次证据与限制
+
+- 客户log版本20261112034539_2BA3，时间07:31:56～07:33:21。视频约9.7秒，画面停留在音乐页，播放进度约0:09。影片页面时钟07:35，不能直接与这份log逐秒对齐。
+- 日志有07:31:59本机UI screen启动、07:32:09手机screen启动；第二次StartVideo没有新的sender启动日志。没有观察到crypto timeout、screen write error或重启，但screen-block文本在本版被屏蔽，缺少日志不等于没有阻塞。
+- 所有AUDIO_PACING目标与实际周期均40000000ns，尚未进入feedback渐进调速；这不能排除producer等待改动的间接影响。
+- MEDIA_PAIR首末点RTOS推进60秒，HAL推进59.364339秒，相对差约+10708ppm。相较move-lag13方向与量级不同，尚不能判定由手机型号造成，也不能将此差值直接作为补偿或画面冻结根因。
+- 静态源代码与v18 ARM对象确认ScreenThread只转送首次以SPS开头的资料块；后续同类块直接free。StartVideo在bScreenSend已为真时返回。是否实际丢掉本次必要的SPS/PPS/IDR仍需运行证据。
+- REA打开AirPlayScreen.o确认SHA256 e01a7d141a9b68443a175160041465b330e56eab0417d8e6c0846559413c2399；反编译provider未配置，使用现有Realtek objdump核对分支与调用重定位。未更改REA配置。
+
+### 测试版本开关
+
+保留前版audio pacing和时钟shadow，增加：
+`MOVE_LAG_PROFILE=1 SCREEN_SETUP_EVIDENCE=1 SCREEN_SESSION_FIX=0 PC_PROFILER_SELF_REPORT=1`。
+复用既有HID、HTTP、video、TCPWAIT、TCPREC、SCREENUSB及CPU统计，每2秒汇总；不改HID过滤、NAL封装、生命周期、TCP参数或全局时钟。
+
+### 新增低频观测
+
+- `SCREEN_FLOW`：ingress/forward/unforwarded是进入SendVideo、进入原厂SendScreenFrame、以及尚未进入该处理函数便被free的资料块数；另列首NAL为SPS或IDR的数量。仅检查有界的前5字节，不扫描完整输入。unforwarded可来自SPS筛选、停止清理或入口拒绝，不能直接称作网络丢包。配合MOVE的pending_full/unmatched判断覆盖是否完整。
+- `config/video_clock_calls`是两条封装路径调用原生timestamp函数次数，不等于已成功发送或显示。与MOVE video_write、TCP ACK配合判断。
+- `SCREEN_CLOCK`：video的首末32.32相对时间戳、最近config时间戳、重复/倒退次数、会话时钟Start次数及原始微秒值、车机timing接收/发送采时次数与最近时间。重复值也可能是同一微秒多次取时，不能单独认定故障。
+- `SCREEN_TIMING_TX`：只挂接AirPlayTimer.o的sendto，记录成功/错误/短写、原返回值/errno、最近尝试及成功年龄，以及成功发送的RTCP originate/receive/transmit原始NTP64值。originate是车机请求中被回显的时间，便于看请求时钟是否前进；本机返回的receive/transmit包含NTP epoch。socket接受不证明车机已收到或采用。
+- age基于32-bit HAL差值，只用于71分钟内的停顿，不用于无限期无事件的年龄。累计计数按本次启动；以starts变化识别时钟session切换。
+
+新增六个观测调用仅改变经hash核对的重定位，客户函数指令保持原样，原函数调用一次；UART输出在临界区外。未替换screen生命周期，不启用旧session修复。
+
+请记录完整开机→连接→操作→停止更新过程。发生时持续点按/拖动，再停手数秒，并保留同时拍摄的影片；可让手机侧主动切换页面，辅助区分HID未生效和video未显示。测试iPhone7与13时保持同车机、同carbox及同firmware。
+
+### 本次交付与验证
+
+- 版本：20261112082024_0E0C；flash_is.bin大小8298496字节。
+- SHA256：54eaca3c26cc53d6abe1cf48fe4ffdf5d2afe3d55a8b60f517b0553c3da19d5e。
+- 已复制并校验至 /home/kevin/work/rt8715/project/realtek_amebapro_v0_example/GCC-RELEASE/application_is/flash_is.bin。
+- host观察器测试、抢占导致年龄下溢的回归测试、六处重定位隔离测试、MOVE开关测试通过。最终ELF确认video/timing/ingress/free观察入口与原生调用链存在。
+- review修正：派生archive名称跟随session基础版本，防止切换编译选项复用错误产物；报告快照和当前时间在同一临界区获取，防止误报约71分钟卡顿。
+- 本次是诊断版，尚未实机确认iPhone13画面停止的根因或修复效果。日志输出使用既有统计任务；仍有观测开销。
+
+## move-lag15：参数集内容证据版（2026-11-12）
+
+本次按用户确认补充观测，保持客户视频筛选、会话、时间戳及音频逻辑。
+日志显示本机UI到iPhone切换后，SPS首NAL块累计2/1/1（入口/处理/未处理释放），
+而IDR首NAL块为2/2/0；不能据此认定IDR丢失，或认定两份SPS内容一定不同。
+客户ScreenThread的单次SPS门控跨越两种来源，StartVideo已有sender时直接返回。
+
+### 新观测
+
+- 新增 `screen_nal_evidence.c/.h`，由已有screen_flow三阶段调用。只读Annex B，支持3/4字节起始码和RBSP防竞争字节。SPS解析profile、level、sps_id；PPS解析pps_id/sps_id；IDR解析引用的pps_id。
+- `[SCREEN_NAL]`：stage=ingress/forward/unforwarded，task标识入口来源；stage_frame是**各阶段独立计数**，不可以跨阶段直接当成同一个frame ID。通过type、原始字节、hash、时间及已有MOVE信息关联。
+- `previous_equal`：与本阶段上一份同类参数原始字节比较；`forward_equal`：与最近进入客户SendScreenFrame的同类参数比较（更新本次forward记录之前）。1=完全相同，0=不同，-1=没有可比较的完整参数。比较对象是最近同类型NAL，并非按参数ID维护完整解码器状态。
+- `valid`只表示已解析的头部字段有效，不代表整个SPS/PPS或图像可解码。`complete`指扫描范围内确认了NAL边界；参数超过保存上限时saved小于bytes，不能据hash断言完整内容一致。
+- `[SCREEN_NAL_RAW]`按64字节分行输出原始NAL（不包含Annex B起始码）；参数最多512字节，IDR仅前16字节。hash也只覆盖saved字节。可在主机离线完整解析实际SPS尺寸等字段。
+- `forward`仍仅表示进入客户处理函数；不是socket发送成功或车机解码成功。保留SCREEN_FLOW的config调用次数及TCP/USB观测辅助核对。
+- `[SCREEN_NAL_LIMIT]`：lost=诊断队列溢出，scan_limited=扫描触及上限，pending=尚未打印。lost不等于业务丢包。每阶段仅记录前8个IDR，SPS/PPS持续记录。
+
+### 开销与边界
+
+每个资料块最多扫描4096字节、32个NAL，固定队列32条，每次统计最多输出8条。
+固定状态占DRAM 0x5a68字节（23144字节），不占新增的大块内部SRAM、无malloc。
+报告函数静态栈832字节，record函数656字节；打印在既有8KB统计线程中。
+未启用会删除loading.video的UI_H264_DIAG。释放路径在原pending临界区外解析，
+buffer仍在free之前有效；不改变业务所有权。
+这是有界观测，仍有扫描、复制和UART开销，不能称零开销。
+
+### 验证与交付
+
+- AddressSanitizer/UBSan host测试通过：不同参数被略过且IDR通过、原数据不变、短输入/截断/超长参数/队列溢出。
+- MOVE观测开/关测试通过，并断言NAL观察调用位于临界区外。
+- 六处v18调用重定位隔离测试通过，客户函数指令保持不变。
+- ram_is构建成功，最终ELF的media clock、audio pacing及video/timing挂接检查通过。
+- build参数沿用上一版：MEDIA_CLOCK_DRIFT_PROFILE=1 PC_PROFILER=1 AUDIO_TX_EVIDENCE=1 AUDIO_PACING_SLEW_FIX=1 MOVE_LAG_PROFILE=1 SCREEN_SETUP_EVIDENCE=1 SCREEN_SESSION_FIX=0 PC_PROFILER_SELF_REPORT=1。
+- flash_is.bin：8298496字节，SHA256 `74d7ed5f5f0dc15db2cfa82bbaa500a3ef064d30f958bc79fe8fa78319433343`。
+- 已复制到 `/home/kevin/work/rt8715/project/realtek_amebapro_v0_example/GCC-RELEASE/application_is/flash_is.bin` 并校验。
+
+请从上电、本机UI、iPhone连接开始录完整串口。优先复现iPhone13画面不更新；
+同一车机同一版本再测正常iPhone，以比较参数是否变化、是否转送、后续IDR引用是否匹配。
+本次只交付诊断证据，尚未声称修复画面不更新。

@@ -29,11 +29,15 @@ const char *pcTaskGetName(TaskHandle_t task);
 #include <assert.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <stdint.h>
 unsigned critical;
 static unsigned now, sender_calls, write_calls, probe_calls;
 static int io_result, io_error, io_revents, consume;
 static const char *task_name = "ScreenThread";
 int lwip_err;
+void carbox_screen_setup_report(uint32_t n){(void)n;}
+void carbox_screen_flow_report(uint32_t n){(void)n;}
+void carbox_screen_flow_frame(unsigned s,const void *p,size_t n){assert(!critical);(void)s;(void)p;(void)n;}
 #define CONFIG_MOVE_LAG_PROFILE 1
 #define CONFIG_AIRPLAY_HID_HTTP_BYPASS 1
 #define CONFIG_TOUCH_MOVE_SAMPLE_HZ 0
@@ -102,7 +106,7 @@ int main(void)
 '''.replace('SOURCE', str(SOURCE))
             (d/'harness.c').write_text(harness)
             for enabled in (0, 1):
-                subprocess.run(['cc','-std=c99','-Wall','-Wextra','-Werror',f'-DCONFIG_SCREEN_BLOCK_PROFILE={enabled}',f'-I{d}',str(d/'harness.c'),'-o',str(d/'test')],check=True)
+                subprocess.run(['cc','-std=c99','-Wall','-Wextra','-Werror',f'-DCONFIG_SCREEN_BLOCK_PROFILE={enabled}',f'-DCONFIG_SCREEN_SETUP_EVIDENCE={enabled}',f'-I{d}',str(d/'harness.c'),'-o',str(d/'test')],check=True)
                 subprocess.run([str(d/'test')],check=True)
 
 if __name__ == '__main__': unittest.main()

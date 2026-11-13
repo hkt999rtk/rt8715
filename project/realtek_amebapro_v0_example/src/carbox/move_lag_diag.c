@@ -6,6 +6,7 @@
 #include "car_rx_diag.h"
 #if CONFIG_SCREEN_SETUP_EVIDENCE
 #include "screen_setup_evidence.h"
+#include "screen_flow_evidence.h"
 #endif
 #if defined(CONFIG_MOVE_LAG_PROFILE) && CONFIG_MOVE_LAG_PROFILE
 #include "FreeRTOS.h"
@@ -103,6 +104,9 @@ void __wrap_AirPlayScreen_SendVideo(const void *data, int length)
         } else pending_full++;
     }
     taskEXIT_CRITICAL();
+#if CONFIG_SCREEN_SETUP_EVIDENCE
+    carbox_screen_flow_frame(0,data,length>0?(size_t)length:0);
+#endif
     __real_AirPlayScreen_SendVideo(data, length);
     carbox_move_lag_record(MOVE_VIDEO_HANDOVER, id, start,
         hal_read_curtime_us() - start, length > 0 ? (uint32_t)length : 0U, 0);
@@ -112,13 +116,23 @@ void __wrap_AirPlayScreen_SendVideo(const void *data, int length)
 void carbox_move_screen_free(void *pointer)
 {
     uint32_t i;
+#if CONFIG_SCREEN_SETUP_EVIDENCE
+    size_t dropped_length = 0;
+#endif
     if (pointer != NULL) {
         taskENTER_CRITICAL();
         for (i = 0; i < MOVE_PENDING; i++) if (pending[i].pointer == pointer) {
+#if CONFIG_SCREEN_SETUP_EVIDENCE
+            dropped_length = pending[i].length>0?(size_t)pending[i].length:0;
+#endif
             pending[i].pointer = NULL; unmatched++;
         }
         taskEXIT_CRITICAL();
     }
+#if CONFIG_SCREEN_SETUP_EVIDENCE
+    /* 仍持有待释放buffer所有权；移出pending锁后解析，避免关中断扫描NAL。 */
+    if (dropped_length) carbox_screen_flow_frame(2,pointer,dropped_length);
+#endif
     free(pointer);
 }
 
@@ -142,6 +156,9 @@ void carbox_move_screen_frame(const void *data, int length)
     taskEXIT_CRITICAL();
     if (id) carbox_move_lag_record(MOVE_VIDEO_QUEUE, id, queued,
                                    start - queued, (uint32_t)length, 0);
+#if CONFIG_SCREEN_SETUP_EVIDENCE
+    carbox_screen_flow_frame(1,data,length>0?(size_t)length:0);
+#endif
     AirPlayScreen_SendScreenFrame(data, length);
     carbox_move_lag_record(MOVE_VIDEO_FRAME, id, start,
         hal_read_curtime_us() - start, frame_writes, (int)frame_bytes);
@@ -231,6 +248,7 @@ void carbox_move_lag_report(uint32_t sequence)
 {
 #if CONFIG_SCREEN_SETUP_EVIDENCE
     carbox_screen_setup_report(sequence);
+    carbox_screen_flow_report(sequence);
 #endif
     static move_metric snapshot[MOVE_STAGE_COUNT]; /* 不增加统计线程的大栈帧。 */
     static int announced;

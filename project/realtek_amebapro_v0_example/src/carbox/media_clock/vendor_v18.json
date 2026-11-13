@@ -1,0 +1,15 @@
+{
+  "lib_CarPlay.a": {
+    "AirTunesClock.o": "37f0a92a1e7f8a10ad9f958ff2643567ac137632dd40666b6fd842cf9d782d73",
+    "AirPlayReceiverSession.o": "1b6f44af1fafb6598e5884141101616c5f6c6e6129a372c9cd5535efcc7e877c",
+    "TickUtils.o": "fb965d513fc5ba46fc2d314cbf4ba3d16aadc9ea94c3d846ed580f349e550d7a"
+  },
+  "lib_SystemLib.a": {
+    "Window.o": "8c5332268da7ecbc5f763dc03376fb78ca80b1c7e870ca4c6a8706c77a798a0c"
+  },
+  "lib_Accessory2.a": {
+    "AirPlayAudio.o": "acfb4ed06564cc3443dd7453101eb59a2550ebd9cbb45644a09a75207b67d43e",
+    "AirPlayClient.o": "07458e274e8717a6cbccdd473995c50d43e5ba6c16d5badaf864b6887f558352",
+    "AirPlayResponse.o": "c3ab80949a077f9239eac16cf5debf7ca6f783823c168ebf427bbaf8456d509c"
+  }
+}

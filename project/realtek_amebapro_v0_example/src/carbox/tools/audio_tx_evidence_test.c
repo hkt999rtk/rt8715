@@ -18,7 +18,20 @@ void exit_critical(void) { assert(critical>0); critical--; }
 void *pthread_self(void) { return current_thread; }
 void pthread_exit(void *result) { assert(result==(void *)99); assert(!critical); exit_calls++; }
 uint32_t hal_read_curtime_us(void) { return now_us; }
-int rt_printf(const char *format,...) { (void)format; assert(!critical); reports++; return 0; }
+#if CONFIG_MEDIA_CLOCK_DRIFT_PROFILE
+void carbox_media_clock_evidence_pair(uint64_t *hal,uint64_t *rtos) {assert(!critical);*hal=now_us;*rtos=now_us;}
+#define REPORT_LINES 5
+#else
+#define REPORT_LINES 3
+#endif
+int rt_printf(const char *format,...) {
+    assert(!critical);
+    if(strstr(format,"[AUDIO_CLOCK_FEEDBACK]")) {
+        assert(strstr(format,"native_v19=1") && strstr(format,"target_period_ns="));
+        assert(!strstr(format,"locked=") && !strstr(format,"count/total="));
+    }
+    reports++; return 0;
+}
 int RingBuffer_init(void *ring,int size) { assert(!critical); assert(ring==expected_ring); assert(size==100000); ring_fill=0; return 1; }
 int RingBuffer_size(void *ring) { assert(!critical && ring==expected_ring); return ring_fill; }
 int RingBuffer_push(void *ring,char *data,int size) { assert(!critical); assert(ring==expected_ring && data==expected_data && size==expected_size); push_calls++; if(ring_result)ring_fill+=size; return ring_result; }
@@ -101,8 +114,8 @@ int main(void)
     current_thread=(void *)1;
     carbox_audio_tx_thread_exit((void *)99);
     assert(exit_calls==1 && !audio_stats[0].active);
-    carbox_audio_tx_evidence_report(1);assert(reports==3);
-    carbox_audio_tx_evidence_report(2);assert(reports==3);
+    carbox_audio_tx_evidence_report(1);assert(reports==REPORT_LINES);
+    carbox_audio_tx_evidence_report(2);assert(reports==REPORT_LINES);
     /* 同 fd、同 ring 重启必须重置包序列比较和计数。 */
     mainAudioStream.seq=1;mainAudioStream.timestamp=0;
     carbox_audio_tx_ring_init(expected_ring,100000);
@@ -113,6 +126,14 @@ int main(void)
     assert(carbox_audio_tx_sendto(7,packet,20,3,&addr,sizeof(addr))==-1);
     assert(audio_stats[0].generation==3 && audio_stats[0].sends==0 && audio_stats[0].send_error==0);
     assert(packet_calls==6 && send_calls==8 && !critical);
+    /* 长测的字节与采样帧数必须跨过 32-bit 边界，且失败不算已发送。 */
+    audio_stats[0].push_bytes=UINT32_MAX-3ULL;
+    expected_size=8;
+    assert(carbox_audio_tx_ring_push(expected_ring,(char *)pcm,8)==1);
+    assert(audio_stats[0].push_bytes==UINT32_MAX+5ULL);
+    audio_stats[0].sent_frames=UINT32_MAX;
+    emit(packet,pcm,8);
+    assert(audio_stats[0].sent_frames==UINT32_MAX+2ULL);
     puts("audio evidence forwarding, counter rollover, failure and generation checks passed");
     return 0;
 }

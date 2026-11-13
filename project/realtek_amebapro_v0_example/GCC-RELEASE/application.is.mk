@@ -1083,7 +1083,7 @@ ifeq ($(SCREEN_SETUP_EVIDENCE),1)
 ifneq ($(MOVE_LAG_PROFILE),1)
 $(error SCREEN_SETUP_EVIDENCE requires MOVE_LAG_PROFILE=1)
 endif
-SRC_C += ../src/carbox/screen_setup_evidence.c
+SRC_C += ../src/carbox/screen_setup_evidence.c ../src/carbox/screen_flow_evidence.c ../src/carbox/screen_nal_evidence.c
 endif
 GCCFLAGS += -DCONFIG_SCREEN_SESSION_FIX=$(SCREEN_SESSION_FIX) -DCONFIG_SCREEN_SETUP_EVIDENCE=$(SCREEN_SETUP_EVIDENCE)
 ifeq ($(MOVE_LAG_PROFILE),1)
@@ -1604,6 +1604,41 @@ ifneq ($(filter 1,$(SCREEN_TIMESTAMP_PROFILE) $(SCREEN_HW_TIMESTAMP) $(AIRPLAY_T
 $(error v18 uses native AirPlayMediaClock; legacy timestamp wrappers/patches/profiles are retired)
 endif
 SCREEN_TIMESTAMP_PROFILE := 0
+# 长时钟试验第一阶段：只读成对时间和样本计数。active 必须等待源质量/
+# 本机速率审计与完整 PCM 控制点迁移，禁止误把一个开关当作已实现。
+MEDIA_CLOCK_DRIFT_PROFILE ?= 0
+MEDIA_CLOCK_DISCIPLINE ?= 0
+ifneq ($(MEDIA_CLOCK_DISCIPLINE),0)
+$(error active media discipline is gated pending timebase measurements and native PCM scheduler integration)
+endif
+ifeq ($(MEDIA_CLOCK_DRIFT_PROFILE),1)
+ifneq ($(PC_PROFILER),1)
+$(error MEDIA_CLOCK_DRIFT_PROFILE requires PC_PROFILER=1)
+endif
+AUDIO_TX_EVIDENCE ?= 1
+ifneq ($(AUDIO_TX_EVIDENCE),1)
+$(error MEDIA_CLOCK_DRIFT_PROFILE requires AUDIO_TX_EVIDENCE=1)
+endif
+SRC_C += ../src/carbox/media_clock_evidence.c \
+    ../src/carbox/media_clock/AirPlayMediaClockDiscipline.c \
+    ../src/carbox/media_clock/AirPlayMediaClockSource.c
+.PHONY: media-clock-v19-check
+media-clock-v19-check:
+	python3 ../src/carbox/tools/check_media_clock_vendor.py $(AR) carplay_app
+application: media-clock-v19-check
+endif
+GCCFLAGS += -DCONFIG_MEDIA_CLOCK_DRIFT_PROFILE=$(MEDIA_CLOCK_DRIFT_PROFILE)
+MEDIA_CLOCK_PROFILE_STAMP := $(OBJ_DIR)/.media_clock_shadow_$(MEDIA_CLOCK_DRIFT_PROFILE)
+$(MEDIA_CLOCK_PROFILE_STAMP):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.media_clock_shadow_*
+	@touch $@
+../src/carbox/media_clock_evidence.o ../src/carbox/audio_tx_evidence.o ../src/carbox/pc_profiler.o: $(MEDIA_CLOCK_PROFILE_STAMP)
+# v19客户库已原生实现PCM pacing与持续feedback，禁止叠加旧适配层。
+AUDIO_PACING_SLEW_FIX ?= 0
+ifneq ($(AUDIO_PACING_SLEW_FIX),0)
+$(error v19 has native audio pacing/feedback; AUDIO_PACING_SLEW_FIX wrappers are retired)
+endif
 # v17 原生音频只读观测；不启用旧版音频 wrapper/调速补丁。
 AUDIO_TX_EVIDENCE ?= 0
 ifeq ($(AUDIO_TX_EVIDENCE),1)
@@ -2263,6 +2298,9 @@ CPPFLAGS += -w
 CPPFLAGS += -Wall -Wpointer-arith -Wundef -Wno-write-strings -Wno-maybe-uninitialized
 
 LFLAGS = 
+ifeq ($(MEDIA_CLOCK_DRIFT_PROFILE),1)
+LFLAGS += -Wl,--wrap=AirTunesClock_Adjust -Wl,--wrap=AirTunesClock_Finalize
+endif
 ifeq ($(MOVE_LAG_PROFILE),1)
 LFLAGS += -Wl,--wrap=lwip_read -Wl,--wrap=lwip_recvfrom -Wl,--wrap=lwip_connect -Wl,--wrap=lwip_select
 LFLAGS += -Wl,--wrap=AirPlayScreen_SendVideo -Wl,--wrap=lwip_recv
@@ -3076,6 +3114,14 @@ CARBOX_ACCESSORY2_MEDIA_BASE := $(CARBOX_ACCESSORY2_HANDOVER_ARCHIVE)
 else
 CARBOX_ACCESSORY2_MEDIA_BASE := $(CARBOX_ACCESSORY2_VENDOR_ARCHIVE)
 endif
+# 只读video/timing边界：原始时间戳函数保留，只改六个调用重定位。
+ifeq ($(SCREEN_SETUP_EVIDENCE),1)
+CARBOX_SCREEN_FLOW_ARCHIVE := $(CARBOX_CARPLAY_DERIVED_DIR)/$(notdir $(CARBOX_SCREEN_SESSION_ARCHIVE:.a=))_flow.a
+$(CARBOX_SCREEN_FLOW_ARCHIVE): $(CARBOX_SCREEN_SESSION_ARCHIVE) ../src/carbox/tools/patch_screen_flow_evidence.py ../src/carbox/tools/patch_screen_session.py
+	python3 ../src/carbox/tools/patch_screen_flow_evidence.py $(AR) $(OBJCOPY) $< $@
+application: $(CARBOX_SCREEN_FLOW_ARCHIVE)
+CARBOX_ACCESSORY2_MEDIA_BASE := $(CARBOX_SCREEN_FLOW_ARCHIVE)
+endif
 # v18 时间修正已经在客户库内完成，不再派生 mono/current_ts archive。
 CARBOX_ACCESSORY2_AUDIO_BASE := $(CARBOX_ACCESSORY2_MEDIA_BASE)
 ifeq ($(AUDIO_TX_EVIDENCE),1)
@@ -3239,6 +3285,12 @@ ifneq ($(RECVFRAME_TRACE_VERIFY),)
 endif
 	@echo "  LD   linking..."
 	@$(LD) $(LFLAGS) -o $(BIN_DIR)/$(TARGET).axf  $(OBJ_LIST) $(ROMIMG) $(LIBFLAGS) -T$(LDSCRIPT)
+ifeq ($(CARBOX_CUSTOMER_NAV_NATIVE),1)
+	@python3 ../src/carbox/tools/check_customer_v19_elf.py $(OBJDUMP) $(NM) $(BIN_DIR)/$(TARGET).axf
+endif
+ifeq ($(MEDIA_CLOCK_DRIFT_PROFILE),1)
+	@python3 ../src/carbox/tools/check_media_clock_elf.py $(OBJDUMP) $(BIN_DIR)/$(TARGET).axf $(SCREEN_SETUP_EVIDENCE)
+endif
 ifneq ($(RECVFRAME_TRACE_VERIFY),)
 	@$(RECVFRAME_TRACE_VERIFY) --elf $(BIN_DIR)/$(TARGET).axf
 endif

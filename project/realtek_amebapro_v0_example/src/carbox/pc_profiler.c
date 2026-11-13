@@ -2,6 +2,7 @@
 #include "http_owner_diag.h"
 #include "car_rx_diag.h"
 #include "audio_tx_evidence.h"
+#include "media_clock_evidence.h"
 #include "pc_profiler.h"
 #include "i2c_bitbang_pacing.h"
 #include "iap2_cond_timedwait_fix.h"
@@ -1906,7 +1907,15 @@ static void pcprof_task(void *arg)
 		uint32_t primask;
 
 		pcprof_watch_progress(PCPROF_PHASE_WAIT, sequence);
+#if CONFIG_MEDIA_CLOCK_DRIFT_PROFILE
+        /* 复用统计线程，每2秒采样；完整统计仍保持原来的10秒周期。 */
+        for (unsigned pair = 0; pair < PCPROF_REPORT_PERIOD_MS / 2000U; ++pair) {
+            vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(2000U));
+            carbox_media_clock_evidence_tick();
+        }
+#else
 		vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(PCPROF_REPORT_PERIOD_MS));
+#endif
 		pcprof_watch_progress(PCPROF_PHASE_SNAPSHOT, sequence + 1U);
 		/*
 		 * The HAL owns the timer IRQ priority.  Use PRIMASK for this very short
@@ -2030,6 +2039,7 @@ static void pcprof_task(void *arg)
 		carbox_move_lag_report(sequence);
 		car_rx_report(sequence);
 		http_owner_report(sequence);
+		carbox_media_clock_evidence_report(sequence);
 		carbox_audio_tx_evidence_report(sequence);
 		carbox_touch_path_profiler_report(sequence);
 		pcprof_watch_progress(PCPROF_PHASE_RX_RECORD, sequence);

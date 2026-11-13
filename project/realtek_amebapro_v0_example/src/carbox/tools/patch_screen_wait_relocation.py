@@ -170,7 +170,7 @@ def main(path, mode="queue"):
         else:
             # v18 原生时间戳修正缩短了函数；独立校验调用位置，禁止沿用旧偏移。
             required = {
-                0x3E: (10, "AirPlayMediaClock_VideoTimestamp"),
+                0x3E: (10, "AirPlayClock_VideoTimestamp"),
                 0xAC: (10, "lwip_usb_screen_rto_enable"),
                 0xC0: (10, "lwip_write"),
                 0xEC: (10, "lwip_usb_screen_rto_enable"),

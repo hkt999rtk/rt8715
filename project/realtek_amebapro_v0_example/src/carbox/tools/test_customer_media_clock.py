@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the shipped v18 Thumb code, with only HAL/RTOS/libc calls simulated."""
+"""Run the shipped v19 Thumb code, with only HAL/RTOS/libc calls simulated."""
 import io
 from pathlib import Path
 import struct
@@ -113,7 +113,7 @@ class NativeClockTest(unittest.TestCase):
         global STUBS
         with tempfile.TemporaryDirectory() as tmp:
             d=Path(tmp); objects=[]; defs=set(); refs=set()
-            for member in ('AirPlayTimer.o','AirPlayScreen.o','AirPlayMediaClock.o'):
+            for member in ('AirPlayTimer.o','AirPlayScreen.o','AirPlayClock.o'):
                 b=subprocess.check_output([P+'ar','p',str(ARCHIVE),member]); obj=d/member;obj.write_bytes(b);objects.append(str(obj))
                 elf=ELFFile(io.BytesIO(b))
                 for s in elf.get_section_by_name('.symtab').iter_symbols():
@@ -133,6 +133,6 @@ class NativeClockTest(unittest.TestCase):
             m.start(m.now)
             m.step=10
             rx,tx=m.timing(); self.assertGreater(tx,rx)
-            print('Native v18: current headers, RTCP epoch/fraction, integer origin, reconnect, HW/RTOS wraps PASS')
+            print('Native v19: current headers, RTCP epoch/fraction, integer origin, reconnect, HW/RTOS wraps PASS')
 
 if __name__=='__main__':unittest.main()
