@@ -247,8 +247,31 @@ SRC_C += ../../../component/common/media/mmfv2/module_rtsp2.c
 SRC_C += ../src/wcam/wcam_pattern.c
 SRC_C += ../src/wcam/wcam_uvc_control.c
 SRC_C += ../src/wcam/wcam_stats.c
+WCAM_ROLE ?= local
+WCAM_FIRMWARE_JSON ?= amebapro_firmware_is.json
+ifeq ($(WCAM_ROLE),tx)
+WCAM_DEFINES = -DWCAM_ROLE_TX=1
+SRC_C += ../src/wcam/wcam_tx.c
+else ifeq ($(WCAM_ROLE),tx_gc2053)
+WCAM_DEFINES = -DWCAM_ROLE_TX=1 -DWCAM_TX_SENSOR=1
+SRC_C += ../src/wcam/wcam_tx.c ../src/wcam/wcam_sensor.c
+else ifeq ($(WCAM_ROLE),rx)
+WCAM_DEFINES = -DWCAM_ROLE_RX=1
 SRC_C += ../src/wcam/wcam_uvc_descriptors.c
 SRC_C += ../src/wcam/wcam_uvc.c
+else ifeq ($(WCAM_ROLE),local)
+SRC_C += ../src/wcam/wcam_uvc_descriptors.c
+SRC_C += ../src/wcam/wcam_uvc.c
+else
+$(error WCAM_ROLE must be local, tx, tx_gc2053 or rx)
+endif
+ifneq ($(WCAM_ROLE),local)
+SRC_C += ../src/wcam/wcam_net.c ../src/wcam/wcam_rtp.c
+WCAM_VENDOR = ../src/wcam/third_party/ireader
+SRC_C += $(WCAM_VENDOR)/rtp-h264-pack.c $(WCAM_VENDOR)/rtp-h264-unpack.c
+SRC_C += $(WCAM_VENDOR)/rtp-h264-bitstream.c $(WCAM_VENDOR)/rtp-packet.c
+$(WCAM_VENDOR)/%.o: GCCFLAGS += -include ../src/wcam/wcam_rtp.h -DNDEBUG
+endif
 SRC_C += ../../../component/common/media/mmfv2/module_httpfs.c
 SRC_C += ../../../component/common/media/mmfv2/module_dup.c
 
@@ -685,7 +708,7 @@ OBJ_LIST += $(addprefix $(OBJ_DIR)/,$(patsubst %.cpp,%.o,$(notdir $(SRC_CPP))))
 # Compile options
 # -------------------------------------------------------------------
 
-GCCFLAGS =
+GCCFLAGS = $(WCAM_DEFINES)
 GCCFLAGS += -march=armv8-m.main+dsp -mthumb -mcmse -mfloat-abi=softfp -mfpu=fpv5-sp-d16 -g -gdwarf-3 -Os -c -MMD --save-temps
 GCCFLAGS += -nostartfiles -nodefaultlibs -nostdlib -fstack-usage -fdata-sections -ffunction-sections -fno-common
 
@@ -803,7 +826,7 @@ manipulate_images:	| application
 	cp  ../../../component/soc/realtek/8195b/misc/bsp/image/boot.bin application_is/boot.bin
 	$(ELF2BIN) keygen keycfg.json
 	$(ELF2BIN) convert amebapro_bootloader.json PARTITIONTABLE secure_bit=0
-	$(ELF2BIN) convert amebapro_firmware_is.json FIRMWARE secure_bit=0
+	$(ELF2BIN) convert $(WCAM_FIRMWARE_JSON) FIRMWARE secure_bit=0
 	cp ../../../component/soc/realtek/8195b/misc/bsp/image/bootloader.axf $(BOOT_BIN_DIR)/bootloader.axf
 	$(ELF2BIN) convert amebapro_bootloader.json BOOTLOADER secure_bit=0
 	cp bootloader/boot.bin application_is/boot.bin

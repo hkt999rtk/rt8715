@@ -4,6 +4,8 @@ import pathlib
 import struct
 import sys
 
+role = sys.argv[2] if len(sys.argv) > 2 else "local"
+assert role in ("local", "tx", "tx_gc2053", "rx")
 data = pathlib.Path(sys.argv[1]).read_bytes()
 assert data[:6] == b"\x7fELF\x01\x01", "Expected little-endian ELF32"
 header = struct.unpack_from("<16sHHIIIIIHHHHHH", data)
@@ -42,7 +44,7 @@ def descriptors(name):
     raise AssertionError("Missing descriptor-list terminator")
 
 
-for name in ("usbd_uvc_descriptors_FS", "usbd_uvc_descriptors_HS"):
+for name in (() if role in ("tx", "tx_gc2053") else ("usbd_uvc_descriptors_FS", "usbd_uvc_descriptors_HS")):
     # The application advertises UVC 1.1 at registration. Its Processing Unit
     # must include bmVideoStandards (10+n bytes), unlike the SDK's UVC 1.0 PU.
     control_interface = False
@@ -84,20 +86,40 @@ for name in ("usbd_uvc_descriptors_FS", "usbd_uvc_descriptors_HS"):
     assert frame[21] == 1 and struct.unpack_from("<I", frame, 26)[0] == 333333
     print(f"{name}: H264 only, 1280x720, 30 fps; UVC 1.1 PU length valid")
 
-for required in ("wcam_start", "h264_encode", "usbd_uvc_init", "uvc_events_process",
-                 "__wrap_usb_composite_probe"):
-    assert required in symbols, required
-for forbidden in ("isp_init", "isp_stream_start", "uvcd_handle"):
+required = ["h264_encode", "wcam_tx_start", "wcam_ir_h264_encode"] if role in ("tx", "tx_gc2053") else [
+    "wcam_start", "usbd_uvc_init", "uvc_events_process", "__wrap_usb_composite_probe"]
+if role == "local": required.append("h264_encode")
+if role == "rx":
+    required += ["wcam_ir_h264_decode", "wcam_rtcp_report", "h264_encode",
+                 "wcam_pattern_counter_role"]
+    assert "wcam_tx_start" not in symbols
+if role != "local":
+    required += ["wcam_net_start", "wifi_on", "LwIP_Init"]
+    for name in ("rtsp_open", "rtp_h264_send_unicast", "rtp_o_h264_handler"):
+        assert name not in symbols, "Unexpected native RTSP stack: " + name
+if role in ("tx", "tx_gc2053"):
+    assert "usbd_uvc_init" not in symbols, "TX must not instantiate UVC"
+if role == "tx_gc2053":
+    required += ["wcam_sensor_init", "video_subsys_init", "isp_stream_create",
+                 "isp_stream_start", "isp_handle_buffer", "isp_i2c_read_byte",
+                 "isp_stream_cancel", "wcam_sensor_discard_ready", "wcam_sensor_deinit"]
+    assert "wcam_pattern_counter_role" not in symbols, "Sensor TX must not draw a counter"
+for name in required:
+    assert name in symbols, name
+for forbidden in (("isp_init", "uvcd_handle") if role == "tx_gc2053" else
+                  ("isp_init", "isp_stream_start", "uvcd_handle")):
     assert forbidden not in symbols, forbidden
 assert not any(any(word in name.lower() for word in ("carbox", "carplay", "airplay", "usbsmart"))
                for name in symbols)
 # The archived init uses a relocated function pointer for registration.
 # Verify the linker really redirected it to our pre-enumeration callback setup.
-address, size = symbols["usbd_uvc_init"]
-body = read(address & ~1, size)
-wrapped = symbols["__wrap_usb_composite_probe"][0] | 1
-assert struct.pack("<I", wrapped) in body, "UVC init bypasses callback wrapper"
-print("ELF: native encoder/USB present, wrapper active, no sensor pipeline/customer symbols")
+if role not in ("tx", "tx_gc2053"):
+    address, size = symbols["usbd_uvc_init"]
+    body = read(address & ~1, size)
+    wrapped = symbols["__wrap_usb_composite_probe"][0] | 1
+    assert struct.pack("<I", wrapped) in body, "UVC init bypasses callback wrapper"
+    print("ELF: UVC present, wrapper active, no sensor pipeline/customer symbols")
+print(f"ELF: role={role} verified")
 
 # ARM32 OS service ABI consumed by rtw_* wrappers. A positional initializer
 # previously omitted four task slots: timerCreate dispatched ChangePeriod with

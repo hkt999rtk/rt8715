@@ -109,7 +109,11 @@
 #define CONFIG_INCLUDE_SIMPLE_CONFIG		1
 
 /*For fast reconnection*/
+#if defined(WCAM_ROLE_TX) || defined(WCAM_ROLE_RX)
+#define CONFIG_EXAMPLE_WLAN_FAST_CONNECT 0
+#else
 #define CONFIG_EXAMPLE_WLAN_FAST_CONNECT	1
+#endif
 #if CONFIG_EXAMPLE_WLAN_FAST_CONNECT
 #define CONFIG_FAST_DHCP 1
 #else

@@ -1,3 +1,104 @@
+# wcam firmware: unitest, two TX sources, RX
+
+Build all four images with `./wcam/build-pair.sh all` from the repository root
+(`all` is the default). The script cleans **each destination role**, builds LP
+with `-j1 -B`, then IS with `-j8`,
+checks the linked role/OS ABI/UVC descriptors and publishes only successful
+outputs. `./wcam/build-pair.sh unitest`, `tx_colorbar`, `tx_gc2053`, or `rx`
+rebuilds one role; `tx` is an alias for `tx_colorbar`, and `both` builds both TX
+sources plus RX. Build logs and the
+matching ELF/map for fault decoding are retained in `wcam/build-logs/`.
+
+| Image | Role | Data path |
+|---|---|---|
+| `wcam/flash_wcam_unitest.bin` | Local USB test | Synthetic NV12 720p color bars + center frame counter → SDK H.264 → USB H.264 UVC |
+| `wcam/flash_wcam_tx_colorbar.bin` | Wi-Fi station/client | Reversed NV12 720p color bars + `TX FRAME` counter → SDK H.264 → RTP/UDP |
+| `wcam/flash_wcam_tx_gc2053.bin` | Wi-Fi station/client | GC2053 sensor → ISP NV12 720p without overlay → SDK H.264 → RTP/UDP |
+| `wcam/flash_wcam_rx.bin` | 5 GHz Wi-Fi AP + USB camera | Black `WAITING FOR CONNECTION` screen + frame counter until complete TX SPS/PPS/IDR, then RTP/UDP → H.264 UVC |
+
+Each image has an adjacent `.bin.sha256`. `wcam/flash_wcam_tx.bin` remains an
+alias of the color bar TX image. The old `wcam/flash_is.bin` remains the
+previous local color-bar POC; use the explicit `flash_wcam_*` names for these builds.
+
+## Pairing and test
+
+- RX AP SSID: **WCAM-RX**, WPA2-AES password: **wcam720p30**, 5 GHz channel **36**.
+- TX checks its associated channel and retries if it is not channel 36.
+- RX static IP **192.168.4.1**, TX static IP **192.168.4.2**, mask **255.255.255.0**.
+- One fixed pair; no DHCP server is needed. TX automatically joins at boot and
+  retries indefinitely (1 second between failed connect attempts; the SDK's
+  association call has its own timeout). A late join uses the same SSID, channel
+  and static-IP checks. Each new connection starts with SPS/PPS and an IDR.
+  GC2053 discards queued captures and waits for a fresh frame on connection.
+- RTP: UDP **5004**, PT **96**, 90 kHz timestamp, at most **1200 bytes** per RTP
+  datagram including its header. RTCP uses UDP **5005**.
+- Format remains **1280×720, 30 fps**, Baseline H.264, target 2 Mbps, GOP 30.
+  The color bar TX image uses the synthetic source; the GC2053 TX image uses
+  the SDK's `isp_gc2053.bin`, sensor port S1 and 27 MHz sensor clock. It has no
+  `TX` label or frame count. RX accepts either TX image with no setting change.
+- Debug UART: **115200 / 8N1 / no flow control**. Check the boot banner for
+  `diag=4 role=TX` or `diag=4 role=RX`, then the `[wcam][wifi]` and `[wcam][net]` logs.
+
+Flash RX and connect its USB device port to Windows. Power TX; it joins RX
+regardless of which board starts first. Windows camera name is
+**wcam H264 wireless RX**. In **cmd.exe** (binary pipe):
+
+```bat
+ffmpeg -hide_banner -f dshow -video_size 1280x720 -framerate 30 -vcodec h264 -i video="wcam H264 wireless RX" -c:v copy -copyinkf -flush_packets 1 -f h264 pipe:1 | ffplay -hide_banner -probesize 32768 -analyzeduration 1000000 -f h264 -framerate 30 -i pipe:0
+```
+
+## Transport and memory
+
+The imported MIT source is a selected ireader/media-server subset, pinned to
+`c0463893bc509e65bea9f4f76be68c1f89ccdfcf`; see
+`project/realtek_amebapro_v0_example/src/wcam/third_party/ireader/README.md`.
+TX sends Single NAL/FU-A; RX accepts Single NAL/STAP-A/FU-A. TX currently sends
+SPS/PPS separately; automatic STAP-A aggregation is not enabled.
+
+The TX packetizer uses a reusable 1200-byte packet buffer. RX has 16 bounded
+reorder slots (20 ms gap deadline), a 100 ms incomplete-AU deadline and three
+512 KiB aligned frame buffers. FU fragments are copied directly into the
+current Annex B frame buffer; completed buffers are handed to UVC without an
+additional frame copy. Buffers are recycled only after USB completion. No
+per-packet/frame heap allocation occurs after initialization.
+
+RTCP sends compound SR/RR + SDES, with PLI requests while RX waits for a new IDR.
+PLI is sent immediately for a new RTP sequence gap or corruption and repeats
+every 500 ms while RX awaits an IDR; encoder force-IDR requests are coalesced
+and limited to one per 250 ms within a connection. RX measures the 250 ms
+timeout from the arrival of the last forwarded remote frame, including time
+spent in the USB queue. It switches back only on a fresh complete SPS/PPS/IDR.
+Startup, UVC stream restart, missing/corrupt data,
+queue pressure and RTP source changes require a complete SPS/PPS/IDR AU before
+forwarding resumes. There is no NACK retransmission or adaptive bitrate in this
+first port. RTCP reports use an uptime-based relative clock.
+
+The network task owns the receive assembler and free-frame pool. UVC owns a
+submitted frame until completion. On USB timeout/disconnect RX stops UVC and
+retains uncertain DMA ownership until reboot, matching the earlier POC behavior.
+
+## Verification and remaining hardware check
+
+`sh wcam/tests/run.sh` exercises the portable transport under ASan/UBSan:
+fragmentation, byte-exact reassembly, reordering, sequence wrap, duplicate/lost
+packets, malformed/truncated packets, capacity bounds, IDR recovery, PLI routing,
+RR loss, trailing non-VCL marker and long-idle recovery. It also round-trips all
+270 decodable AUs of the previous board capture byte-for-byte and, when installed,
+uses FFmpeg to decode the result with `-xerror`.
+
+Host regressions exercise late Wi-Fi association and stale RTP fragments,
+GC2053 probe cleanup and fresh capture after reconnect, UVC session changes,
+and RX deadlines across tick wrap and extended idle periods.
+
+The GC2053 variant also needs its sensor module and ISP firmware tested on a
+physical TX board. These checks do not replace testing two physical boards. Wi-Fi association,
+reconnection, wireless loss behavior, sustained throughput and end-to-end
+Windows latency still need that test. During testing collect both UART logs;
+`lost`, `late`, `bad`, `pool_drop`, `wait_idr`, `pli`, `send_err` distinguish
+network loss, buffering and encoder/USB failures.
+
+---
+
 # wcam H.264 UVC POC
 
 在 RAM 產生 1280×720 NV12 color bar，畫面中心顯示 `FRAME 0000000000`，經 SDK 硬體 H.264 encoder 從 USB UVC 輸出。不呼叫 image sensor / ISP 串流初始化，不連結客戶 `.a`。

@@ -1,3 +1,5 @@
+#include "wcam_config.h"
+#include "wcam_net.h"
 #include <stdlib.h>
 #include <string.h>
 #include "FreeRTOS.h"
@@ -10,6 +12,7 @@
 #include "wcam_uvc_control.h"
 #include "wcam_pacer.h"
 #include "wcam_stats.h"
+#include "wcam_source.h"
 
 /* Binary SDK ABI verified from the matching archive members. */
 _Static_assert(sizeof(struct h264_parameter) == 136, "H264 parameter ABI mismatch");
@@ -252,6 +255,7 @@ static void *aligned_buffer(size_t size, void **allocation)
     return (void *)(((uintptr_t)*allocation + 31) & ~(uintptr_t)31);
 }
 
+#if !WCAM_ROLE_RX
 static void wcam_task(void *arg)
 {
     void *raw_allocation = NULL, *encoded_allocation = NULL;
@@ -435,8 +439,212 @@ failed:
     vTaskDelete(NULL);
 }
 
+#endif
+
+#if WCAM_ROLE_RX
+struct rx_local_encoder {
+    void *raw_allocation, *encoded_allocation;
+    uint8_t *raw, *encoded;
+    struct h264_context *encoder;
+    uint32_t counter;
+    struct wcam_pacer pacer;
+};
+
+static int rx_local_init(struct rx_local_encoder *local)
+{
+    struct h264_parameter params;
+    memset(local, 0, sizeof(*local));
+    local->raw = aligned_buffer(WCAM_NV12_SIZE, &local->raw_allocation);
+    local->encoded = aligned_buffer(WCAM_ENCODED_SIZE, &local->encoded_allocation);
+    local->encoder = calloc(1, sizeof(*local->encoder));
+    if (!local->raw || !local->encoded || !local->encoder) return -1;
+    wcam_pattern_init_role(local->raw, WCAM_PATTERN_RX);
+    dcache_clean_by_addr((uint32_t *)local->raw, WCAM_NV12_SIZE);
+    hal_video_sys_init_rtl8195bhp();
+    hal_enc_hw_init();
+    init_h1v6_parm();
+    h264_init_param(&local->encoder->h264_parm);
+    params = local->encoder->h264_parm;
+    params.inputtype = ISP_FORMAT_YUV420_SEMIPLANAR;
+    params.width = WCAM_WIDTH;
+    params.height = WCAM_HEIGHT;
+    params.ratenum = WCAM_FPS;
+    params.bps = WCAM_BITRATE;
+    params.gopLen = WCAM_FPS;
+    params.rcMode = RC_MODE_H264CBR;
+    params.proile = H264_BASE_PROFILE;
+    params.level = H264ENCODER_LEVEL_4;
+    params.idrHeader = 1;
+    params.force_drop_frame = 0;
+    local->encoder->h264_parm = params;
+    return h264_init_encoder(local->encoder);
+}
+
+static int rx_local_encode(struct rx_local_encoder *local, size_t *length,
+                           uint32_t *elapsed)
+{
+    uint32_t start;
+    struct h264_context *encoder = local->encoder;
+    wcam_pattern_counter_role(local->raw, local->counter++, WCAM_PATTERN_RX);
+    dcache_clean_by_addr((uint32_t *)local->raw, WCAM_NV12_SIZE);
+    dcache_clean_invalidate_by_addr((uint32_t *)local->encoded, WCAM_ENCODED_SIZE);
+    encoder->source_addr = encoder->y_addr = (uint32_t)local->raw;
+    encoder->uv_addr = (uint32_t)local->raw + WCAM_Y_SIZE;
+    encoder->dest_addr = (uint32_t)local->encoded;
+    encoder->dest_len = WCAM_ENCODED_SIZE;
+    encoder->dest_actual_len = 0;
+    start = xTaskGetTickCount();
+    if (h264_encode(encoder) < 0) return -1;
+    *elapsed = xTaskGetTickCount() - start;
+    *length = encoder->dest_actual_len;
+    if (!*length || *length > WCAM_ENCODED_SIZE) return -1;
+    dcache_invalidate_by_addr((uint32_t *)local->encoded, *length);
+    return 0;
+}
+
+/* The SDK's uvc_video_put_in_stream_queue takes input_lock and appends
+ * buffer_list to input_queue. The mutex can block, so validate the USB
+ * session after acquiring it, at the point where ownership changes. */
+static int rx_queue_payload(struct uvc_dev *usb, struct usbd_uvc_buffer *payload,
+                            uint32_t generation, struct wcam_source *source,
+                            const struct wcam_net_frame *frame, unsigned flags)
+{
+    uint32_t mask;
+    uint64_t now = 0;
+    int queued;
+
+    rtw_mutex_get(&usb->video.input_lock);
+    taskENTER_CRITICAL();
+    if (frame) now = wcam_net_now_ms();
+    /* FreeRTOS masks the tick/preemption with BASEPRI. Also exclude USB
+     * callbacks of any interrupt priority through the actual list insertion. */
+    mask = __get_PRIMASK();
+    __disable_irq();
+    queued = wcam_session_current(generation, stream_generation, streaming, disconnected);
+    if (queued && frame) {
+        queued = frame->generation == generation &&
+                 wcam_source_accept(source, (flags & 0xe) == 0xe, frame->received_ms, now);
+    }
+    if (queued) list_add_tail(&payload->buffer_list, &usb->video.input_queue);
+    __set_PRIMASK(mask);
+    taskEXIT_CRITICAL();
+    rtw_mutex_put(&usb->video.input_lock);
+    return queued;
+}
+
+static void wcam_rx_task(void *arg) {
+    struct uvc_dev *usb;static struct usbd_uvc_buffer first_payload;
+    struct usbd_uvc_buffer *payload=&first_payload;
+    struct wcam_net_frame frame;struct wcam_stats stats;
+    struct rx_local_encoder local;struct wcam_source source;
+    uint32_t generation=0;int result;
+    (void)arg;wcam_stats_reset(&stats,xTaskGetTickCount());
+    printf("[wcam][rx] initialize black waiting screen\r\n");
+    result=rx_local_init(&local);if(result<0)goto failed;
+    wcam_source_start(&source,wcam_net_now_ms());
+    wcam_uvc_control_init(&control);wcam_uvc_descriptors_init();
+    set_uvc_string("wcam H264 wireless RX","WCAMRX01",0x0200);
+    printf("[wcam][rx] USB init/wait\r\n");_usb_init();
+    result=wait_usb_ready();if(result!=USB_INIT_OK)goto failed;
+    result=usbd_uvc_init();if(result<0)goto failed;usb=get_private_usbd_uvc();
+    printf("[wcam][rx] ready: black waiting screen -> TX RTP when IDR arrives, H264 UVC 1280x720/30\r\n");
+    for(;;) {
+        int remote_frame=0,got_frame=0;
+        size_t length;uint32_t enc_ticks=0,start;
+        unsigned flags;
+        diagnostics(&stats,local.counter,0);
+        if(disconnected) {result=-1;goto failed;}
+        if(!streaming) {
+            generation=0;wcam_net_rx_active(0);vTaskDelay(pdMS_TO_TICKS(10));continue;
+        }
+        if(generation!=stream_generation) {
+            generation=stream_generation;
+            wcam_source_start(&source,wcam_net_now_ms());
+            wcam_net_rx_active(generation);
+            h264_set_force_iframe(local.encoder);
+            local.pacer.deadline=xTaskGetTickCount();local.pacer.fraction=0;
+            printf("[wcam][rx] UVC start generation=%lu, request fresh IDR\r\n",(unsigned long)generation);
+        }
+        unsigned wait_ms = 0;
+        if (source.remote) {
+            uint64_t age = wcam_net_now_ms() - source.last_remote_ms;
+            if (age < WCAM_REMOTE_TIMEOUT_MS) {
+                wait_ms = WCAM_REMOTE_TIMEOUT_MS - (unsigned)age;
+                if (wait_ms > 10) wait_ms = 10;
+            }
+        }
+        got_frame = wcam_net_frame_get(&frame, wait_ms);
+        if (got_frame) {
+            int was_remote = source.remote;
+            if (frame.generation == generation) {
+                flags = wcam_nal_flags(frame.data, frame.length);
+                payload->mem = frame.data;
+                payload->bytesused = frame.length;
+                /* Receiver writes CPU memory; clean it before USB DMA reads. */
+                dcache_clean_by_addr((uint32_t *)frame.data, frame.length);
+                start = xTaskGetTickCount();
+                remote_frame = rx_queue_payload(usb, payload, generation, &source, &frame, flags);
+            }
+            if (remote_frame) {
+                length = frame.length;
+                if (!was_remote)
+                    printf("[wcam][rx] source=TX IDR bytes=%lu\r\n", (unsigned long)length);
+            } else {
+                wcam_net_frame_release(&frame);
+                ++stats.dropped;
+            }
+        }
+        if (!remote_frame) {
+            if(wcam_source_expired(&source,wcam_net_now_ms())) {
+                wcam_net_rx_request_idr();
+                h264_set_force_iframe(local.encoder);
+                local.pacer.deadline=xTaskGetTickCount();local.pacer.fraction=0;
+                printf("[wcam][rx] remote timeout; source=waiting screen, request FAST_UPDATE\r\n");
+            }
+            if (source.remote || !wcam_session_current(generation, stream_generation,
+                                                      streaming, disconnected)) continue;
+            if (rx_local_encode(&local, &length, &enc_ticks) < 0) {
+                printf("[wcam][rx] local H264 encode failed frame=%lu\r\n",
+                       (unsigned long)(local.counter - 1));
+                result = -1;
+                goto failed;
+            }
+            payload->mem = local.encoded;
+            payload->bytesused = length;
+            flags = wcam_nal_flags(local.encoded, length);
+            start = xTaskGetTickCount();
+            if (!rx_queue_payload(usb, payload, generation, &source, NULL, flags)) {
+                ++stats.dropped;
+                continue;
+            }
+        }
+        wcam_stats_encoded(&stats, length, enc_ticks, flags);
+        if(!rtw_down_timeout_sema(&usb->video.output_queue_sema,2000)) {
+            printf("[wcam][rx] USB timeout: DMA frame retained until reboot\r\n");result=-1;goto failed;
+        }
+        payload=uvc_video_out_stream_queue(usb);
+        if(!payload) {result=-1;goto failed;}
+        wcam_stats_sent(&stats,length,xTaskGetTickCount()-start);
+        if(remote_frame) wcam_net_frame_release(&frame);
+        else {
+            TickType_t delay=wcam_pacer_delay(&local.pacer,xTaskGetTickCount(),configTICK_RATE_HZ);
+            if(!delay) ++stats.overruns;
+            if(delay) vTaskDelay(delay);
+        }
+    }
+failed:
+    wcam_net_rx_active(0);printf("[wcam][rx] stopped rc=%d; reboot required\r\n",result);vTaskDelete(NULL);
+}
+#endif
+
 void wcam_start(void)
 {
-    if (xTaskCreate(wcam_task, "wcam", 2048, NULL, tskIDLE_PRIORITY + 2, NULL) != pdPASS)
+    if (xTaskCreate(
+#if WCAM_ROLE_RX
+        wcam_rx_task,
+#else
+        wcam_task,
+#endif
+        "wcam", 2048, NULL, tskIDLE_PRIORITY + 2, NULL) != pdPASS)
         printf("[wcam] task creation failed\r\n");
 }

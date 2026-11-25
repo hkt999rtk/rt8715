@@ -1,3 +1,4 @@
+#include "lwip/netifapi.h"
 /* Includes ------------------------------------------------------------------*/
 #include "lwip/mem.h"
 #include "lwip/memp.h"
@@ -250,7 +251,7 @@ void LwIP_Init(void)
 
 		netifapi_netif_add(&xnetif[idx], ip_2_ip4(&ipaddr), ip_2_ip4(&netmask), ip_2_ip4(&gw), NULL, &ethernetif_init, &tcpip_input);
 
-		printf("interface %d (%c%c) num=%d is initialized\n", idx, xnetif[idx].name[0], xnetif[idx].name[1], (int)netif_get_index(&xnetif[idx]));
+		printf("interface %d (%c%c) num=%d is initialized\n", idx, xnetif[idx].name[0], xnetif[idx].name[1], (int)xnetif[idx].num);
 
 	}
 

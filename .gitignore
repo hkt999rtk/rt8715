@@ -97,3 +97,9 @@ project/realtek_amebapro_v0_example/GCC-RELEASE/**
 /USB_PHY/boost_bins/
 
 # Host tests for preserved-ciphertext RX and the actual key-alias wrapper.
+
+# wcam wireless generated build logs and role images
+/wcam/build-logs/
+/wcam/.pair-build.*/
+/wcam/flash_wcam_*.bin
+/project/realtek_amebapro_v0_example/GCC-RELEASE/.wcam-build.lock
